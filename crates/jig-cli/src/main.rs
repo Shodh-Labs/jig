@@ -1,11 +1,14 @@
 //! `jig` — the command-line workbench for MCP servers.
 //!
-//! Milestone 1 subcommands:
+//! Subcommands:
 //! * `jig inspect --stdio "<cmd>"` — connect, handshake, and list everything.
 //! * `jig call --stdio "<cmd>" --tool <name> --args '<json>'` — invoke a tool.
+//! * `jig budget --stdio "<cmd>" [--model <id>...]` — price the tool surface in
+//!   context tokens, per tool and per model (see [`budget`]).
 //!
-//! Both support `--json` for machine output and `--tap <file>` to dump the raw
-//! protocol traffic as JSONL.
+//! All support `--json` for machine output and `--tap <file>` to dump the raw
+//! protocol traffic as JSONL. Every stdout write goes through [`emit`], which
+//! makes `jig … | head` exit cleanly (0) instead of panicking on a broken pipe.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -15,7 +18,33 @@ use clap::{Parser, Subcommand};
 use jig_core::{Client, ClientOptions, ProtocolTap, ToolCallResult};
 use serde_json::{json, Value};
 
+mod budget;
 mod render;
+
+/// Write `s` to stdout, flushing, in a broken-pipe-safe way.
+///
+/// A downstream reader that closes early (`jig inspect | head`) makes writes
+/// fail with `BrokenPipe`. The `print!`/`println!` macros *panic* on that,
+/// which surfaces as an ugly `exit 101`. A CLI should instead exit cleanly and
+/// quietly: we treat `BrokenPipe` as a normal end-of-output and exit 0.
+pub(crate) fn emit(s: &str) {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    match out.write_all(s.as_bytes()).and_then(|()| out.flush()) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(e) => {
+            eprintln!("jig: error writing to stdout: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Convenience: [`emit`] a string followed by a newline.
+pub(crate) fn emit_line(s: &str) {
+    emit(s);
+    emit("\n");
+}
 
 /// Default per-request timeout in seconds, mirrored from
 /// [`jig_core::DEFAULT_REQUEST_TIMEOUT`] so it can be a clap default.
@@ -23,7 +52,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 /// Translate the CLI `--timeout <seconds>` value into [`ClientOptions`].
 /// `0` disables the timeout (wait forever).
-fn client_options(timeout_secs: u64) -> ClientOptions {
+pub(crate) fn client_options(timeout_secs: u64) -> ClientOptions {
     ClientOptions {
         request_timeout: (timeout_secs != 0).then(|| Duration::from_secs(timeout_secs)),
     }
@@ -63,6 +92,33 @@ enum Command {
         /// Per-request timeout in seconds (0 = wait forever).
         #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
         timeout: u64,
+    },
+    /// Estimate the context-token cost of a server's tool surface, per model.
+    Budget {
+        /// The server command to run over stdio, e.g. "npx -y my-server".
+        #[arg(long, value_name = "COMMAND")]
+        stdio: String,
+        /// Model id to price against; repeat for one column per model.
+        /// Known: gpt-4o, gpt-4, claude-sonnet, claude-opus.
+        #[arg(long = "model", value_name = "ID")]
+        models: Vec<String>,
+        /// Emit full machine-readable JSON (incl. exactness + canonical rendering).
+        #[arg(long)]
+        json: bool,
+        /// Emit a shareable GitHub-flavored markdown card.
+        #[arg(long)]
+        markdown: bool,
+        /// Write the raw protocol traffic to this file as JSONL.
+        #[arg(long, value_name = "FILE")]
+        tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
+        /// For Anthropic models: call the official count_tokens endpoint for an
+        /// exact total (requires ANTHROPIC_API_KEY; degrades to the labelled
+        /// approximation on any error).
+        #[arg(long)]
+        exact_anthropic: bool,
     },
     /// Invoke a single tool and print its result.
     Call {
@@ -107,6 +163,26 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             tap,
             timeout,
         } => inspect(&stdio, json, tap.as_deref(), timeout).await,
+        Command::Budget {
+            stdio,
+            models,
+            json,
+            markdown,
+            tap,
+            timeout,
+            exact_anthropic,
+        } => {
+            budget::run(
+                &stdio,
+                models,
+                json,
+                markdown,
+                tap.as_deref(),
+                timeout,
+                exact_anthropic,
+            )
+            .await
+        }
         Command::Call {
             stdio,
             tool,
@@ -171,15 +247,11 @@ async fn inspect_inner(
             "resources": resources,
             "prompts": prompts,
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?
-        );
+        emit_line(&serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?);
     } else {
-        print!(
-            "{}",
-            render::inspect_report(&client, &tools, &resources, &prompts)
-        );
+        emit(&render::inspect_report(
+            &client, &tools, &resources, &prompts,
+        ));
     }
 
     client.shutdown().await.map_err(|e| e.to_string())?;
@@ -239,12 +311,9 @@ async fn call_inner(
         .map_err(|e| format!("tool call failed: {e}"))?;
 
     if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
-        );
+        emit_line(&serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);
     } else {
-        print!("{}", render::call_result(tool, &result));
+        emit(&render::call_result(tool, &result));
     }
 
     client.shutdown().await.map_err(|e| e.to_string())?;
@@ -263,7 +332,7 @@ async fn call_inner(
 /// diagnostic tool, so it must name the problem loudly instead of hiding it.
 const MAX_POLLUTION_LINES_SHOWN: usize = 5;
 
-fn warn_non_protocol_output(tap: &ProtocolTap) {
+pub(crate) fn warn_non_protocol_output(tap: &ProtocolTap) {
     let bad = tap.non_protocol_inbound();
     if bad.is_empty() {
         return;
@@ -287,7 +356,7 @@ fn warn_non_protocol_output(tap: &ProtocolTap) {
 
 /// Write the tap to `path` if one was requested, reporting any failure to
 /// stderr without changing the command's success/failure outcome.
-fn write_tap_if_requested(tap: &ProtocolTap, path: Option<&std::path::Path>) {
+pub(crate) fn write_tap_if_requested(tap: &ProtocolTap, path: Option<&std::path::Path>) {
     if let Some(path) = path {
         match tap.write_jsonl(path) {
             Ok(()) => eprintln!("jig: wrote {} tap entries to {}", tap.len(), path.display()),
@@ -304,7 +373,7 @@ fn write_tap_if_requested(tap: &ProtocolTap, path: Option<&std::path::Path>) {
 /// Supports double-quoted segments so paths containing spaces survive
 /// (e.g. `"C:\\Program Files\\srv.exe" --flag`). This is a small, purpose-built
 /// splitter rather than a full shell parser.
-fn split_command(input: &str) -> Result<(String, Vec<String>), String> {
+pub(crate) fn split_command(input: &str) -> Result<(String, Vec<String>), String> {
     let mut tokens: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;

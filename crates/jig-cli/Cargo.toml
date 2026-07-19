@@ -11,7 +11,7 @@ name = "jig"
 path = "src/main.rs"
 
 [dependencies]
-jig-core = { path = "../jig-core" }
+jig-core = { path = "../jig-core", features = ["exact-anthropic"] }
 clap.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
