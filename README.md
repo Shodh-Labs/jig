@@ -5,6 +5,12 @@
 
 **Jig is a testing workbench for MCP servers** — see what the model sees, measure what your server costs in context, and test what a model *actually does* with your tools.
 
+![Jig workbench — request/response spans from a live MCP session](docs/media/workbench-wire.png)
+
+<p align="center"><em>A real session against <code>@modelcontextprotocol/server-everything</code>, rendered from jig's protocol tap:
+the 8-second npx cold start folded out of the way, an unsolicited mid-request notification caught on the wire,
+payload inspector open. Workbench UI in development — the CLI ships today.</em></p>
+
 ## Why
 
 MCP servers can't be tested like APIs. An API is deterministic: send a request, assert on the response. An MCP server "works" only if a **model** understands your tool descriptions, selects the right tool for a task, and fills the arguments correctly. That's a probabilistic surface — and today, everyone tests it by poking their server in a chat client and eyeballing the result.
