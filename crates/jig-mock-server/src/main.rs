@@ -1,22 +1,58 @@
-//! A minimal MCP server speaking the stdio transport, used as Jig's
-//! integration-test fixture and as a handy scratch server.
+//! A minimal MCP server used as Jig's integration-test fixture and as a handy
+//! scratch server. It speaks **both** MCP transports:
+//!
+//! * **stdio** (default): one JSON-RPC message per line on stdin/stdout.
+//! * **Streamable HTTP** (`--http <port>`): the server side of the
+//!   `2025-06-18` Streamable HTTP transport, via axum. See [`http`].
 //!
 //! It implements just enough of MCP `2025-06-18` to exercise a client:
 //! `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`.
 //! It deliberately advertises *only* the `tools` capability so that a client's
 //! graceful handling of unsupported `resources`/`prompts` can be observed.
 //!
-//! Framing: read one JSON-RPC message per line from stdin, write one per line
-//! to stdout. Nothing but MCP messages is written to stdout; diagnostics go to
-//! stderr.
+//! Flags:
+//! * `--http <port>` — run the Streamable HTTP server on 127.0.0.1:<port>
+//!   instead of stdio. The MCP endpoint is `/mcp`.
+//! * `--sse` — (HTTP mode) answer requests with a `text/event-stream` body,
+//!   and push a server notification ahead of the `tools/list` response, rather
+//!   than a single `application/json` object.
+//! * `--expire-after-initialize` — (HTTP mode) issue a session on `initialize`
+//!   but then return HTTP 404 for every post-handshake request, to exercise a
+//!   client's session-expiry path.
+//! * `--pollute-stdout` / `--paginate` — (stdio mode) test fixtures, see below.
 
 use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
 
+mod http;
+
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    // HTTP mode: `--http <port>`.
+    if let Some(port) = http_port(&args) {
+        let sse = args.iter().any(|a| a == "--sse");
+        let expire = args.iter().any(|a| a == "--expire-after-initialize");
+        http::serve(port, sse, expire);
+        return;
+    }
+
+    run_stdio();
+}
+
+/// Parse `--http <port>` from the argument list, if present.
+fn http_port(args: &[String]) -> Option<u16> {
+    let idx = args.iter().position(|a| a == "--http")?;
+    args.get(idx + 1).and_then(|s| s.parse::<u16>().ok())
+}
+
+/// The original stdio server loop: read one JSON-RPC message per line from
+/// stdin, write one per line to stdout. Nothing but MCP messages is written to
+/// stdout; diagnostics go to stderr.
+fn run_stdio() {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();

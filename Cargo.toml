@@ -27,3 +27,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",
 ] }
+# Dev-scoped: used only by `jig-mock-server` (a test fixture) to implement the
+# server side of the Streamable HTTP transport. Deliberately kept out of
+# `jig-core` and `jig-cli`.
+axum = "0.8"

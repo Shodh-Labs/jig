@@ -12,6 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 serde_json.workspace = true
+# `--http` mode implements the server side of the Streamable HTTP transport.
+# axum + tokio are pulled in only by this fixture crate, never by jig-core/cli.
+axum.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros"] }
 
 [dev-dependencies]
 jig-core = { path = "../jig-core" }
