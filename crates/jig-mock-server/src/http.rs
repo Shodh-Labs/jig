@@ -138,6 +138,10 @@ struct AppState {
 
 /// Run the HTTP server on `127.0.0.1:<port>` until the process is killed. Builds
 /// its own Tokio runtime so `main` can stay synchronous for the stdio path.
+///
+/// Pass port `0` to bind an OS-assigned ephemeral port; the actual port is read
+/// back from the bound listener and reported in the announcement line, so a test
+/// can parse it rather than racily pre-selecting a port.
 pub fn serve(port: u16, cfg: HttpConfig) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -158,9 +162,18 @@ pub fn serve(port: u16, cfg: HttpConfig) {
             .route(PRM_PATH_APPENDED, get(handle_protected_resource_metadata))
             .route(ASM_PATH, get(handle_auth_server_metadata))
             .with_state(state);
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
-            .await
-            .expect("failed to bind HTTP port");
+        // A diagnostic fixture must not panic-dump on a busy port: report the
+        // failure cleanly and exit non-zero instead.
+        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!("jig-mock-server: failed to bind HTTP port {port}: {e}");
+                std::process::exit(1);
+            }
+        };
+        // Announce the *actual* bound port (which differs from `port` when 0 was
+        // requested). The format is stable — tests parse the `127.0.0.1:<port>`.
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
         eprintln!(
             "jig-mock-server: HTTP MCP endpoint on http://127.0.0.1:{port}{MCP_ENDPOINT} \
              (sse={}, expire={})",

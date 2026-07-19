@@ -7,9 +7,10 @@
 //! defines it). The mock-server binary is its sibling in the same target
 //! directory (built by `cargo test --workspace --all-targets`).
 
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
 use std::time::Duration;
 
 /// The freshly built `jig` binary under test.
@@ -34,13 +35,49 @@ fn mock_bin() -> PathBuf {
     p
 }
 
-/// Grab an ephemeral free port by binding to port 0 and releasing it.
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local_addr")
-        .port()
+/// Extract the port from an announcement line carrying `127.0.0.1:<digits>`.
+fn parse_announced_port(line: &str) -> Option<u16> {
+    let rest = &line[line.find("127.0.0.1:")? + "127.0.0.1:".len()..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// Spawn `cmd` with piped stderr, read the port the mock announces (bind-0, so
+/// the OS assigns it — no pre-selection race), and keep draining stderr in a
+/// background thread so the child never blocks on a full pipe. The announcement
+/// is emitted only after the listener is bound, so the port is already
+/// accepting connections by the time this returns.
+fn spawn_and_read_port(mut cmd: Command) -> (Child, u16) {
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn mock server");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        let mut sent = false;
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break, // EOF or read error: stop draining.
+                Ok(_) => {
+                    if !sent {
+                        if let Some(port) = parse_announced_port(&line) {
+                            let _ = tx.send(port);
+                            sent = true;
+                        }
+                    }
+                    // Keep looping to drain the rest of stderr (e.g. the HTTP
+                    // fixture's `observed-reply:` lines) so the child never
+                    // blocks writing to a full pipe.
+                }
+            }
+        }
+    });
+    let port = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("mock server never announced its port within 10s");
+    (child, port)
 }
 
 /// Kills the child mock server when dropped, so no fixture process leaks.
@@ -55,30 +92,16 @@ impl Drop for ServerGuard {
     }
 }
 
-/// Spawn the mock in `--http --auth <scenario>` on a free port, wait until it
-/// accepts TCP, and return the guard plus the MCP URL.
+/// Spawn the mock in `--http 0 --auth <scenario>`, learn the OS-assigned port
+/// from its announcement, and return the guard plus the MCP URL.
 fn spawn_auth(scenario: &str) -> (ServerGuard, String) {
-    let port = free_port();
-    let child = Command::new(mock_bin())
-        .arg("--http")
-        .arg(port.to_string())
-        .arg("--auth")
-        .arg(scenario)
-        .spawn()
-        .expect("spawn mock http server");
-    let guard = ServerGuard { child };
-
-    let mut ready = false;
-    for _ in 0..100 {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(ready, "mock http server never started listening on {port}");
-
-    (guard, format!("http://127.0.0.1:{port}/mcp"))
+    let mut cmd = Command::new(mock_bin());
+    cmd.arg("--http").arg("0").arg("--auth").arg(scenario);
+    let (child, port) = spawn_and_read_port(cmd);
+    (
+        ServerGuard { child },
+        format!("http://127.0.0.1:{port}/mcp"),
+    )
 }
 
 /// Run `jig auth` against `url` with the given trailing args.

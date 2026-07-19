@@ -50,6 +50,10 @@ struct ProviderState {
 }
 
 /// Run the mock provider on `127.0.0.1:<port>` until the process is killed.
+///
+/// Pass port `0` to bind an OS-assigned ephemeral port; the actual port is read
+/// back from the bound listener and reported in the announcement line, so a test
+/// can parse it rather than racily pre-selecting a port.
 pub fn serve(port: u16) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -63,9 +67,18 @@ pub fn serve(port: u16) {
             .route("/{scenario}/v1/messages", post(anthropic))
             .route("/{scenario}/v1/chat/completions", post(openai))
             .with_state(state);
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
-            .await
-            .expect("failed to bind provider port");
+        // A diagnostic fixture must not panic-dump on a busy port: report the
+        // failure cleanly and exit non-zero instead.
+        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!("jig-mock-server: failed to bind provider port {port}: {e}");
+                std::process::exit(1);
+            }
+        };
+        // Announce the *actual* bound port (which differs from `port` when 0 was
+        // requested). The format is stable — tests parse the `127.0.0.1:<port>`.
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
         eprintln!("jig-mock-server: mock provider on http://127.0.0.1:{port}/<scenario>/v1/...");
         axum::serve(listener, app)
             .await

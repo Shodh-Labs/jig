@@ -9,9 +9,10 @@
 //! against the same mocks and passes — exploration turned into a regression
 //! test, automated.
 
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::time::Duration;
 
 fn jig_bin() -> PathBuf {
@@ -48,12 +49,46 @@ fn stdio_arg() -> String {
     format!("\"{}\"", mock_server_bin().display())
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local_addr")
-        .port()
+/// Extract the port from an announcement line carrying `127.0.0.1:<digits>`.
+fn parse_announced_port(line: &str) -> Option<u16> {
+    let rest = &line[line.find("127.0.0.1:")? + "127.0.0.1:".len()..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// Spawn `cmd` with piped stderr, read the port the mock announces (bind-0, so
+/// the OS assigns it — no pre-selection race), and keep draining stderr in a
+/// background thread so the child never blocks on a full pipe. The announcement
+/// is emitted only after the listener is bound, so the port is already
+/// accepting connections by the time this returns.
+fn spawn_and_read_port(mut cmd: Command) -> (Child, u16) {
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn mock server");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        let mut sent = false;
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if !sent {
+                        if let Some(port) = parse_announced_port(&line) {
+                            let _ = tx.send(port);
+                            sent = true;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let port = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("mock server never announced its port within 10s");
+    (child, port)
 }
 
 struct Guard {
@@ -66,25 +101,13 @@ impl Drop for Guard {
     }
 }
 
-/// Spawn the mock provider and block until it accepts TCP.
+/// Spawn the mock provider on an OS-assigned port and return the guard plus the
+/// port learned from its announcement.
 fn spawn_provider() -> (Guard, u16) {
-    let port = free_port();
-    let child = Command::new(mock_server_bin())
-        .arg("--provider")
-        .arg(port.to_string())
-        .spawn()
-        .expect("spawn mock provider");
-    let guard = Guard { child };
-    let mut ready = false;
-    for _ in 0..100 {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(ready, "mock provider never started on {port}");
-    (guard, port)
+    let mut cmd = Command::new(mock_server_bin());
+    cmd.arg("--provider").arg("0");
+    let (child, port) = spawn_and_read_port(cmd);
+    (Guard { child }, port)
 }
 
 fn base_url(port: u16, scenario: &str) -> String {
