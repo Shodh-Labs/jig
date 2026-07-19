@@ -30,7 +30,8 @@
 //!
 //! # Extending the model registry
 //!
-//! Adding a model is one entry in [`REGISTRY`]. Each entry names the tiktoken
+//! Adding a model is one entry in the private `REGISTRY` table in this
+//! module. Each entry names the tiktoken
 //! encoding to use, whether the count is an Anthropic approximation, and (for
 //! `--exact-anthropic`) the concrete Anthropic API model id to bill the
 //! `count_tokens` call against.
