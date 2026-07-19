@@ -314,7 +314,7 @@ function sortedInts(xs) {
   return xs.filter((x) => Number.isFinite(x)).map((x) => Math.round(x)).sort((a, b) => a - b);
 }
 
-function buildPercentiles(reachable, collectedIso) {
+function buildPercentiles(reachable, collectedIso, allResults) {
   const contextSamples = sortedInts(
     reachable.filter((r) => r.budgetOk).map((r) => r.contextCostTokens)
   );
@@ -322,11 +322,21 @@ function buildPercentiles(reachable, collectedIso) {
   const maxToolSamples = sortedInts(
     reachable.filter((r) => r.budgetOk).map((r) => r.maxToolTokens)
   );
+  // Ecosystem startup-failure rate: the fraction of attempted servers that
+  // failed at startup / during the handshake (never became reachable). `jig
+  // check` surfaces this as one line of cohort context when a checked server
+  // fails to start. A fraction in [0,1]; null when nothing was attempted.
+  const results = Array.isArray(allResults) ? allResults : [];
+  const attempted = results.length;
+  const failedAtStartup = results.filter((r) => !r.handshakeOk).length;
+  const startupFailureRate =
+    attempted > 0 ? Number((failedAtStartup / attempted).toFixed(4)) : null;
   return {
     _schema:
       'jig census percentiles v0. Sorted integer sample arrays the `jig check` command interpolates ' +
       'percentiles from. Only servers that completed the handshake (and, for token metrics, that jig ' +
-      'could price) are included; failures are excluded here and reported in census-raw.json.',
+      'could price) are included; failures are excluded here and reported in census-raw.json. ' +
+      '`startup_failure_rate` is the fraction of attempted servers that failed at startup/handshake.',
     _note_for_director:
       'docs/percentiles-schema.md did not exist on this branch base at authoring time. Field names ' +
       '(context_cost_tokens / tool_count / max_tool_tokens) are provisional — reconcile with the ' +
@@ -334,6 +344,7 @@ function buildPercentiles(reachable, collectedIso) {
     collected: collectedIso,
     n: contextSamples.length,
     model: BUDGET_MODEL,
+    startup_failure_rate: startupFailureRate,
     context_cost_tokens: { unit: 'tokens', model: BUDGET_MODEL, samples: contextSamples },
     tool_count: { unit: 'count', samples: toolSamples },
     max_tool_tokens: { unit: 'tokens', model: BUDGET_MODEL, samples: maxToolSamples },
@@ -413,7 +424,7 @@ function main() {
   };
   fs.writeFileSync(OUT_RAW, JSON.stringify(raw, null, 2) + '\n');
 
-  const pct = buildPercentiles(reachable, collectedIso);
+  const pct = buildPercentiles(reachable, collectedIso, results);
   fs.writeFileSync(OUT_PCT, JSON.stringify(pct, null, 2) + '\n');
 
   // Console summary (stderr so stdout stays clean if ever piped).

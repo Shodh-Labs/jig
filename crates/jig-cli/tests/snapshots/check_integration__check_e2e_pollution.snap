@@ -1,6 +1,5 @@
 ---
 source: crates/jig-cli/tests/check_integration.rs
-assertion_line: 125
 expression: redact_latency(&report)
 ---
 jig check · jig-mock-server v0.3.0
@@ -16,7 +15,7 @@ protocol 2025-06-18 · rubric-v1
 
 Top fixes
   1. [protocol] 1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing
-     → route all logging to stderr; stdout must carry only newline-delimited JSON-RPC
+     → route all logging to stderr; the first polluting line is at byte offset 0: "[startup] mock server li…" (hex 5b 73 74 61 72 74 75 70 5d 20 6d 6f 63 6b 20 73 65 72 76 65 72 20 6c 69…) — stdout must carry only newline-delimited JSON-RPC
   2. [schema_hygiene] `make_reservation`: parameter `party` missing a description
      → describe each parameter of `make_reservation` so the model can fill it correctly
   3. [schema_hygiene] 3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)

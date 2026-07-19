@@ -683,9 +683,17 @@ async fn read_loop(
     read_fault: ReadFault,
 ) {
     let mut reader = BufReader::new(stdout);
+    // Running byte position in the stdout stream, so each inbound line can be
+    // located precisely — a stdout-pollution finding names the exact offset.
+    let mut stream_offset: u64 = 0;
     loop {
         match read_frame(&mut reader, max_bytes).await {
             Frame::Line(bytes) => {
+                // Offset of this line's first byte; advance past the line and its
+                // newline delimiter (a final unterminated line over-counts by 1,
+                // but nothing follows it, so no later offset is affected).
+                let offset = stream_offset;
+                stream_offset += bytes.len() as u64 + 1;
                 // A blank line carries no message; skip it before classifying.
                 if bytes.iter().all(|b| b.is_ascii_whitespace()) {
                     continue;
@@ -695,7 +703,7 @@ async fn read_loop(
                 // verbatim, and tells us the routing id — the same logic the
                 // property/fuzz harnesses exercise directly.
                 let (value, route_id) = classify_inbound(&bytes);
-                tap.record(Direction::Inbound, value.clone());
+                tap.record_inbound_at(offset, value.clone());
 
                 // Route a correlatable response to its waiting request.
                 // Notifications and stray messages are recorded but not routed.

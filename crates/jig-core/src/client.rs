@@ -346,6 +346,25 @@ impl Client {
         self.transport.listen(duration).await
     }
 
+    /// Probe error-code correctness by sending a deliberately unknown,
+    /// namespaced method (conformance scenario `negative`). A spec-conformant
+    /// server answers with a JSON-RPC `-32601 Method not found`; anything else
+    /// is a finding. The bounded per-request timeout keeps a non-answering
+    /// server from hanging the probe.
+    pub async fn probe_unknown_method(&self) -> crate::check::UnknownMethodProbe {
+        use crate::check::UnknownMethodProbe;
+        // A reverse-namespaced method no real MCP server implements.
+        match self
+            .transport
+            .request("jig/does-not-exist", json!({}))
+            .await
+        {
+            Ok(_) => UnknownMethodProbe::Accepted,
+            Err(JigError::Server { code, .. }) => UnknownMethodProbe::Errored(code),
+            Err(_) => UnknownMethodProbe::NoAnswer,
+        }
+    }
+
     /// Whether the server advertised a top-level capability key (e.g.
     /// `"tools"`, `"resources"`, `"prompts"`).
     pub fn has_capability(&self, key: &str) -> bool {

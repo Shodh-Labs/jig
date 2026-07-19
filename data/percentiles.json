@@ -4,6 +4,7 @@
   "collected": "2026-07-19T17:56:54.446Z",
   "n": 29,
   "model": "gpt-4o",
+  "startup_failure_rate": 0.42,
   "context_cost_tokens": {
     "unit": "tokens",
     "model": "gpt-4o",
