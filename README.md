@@ -1,9 +1,48 @@
-# Jig
+# Jig — grade your MCP server in one command
 
-> A jig holds the workpiece and guides the tool, so every cut is repeatable.
-> Your MCP server is the workpiece. The model is the tool.
+[![npm](https://img.shields.io/npm/v/%40shodh%2Fjig)](https://www.npmjs.com/package/@shodh/jig)
+[![CI](https://github.com/Shodh-Labs/jig/actions/workflows/ci.yml/badge.svg)](https://github.com/Shodh-Labs/jig/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-**Jig is a testing workbench for MCP servers** — see what the model sees, measure what your server costs in context, and test what a model *actually does* with your tools.
+```sh
+npx -y @shodh/jig check "npx -y your-mcp-server"
+```
+
+```
+jig check · mcp-servers/everything v2.0.0
+protocol 2025-06-18 · rubric-v1
+
+  ✓  93 / 100   grade A
+
+  ✓  Protocol compliance   90   capability `tasks` not in the negotiated spec revision
+  ✓  Context cost          93   1,406 tokens
+  ✓  Schema hygiene        87   parameter `resourceType` missing a description
+  ✓  Description quality  100   heuristic · consistent names, well-sized descriptions
+  ✓  Robustness           100   list 4ms, clean shutdown
+
+Top fixes
+  1. [protocol] drop or gate off-spec capabilities behind `experimental` …
+```
+
+*(Real output — Anthropic's own reference server, graded cold over `npx`.)*
+
+**Jig is a testing workbench for MCP servers.** Models pick the wrong tools, token
+bills balloon, and servers break their own protocol — and none of it is visible from
+your server's code. Jig makes it visible, measurable, and regression-safe: no
+account, no telemetry, a single checksummed binary, keys only when *you* put a
+real model in the loop.
+
+## What's in the box
+
+| Command | The question it answers |
+|:--|:--|
+| [`jig check`](#jig-check--the-one-command-report-card) | Is my server well-built? One graded verdict + ranked fixes |
+| [`jig context`](#jig-context--see-exactly-what-the-model-sees) | What does the model actually see? The exact request body, token-priced — no API key needed |
+| [`jig budget`](#jig-budget--the-token-budget-engine) | What does my server cost, per tool, per model tokenizer? |
+| [`jig bench`](#jig-bench--the-model-in-the-loop-bench) | Which tool does a *real model* pick for a task? N-run distributions |
+| [`jig eval`](#jig-eval--the-jig-eval-suite) | Did my change regress tool selection? Git-versioned suites, CI gates |
+| [`jig inspect` / `call` / `read` / `prompt`](#transports-stdio-and-streamable-http) | Poke the protocol directly — every byte captured in a raw JSONL tap |
+| [`jig servers` / `search` / `info`](#discovery-jig-servers-jig-search-jig-info) | What's configured on my machine? What exists? What is it *really*? |
 
 ![Jig workbench — request/response spans from a live MCP session](docs/media/workbench-wire.png)
 
@@ -11,26 +50,25 @@
 the 8-second npx cold start folded out of the way, an unsolicited mid-request notification caught on the wire,
 payload inspector open. This is an interactive design prototype — the workbench app is not built yet; the CLI ships today.</em></p>
 
-## Why
+## Why a grade?
 
-MCP servers can't be tested like APIs. An API is deterministic: send a request, assert on the response. An MCP server "works" only if a **model** understands your tool descriptions, selects the right tool for a task, and fills the arguments correctly. That's a probabilistic surface — and today, everyone tests it by poking their server in a chat client and eyeballing the result.
+MCP servers can't be tested like APIs — a server "works" only if a **model**
+understands its tool descriptions, selects the right tool, and fills the arguments
+correctly. That surface is probabilistic, and the ecosystem's numbers show it:
+independent 2026 measurements find 5–10 installed servers burning **50k+ tokens
+before the first prompt**, selection accuracy collapsing past ~30 tools, and roughly
+**half of public servers failing at startup** ([our own 50-server census](docs/census/2026-07-19-state-of-mcp-servers.md) measured 42%).
+Today almost everyone tests by poking a chat client and eyeballing it. A grade with
+ranked fixes replaces the eyeball.
 
-Jig makes that surface visible, measurable, and regression-safe:
-
-- 🔍 **[See what the model sees](#jig-context--see-exactly-what-the-model-sees)** — the exact tool-use request a model API receives from your server, token-priced, per provider dialect (Anthropic/OpenAI). Not what your code says; what `jig bench` puts on the wire. (Chat clients may render tool context differently — that's a future milestone.)
-- 🧮 **Token budget** — what your server costs in context before the user types a word, per tool, per model tokenizer.
-- 🎯 **Model bench** — give it a task in plain language; watch which tool a real model selects, with what arguments, across repeated runs.
-- ✅ **Eval suites** — `prompt → expected tool call` test cases, versioned in git next to your server, runnable locally and in CI.
+> *A jig holds the workpiece and guides the tool, so every cut is repeatable.
+> Your MCP server is the workpiece. The model is the tool.*
 
 ## Status
 
-🚧 **Early development.** Building in public — watch the repo, or open an issue to tell us how you test your MCP server today (we read everything).
-
-## Roadmap (short version)
-
-1. Desktop workbench: connect (stdio / streamable HTTP), inspect, token budget, direct invoke, model bench — *in design* (an interactive prototype exists; no app code yet — the CLI is where the engine ships today)
-2. Local eval suites (`.jig/`) with honest, statistical scoring — selection rate across N runs, never single-run pass/fail
-3. CI: `jig run` in your pipeline, PR annotations, regression gates
+🚧 **Early development, building in public.** Open an issue and tell us how you test
+your MCP server today — we read everything. Roadmap: `.jig` eval suites in CI with
+PR annotations; the desktop workbench (in design — prototype exists, CLI ships today).
 
 ## Development
 
