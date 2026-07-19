@@ -85,11 +85,11 @@ enum Command {
         #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
         stdio: Option<String>,
         /// A remote MCP endpoint URL to connect to over Streamable HTTP, e.g.
-        /// "https://example.com/mcp". Mutually exclusive with --stdio.
+        /// `https://example.com/mcp`. Mutually exclusive with --stdio.
         #[arg(long, value_name = "URL", conflicts_with = "stdio")]
         http: Option<String>,
         /// Extra HTTP header for --http, "Name: Value" (repeatable). Typically
-        /// "Authorization: Bearer <token>" for remote servers.
+        /// `Authorization: Bearer <token>` for remote servers.
         #[arg(long = "header", value_name = "NAME: VALUE")]
         header: Vec<String>,
         /// Emit full, untruncated machine-readable JSON instead of a report.

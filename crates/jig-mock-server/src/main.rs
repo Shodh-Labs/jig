@@ -11,7 +11,7 @@
 //! graceful handling of unsupported `resources`/`prompts` can be observed.
 //!
 //! Flags:
-//! * `--http <port>` — run the Streamable HTTP server on 127.0.0.1:<port>
+//! * `--http <port>` — run the Streamable HTTP server on `127.0.0.1:<port>`
 //!   instead of stdio. The MCP endpoint is `/mcp`.
 //! * `--sse` — (HTTP mode) answer requests with a `text/event-stream` body,
 //!   and push a server notification ahead of the `tools/list` response, rather
