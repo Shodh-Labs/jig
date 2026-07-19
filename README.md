@@ -58,9 +58,16 @@ cargo build
 ```
 
 `--stdio` takes the full server command (double-quote paths containing spaces).
+On Windows, `npx`/`npm` shims resolve automatically, so
+`jig inspect --stdio "npx -y @modelcontextprotocol/server-everything"` just works.
 `--tap <file>` writes every raw JSON-RPC message, both directions, as JSONL —
-the protocol tap that makes a session inspectable and regression-safe. Exit
-codes: `0` success, `2` when a tool reports an error, non-zero otherwise.
+the protocol tap that makes a session inspectable and regression-safe.
+`--timeout <seconds>` bounds every request (default `30`, `0` = wait forever) so a
+server that accepts a request and never answers fails fast instead of hanging.
+Exit codes: `0` success, `2` when a tool reports an error, non-zero otherwise.
+
+Jig has been validated against a battery of real public MCP servers — see
+[`docs/compat/`](docs/compat/) for the compatibility report.
 
 ## License
 
