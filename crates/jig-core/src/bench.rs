@@ -874,12 +874,10 @@ fn validate_value(schema: &Value, value: &Value, path: &str, errors: &mut Vec<St
                 type_error(value, "boolean", path, errors);
             }
         }
-        Some("null") => {
-            if !value.is_null() {
-                type_error(value, "null", path, errors);
-            }
+        Some("null") if !value.is_null() => {
+            type_error(value, "null", path, errors);
         }
-        // Unknown or absent type: no structural check.
+        // Null-and-is-null, unknown, or absent type: no structural check.
         _ => {}
     }
 }

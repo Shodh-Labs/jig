@@ -173,18 +173,18 @@ const REGISTRY: &[ModelSpec] = &[
         aliases: &["claude", "sonnet", "claude-3-5-sonnet"],
         encoding: Encoding::O200kBase,
         anthropic: true,
-        api_model: Some("claude-sonnet-4-5"),
+        api_model: Some("claude-sonnet-5"),
         bench_provider: crate::bench::Provider::Anthropic,
-        bench_api_model: "claude-sonnet-4-5",
+        bench_api_model: "claude-sonnet-5",
     },
     ModelSpec {
         id: "claude-opus",
         aliases: &["opus"],
         encoding: Encoding::O200kBase,
         anthropic: true,
-        api_model: Some("claude-opus-4-1"),
+        api_model: Some("claude-opus-4-8"),
         bench_provider: crate::bench::Provider::Anthropic,
-        bench_api_model: "claude-opus-4-1",
+        bench_api_model: "claude-opus-4-8",
     },
 ];
 
