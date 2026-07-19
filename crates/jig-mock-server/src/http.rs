@@ -39,7 +39,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::Router;
 use serde_json::{json, Value};
 
@@ -47,6 +47,64 @@ use serde_json::{json, Value};
 const SESSION_HEADER: &str = "Mcp-Session-Id";
 /// The single MCP endpoint path.
 const MCP_ENDPOINT: &str = "/mcp";
+/// RFC 9728 Protected Resource Metadata well-known path (root form).
+const PRM_PATH: &str = "/.well-known/oauth-protected-resource";
+/// RFC 9728 Protected Resource Metadata well-known path (path-appended form).
+const PRM_PATH_APPENDED: &str = "/.well-known/oauth-protected-resource/mcp";
+/// RFC 8414 Authorization Server Metadata well-known path.
+const ASM_PATH: &str = "/.well-known/oauth-authorization-server";
+
+/// The OAuth conformance scenario the HTTP fixture plays, selected with
+/// `--auth <scenario>`. Each drives a specific, deterministic auth surface so an
+/// integration test can assert the exact findings `jig auth` produces.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum AuthMode {
+    /// No auth flag: the server requires no authentication (existing behaviour).
+    #[default]
+    Off,
+    /// `--auth open`: a `200` to the unauthenticated probe (explicitly open).
+    Open,
+    /// `--auth well-configured`: 401 + proper Bearer challenge + full RFC 9728
+    /// and RFC 8414 metadata (S256 + DCR + iss).
+    WellConfigured,
+    /// `--auth no-challenge`: a bare 401 with no `WWW-Authenticate` and no
+    /// metadata endpoints.
+    NoChallenge,
+    /// `--auth no-metadata`: a proper challenge whose `resource_metadata` URL
+    /// 404s (points nowhere).
+    NoMetadata,
+    /// `--auth no-pkce`: full metadata, but the auth-server metadata omits the
+    /// REQUIRED `S256` PKCE method.
+    NoPkce,
+}
+
+impl AuthMode {
+    /// Parse `--auth <scenario>` from the raw arg list.
+    pub fn parse(args: &[String]) -> AuthMode {
+        let idx = match args.iter().position(|a| a == "--auth") {
+            Some(i) => i,
+            None => return AuthMode::Off,
+        };
+        match args.get(idx + 1).map(String::as_str) {
+            Some("open") => AuthMode::Open,
+            Some("well-configured") => AuthMode::WellConfigured,
+            Some("no-challenge") => AuthMode::NoChallenge,
+            Some("no-metadata") => AuthMode::NoMetadata,
+            Some("no-pkce") => AuthMode::NoPkce,
+            _ => AuthMode::Off,
+        }
+    }
+
+    /// Whether this scenario challenges unauthenticated requests with a 401.
+    fn requires_auth(self) -> bool {
+        !matches!(self, AuthMode::Off | AuthMode::Open)
+    }
+
+    /// Whether this scenario serves RFC 9728 / RFC 8414 metadata documents.
+    fn serves_metadata(self) -> bool {
+        matches!(self, AuthMode::WellConfigured | AuthMode::NoPkce)
+    }
+}
 
 /// Flags controlling the HTTP fixture's behaviour, parsed once in `main`.
 #[derive(Clone, Copy, Default)]
@@ -67,6 +125,8 @@ pub struct HttpConfig {
     pub giant_json: bool,
     /// Answer `tools/list` with a single multi-megabyte SSE event.
     pub giant_sse: bool,
+    /// The OAuth conformance scenario to play (`--auth <scenario>`).
+    pub auth: AuthMode,
 }
 
 /// Shared server state.
@@ -93,6 +153,10 @@ pub fn serve(port: u16, cfg: HttpConfig) {
                 MCP_ENDPOINT,
                 post(handle_post).get(handle_get).delete(handle_delete),
             )
+            // RFC 9728 / RFC 8414 discovery documents (served under --auth).
+            .route(PRM_PATH, get(handle_protected_resource_metadata))
+            .route(PRM_PATH_APPENDED, get(handle_protected_resource_metadata))
+            .route(ASM_PATH, get(handle_auth_server_metadata))
             .with_state(state);
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
             .await
@@ -117,6 +181,15 @@ async fn handle_post(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    // OAuth conformance scenarios (--auth): challenge any unauthenticated
+    // request with the scenario's 401 before doing any MCP work. A request that
+    // carries a non-empty `Authorization: Bearer` header is treated as
+    // authenticated and falls through to normal handling — this is what the
+    // `jig auth` header-passthrough probe exercises.
+    if state.cfg.auth.requires_auth() && !has_bearer(&headers) {
+        return auth_challenge(&state, &headers);
+    }
+
     let req: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => return text_status(StatusCode::BAD_REQUEST, &format!("invalid JSON body: {e}")),
@@ -296,6 +369,114 @@ async fn handle_delete(State(state): State<Arc<AppState>>, headers: HeaderMap) -
     } else {
         text_status(StatusCode::NOT_FOUND, "session not found")
     }
+}
+
+// ---------------------------------------------------------------------------
+// OAuth conformance fixtures (--auth <scenario>)
+// ---------------------------------------------------------------------------
+
+/// Whether the request carries a non-empty `Authorization: Bearer <token>`.
+fn has_bearer(headers: &HeaderMap) -> bool {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            let v = v.trim();
+            v.len() > "Bearer ".len() && v[.."Bearer".len()].eq_ignore_ascii_case("Bearer")
+        })
+        .unwrap_or(false)
+}
+
+/// The `scheme://host` origin of this request, from the `Host` header.
+fn request_origin(headers: &HeaderMap) -> String {
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("127.0.0.1");
+    // The fixture always serves plain HTTP.
+    format!("http://{host}")
+}
+
+/// The 401 challenge for the active scenario. `well-configured`, `no-metadata`,
+/// and `no-pkce` send a proper RFC 6750 / RFC 9728 §5.1 Bearer challenge; the
+/// `no-challenge` scenario sends a bare 401 with no `WWW-Authenticate`.
+fn auth_challenge(state: &AppState, headers: &HeaderMap) -> Response {
+    if state.cfg.auth == AuthMode::NoChallenge {
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(Body::from("Unauthorized"))
+            .unwrap();
+    }
+    let origin = request_origin(headers);
+    let resource_metadata = format!("{origin}{PRM_PATH}");
+    let challenge = format!(
+        "Bearer resource_metadata=\"{resource_metadata}\", error=\"invalid_token\", \
+         error_description=\"authentication required\""
+    );
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header("WWW-Authenticate", challenge)
+        .body(Body::from("Unauthorized"))
+        .unwrap()
+}
+
+/// `GET /.well-known/oauth-protected-resource[/mcp]` (RFC 9728). Served only by
+/// the scenarios that advertise metadata; otherwise 404 (points nowhere).
+async fn handle_protected_resource_metadata(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.cfg.auth.serves_metadata() {
+        return text_status(StatusCode::NOT_FOUND, "no protected-resource metadata");
+    }
+    let origin = request_origin(&headers);
+    let doc = json!({
+        "resource": format!("{origin}{MCP_ENDPOINT}"),
+        "authorization_servers": [origin],
+        "scopes_supported": ["mcp:tools", "mcp:resources"],
+        "bearer_methods_supported": ["header"]
+    });
+    json_response(&doc)
+}
+
+/// `GET /.well-known/oauth-authorization-server` (RFC 8414). The `no-pkce`
+/// scenario omits the REQUIRED `S256` method; `well-configured` includes S256,
+/// DCR, and the RFC 9207 `iss` parameter.
+async fn handle_auth_server_metadata(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.cfg.auth.serves_metadata() {
+        return text_status(StatusCode::NOT_FOUND, "no authorization-server metadata");
+    }
+    let origin = request_origin(&headers);
+    let pkce_methods: Vec<&str> = if state.cfg.auth == AuthMode::NoPkce {
+        vec!["plain"]
+    } else {
+        vec!["S256"]
+    };
+    let doc = json!({
+        "issuer": origin,
+        "authorization_endpoint": format!("{origin}/authorize"),
+        "token_endpoint": format!("{origin}/token"),
+        "registration_endpoint": format!("{origin}/register"),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": pkce_methods,
+        "authorization_response_iss_parameter_supported": true
+    });
+    json_response(&doc)
+}
+
+/// A `200 application/json` response carrying `doc`.
+fn json_response(doc: &Value) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::to_string(doc).unwrap_or_else(|_| "null".to_string()),
+        ))
+        .unwrap()
 }
 
 /// Render `messages` as either a single JSON object or an SSE stream, attaching

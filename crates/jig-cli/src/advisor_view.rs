@@ -36,6 +36,7 @@ mod tests {
             message: msg.to_string(),
             fix: fix.to_string(),
             points: 0.0,
+            pinned: false,
         }
     }
 

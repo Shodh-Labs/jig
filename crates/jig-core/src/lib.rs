@@ -29,6 +29,7 @@
 #![warn(missing_docs)]
 
 pub mod advisor;
+pub mod auth;
 pub mod bench;
 pub mod check;
 pub mod client;
@@ -44,6 +45,11 @@ pub mod tokens;
 pub mod transport;
 
 pub use advisor::{advise as advise_tool_set, ToolTokenCost};
+pub use auth::{
+    probe as probe_auth, AuthFinding, AuthReport, AuthServerMetadata, HttpExchange,
+    Probe as AuthProbe, ProtectedResourceMetadata, Status as AuthStatus, Verdict as AuthVerdict,
+    WwwAuthenticate, MCP_AUTH_SPEC_REVISION,
+};
 pub use bench::{
     ArgCheck, BenchConfig, BenchError, BenchModel, BenchReport, Distribution, Outcome, Provider,
     RunResult, Usage, BENCH_SYSTEM_PROMPT,

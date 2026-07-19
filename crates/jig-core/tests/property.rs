@@ -15,6 +15,10 @@ use std::collections::HashSet;
 
 use std::time::Duration;
 
+use jig_core::auth::{
+    auth_server_metadata_urls, canonical_resource_uri, protected_resource_metadata_urls,
+    AuthServerMetadata, ProtectedResourceMetadata, WwwAuthenticate,
+};
 use jig_core::bench::{classify_anthropic, classify_openai, validate_args};
 use jig_core::check::{MetricSamples, Percentiles};
 use jig_core::eval::{load_suite_str, Matcher};
@@ -356,6 +360,69 @@ proptest! {
         for w in a.windows(2) {
             prop_assert!(rank(w[0].severity) <= rank(w[1].severity));
         }
+    }
+}
+
+proptest! {
+    // ---- Auth: metadata parsers are total over arbitrary input -------------
+
+    /// The `WWW-Authenticate` parser never panics on any string, and whenever it
+    /// yields a challenge the scheme token is non-empty.
+    #[test]
+    fn www_authenticate_parse_never_panics(raw in ".*") {
+        if let Some(ch) = WwwAuthenticate::parse(&raw) {
+            prop_assert!(!ch.scheme.is_empty());
+            // Param lookup is total too.
+            let _ = ch.param("resource_metadata");
+            let _ = ch.is_bearer();
+        }
+    }
+
+    /// Parsing arbitrary JSON as Protected Resource Metadata never panics; the
+    /// derived accessors stay consistent (a parsed `resource` is a string).
+    #[test]
+    fn protected_resource_metadata_parse_never_panics(v in arb_json()) {
+        let m = ProtectedResourceMetadata::from_json(&v);
+        // The accessors are total (no panic on read of any parsed shape).
+        let _ = m.authorization_servers.len();
+        let _ = m.scopes_supported.len();
+        let _ = m.resource;
+    }
+
+    /// Parsing arbitrary JSON as Authorization Server Metadata never panics, and
+    /// the S256 predicate is total.
+    #[test]
+    fn auth_server_metadata_parse_never_panics(v in arb_json()) {
+        let m = AuthServerMetadata::from_json(&v);
+        let _ = m.supports_s256();
+        let _ = m.iss_parameter_supported;
+    }
+
+    /// The URL builders never panic on arbitrary input (URLs or garbage), and
+    /// every URL they emit for a parseable https/http input contains the
+    /// well-known marker.
+    #[test]
+    fn auth_url_builders_never_panic(s in ".*") {
+        let _ = canonical_resource_uri(&s);
+        for u in protected_resource_metadata_urls(&s) {
+            prop_assert!(u.contains("/.well-known/oauth-protected-resource"));
+        }
+        for u in auth_server_metadata_urls(&s) {
+            prop_assert!(u.contains("/.well-known/"));
+        }
+    }
+
+    /// For any parseable http(s) URL, the canonical form carries no fragment and
+    /// no gratuitous trailing slash.
+    #[test]
+    fn canonical_uri_has_no_fragment_or_trailing_slash(
+        host in "[a-z][a-z0-9-]{0,20}",
+        path in "(/[a-z0-9]{1,8}){0,3}",
+    ) {
+        let url = format!("https://{host}.example.com{path}/#frag");
+        let canonical = canonical_resource_uri(&url);
+        prop_assert!(!canonical.contains('#'));
+        prop_assert!(!canonical.ends_with('/') || canonical == "https://");
     }
 }
 

@@ -180,6 +180,14 @@ async fn run_inner(
         emit(&render_json(&report));
     } else {
         emit(&render_human(&report));
+        // For an HTTP target, surface a compact, informational OAuth-conformance
+        // section. The auth dimension is NOT scored into the rubric-v1 composite
+        // in this milestone; it is a heads-up only. The probe reuses the session
+        // tap, so its HTTP traffic is captured alongside the rest.
+        if let Target::Http { url, headers } = target {
+            let summary = crate::auth::check_summary(url, headers, &tap, timeout_secs).await;
+            emit(&summary);
+        }
     }
 
     // The CI gate: exit nonzero when the composite is below the floor.

@@ -28,6 +28,11 @@
 //!   server→client `ping`/`sampling/createMessage` request.
 //! * `--giant-json` / `--giant-sse` — (HTTP mode) answer `tools/list` with a
 //!   multi-megabyte body to exercise the client's streaming size-cap.
+//! * `--auth <scenario>` — (HTTP mode) play an OAuth conformance scenario for
+//!   `jig auth`: `well-configured` (401 + proper challenge + full RFC 9728/8414
+//!   metadata with S256+DCR), `no-challenge` (bare 401), `no-metadata`
+//!   (challenge points at a 404), `no-pkce` (metadata lacks S256), or `open`
+//!   (200, no auth). See [`http::AuthMode`].
 //! * `--pollute-stdout` / `--paginate` — (stdio mode) test fixtures, see below.
 //! * `--chaos <mode[,mode...]>` — (stdio mode) the **hostile-server chaos
 //!   catalog**: deliberately misbehave in one specific way so Jig's degradation
@@ -117,6 +122,7 @@ fn main() {
             server_sampling: args.iter().any(|a| a == "--server-sampling"),
             giant_json: args.iter().any(|a| a == "--giant-json"),
             giant_sse: args.iter().any(|a| a == "--giant-sse"),
+            auth: http::AuthMode::parse(&args),
         };
         http::serve(port, cfg);
         return;
