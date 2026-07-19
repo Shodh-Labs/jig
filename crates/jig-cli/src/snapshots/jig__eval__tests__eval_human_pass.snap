@@ -1,0 +1,28 @@
+---
+source: crates/jig-cli/src/eval.rs
+expression: render_human(&passing_report())
+---
+Eval — 1 suite, 2 cases
+Model: gpt-4o (openai, api=gpt-4o) — reported version: gpt-mock-1
+
+Suite: search-basics  (.jig/search.yaml)
+  case              rate        runs  verdict
+  find-rate-limits  3/3 (100%)     3  PASS · must_pass
+  open-page         3/3 (100%)     3  PASS
+
+Totals:
+  accuracy:  6/6 (100%)
+  cases:     2 passed · 0 failed · 0 flaky · 0 errored
+  gate:      0.80 → met (100% >= 80%)
+  verdict:   PASS
+
+Pinned context (reproduce this run):
+  model:             gpt-4o (openai)
+  api model:         gpt-4o
+  reported version:  gpt-mock-1
+  temperature:       1
+  runs:              3 (per case)
+  scoring:           deterministic matchers only (v1): exact · contains · regex · one_of · range; selected args are JSON-Schema validated
+  system prompt:     "You are connected to a set of tools. Read the user's task and, if one of the available tools is appropriate, call exactly one tool to accomplish it. If no tool fits, answer in plain text."
+  suites:
+    search-basics  (.jig/search.yaml)  2 cases

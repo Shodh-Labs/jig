@@ -14,6 +14,7 @@
 use std::collections::HashSet;
 
 use jig_core::bench::{classify_anthropic, classify_openai, validate_args};
+use jig_core::eval::{load_suite_str, Matcher};
 use jig_core::http::parse_sse;
 use jig_core::tokens::canonical_tool_json;
 use jig_core::transport::{classify_inbound, parse_response};
@@ -42,7 +43,40 @@ fn arb_json() -> impl Strategy<Value = Value> {
     })
 }
 
+/// A strategy producing an arbitrary [`Matcher`] of every kind — including
+/// deliberately-malformed regex patterns, which must degrade to a non-match, not
+/// a panic.
+fn arb_matcher() -> impl Strategy<Value = Matcher> {
+    prop_oneof![
+        arb_json().prop_map(Matcher::Exact),
+        ".*".prop_map(Matcher::Contains),
+        ".*".prop_map(Matcher::Regex),
+        prop::collection::vec(arb_json(), 0..5).prop_map(Matcher::OneOf),
+        (
+            proptest::option::of(any::<f64>()),
+            proptest::option::of(any::<f64>())
+        )
+            .prop_map(|(min, max)| Matcher::Range { min, max }),
+    ]
+}
+
 proptest! {
+    // ---- Eval matchers are total over arbitrary JSON -----------------------
+
+    /// Evaluating any matcher (incl. a malformed regex) against arbitrary JSON
+    /// yields a bool, never a panic.
+    #[test]
+    fn matcher_matches_never_panics(m in arb_matcher(), v in arb_json()) {
+        let _ = m.matches(&v);
+    }
+
+    /// Loading an arbitrary string as a suite yields a suite or a typed error —
+    /// never a panic or a hang.
+    #[test]
+    fn load_suite_never_panics(text in ".*") {
+        let _ = load_suite_str(&text, "prop.yaml");
+    }
+
     // ---- Framing / parsers never panic on arbitrary input ------------------
 
     /// The stdio line handler classifies *any* bytes into a tap value and a

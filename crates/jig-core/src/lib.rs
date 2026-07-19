@@ -31,6 +31,7 @@
 pub mod bench;
 pub mod client;
 pub mod error;
+pub mod eval;
 pub mod http;
 pub mod protocol;
 pub mod tap;
@@ -43,6 +44,10 @@ pub use bench::{
 };
 pub use client::{Client, ClientOptions};
 pub use error::{JigError, Result};
+pub use eval::{
+    load_suite_file, load_suite_str, run_eval, score_case, Case, CaseReport, CaseVerdict, Defaults,
+    EvalConfig, EvalError, Expect, Matcher, RunReport, Suite, SuiteReport,
+};
 pub use http::HttpTransport;
 pub use protocol::{
     ContentBlock, Implementation, InitializeResult, Prompt, PromptArgument, Resource, Tool,

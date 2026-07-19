@@ -15,6 +15,8 @@ tiktoken-rs.workspace = true
 # `reqwest` is now a core dependency: it powers the Streamable HTTP transport
 # (`HttpTransport`), which is first-class functionality, not an optional add-on.
 reqwest = { workspace = true }
+serde_yaml_ng.workspace = true
+regex.workspace = true
 
 [features]
 default = []

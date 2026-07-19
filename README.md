@@ -39,7 +39,7 @@ Jig is a Rust workspace (`cargo` 1.80+). Milestone 1 ships the core engine and t
 ```
 crates/
   jig-core         # library: stdio + Streamable HTTP transports, MCP handshake + ops, protocol tap
-  jig-cli          # binary `jig`: inspect / call / budget subcommands
+  jig-cli          # binary `jig`: inspect / call / budget / bench / eval subcommands
   jig-mock-server  # binary: a minimal MCP server (stdio + HTTP) used as a test fixture
 ```
 
@@ -203,6 +203,106 @@ responses are retried with bounded back-off (respecting `Retry-After`); a
 persistent failure degrades into a `provider_error` outcome rather than crashing
 the bench — a misbehaving provider is Jig's to handle informatively, exactly as
 a misbehaving server is.
+
+### `jig eval` — the `.jig` eval suite
+
+`jig bench` explores. `jig eval` **asserts**: it turns `prompt → expected tool
+call` cases into regression tests, versioned in git next to your server and
+runnable in CI. Cases live in a `.jig/` directory as `*.yaml` files:
+
+```yaml
+# .jig/search.yaml
+suite: search-basics            # optional; defaults to the file stem
+defaults:                       # optional per-suite defaults
+  runs: 3
+  temp: 1.0
+cases:
+  - id: find-rate-limits        # required, unique within the suite
+    task: "Find the docs page about rate limits"
+    expect:
+      tool: search_docs                     # the expected selection (required)
+      args:                                 # optional argument matchers
+        query: { contains: "rate limit" }   # exact | contains | regex | one_of | range
+        limit: { range: { min: 1, max: 50 } }
+      not_tools: [fetch_page]               # selecting any of these = hard fail
+    runs: 5                                 # override the default
+    min_rate: 0.8                           # selection-rate gate (default 0.8)
+    must_pass: false                        # true → its failure fails the whole run
+```
+
+A bare scalar is `exact` shorthand: `query: "rate limit"` ≡
+`query: { exact: "rate limit" }`. An **unknown field is a hard error** naming the
+field and file — a silently-ignored typo in a test file is a lying test. The
+selected call's arguments are always JSON-Schema validated (the same validator
+`jig bench` uses) in addition to any matchers.
+
+```sh
+jig eval --stdio "<cmd>"                        # runs every ./.jig/*.yaml
+jig eval --stdio "<cmd>" --suite .jig/search.yaml --gate 0.9
+jig eval --stdio "<cmd>" --json                 # full per-run detail
+jig eval --stdio "<cmd>" --junit eval.xml       # CI-native JUnit XML
+```
+
+Each case runs N times and is scored by a **selection rate** = the fraction of
+runs that selected the expected tool *and* passed every matcher *and* were
+schema-valid — never a single run, never a boolean. A case at or above its
+`min_rate` passes; a case that flips between runs is flagged **FLAKY** even when
+it passes, because flakiness is a finding, not noise. Provider errors are
+**excluded** from the rate denominator and reported loudly; a case that is
+mostly provider errors is `ERRORED`, not silently passed.
+
+```
+Suite: search-basics  (.jig/search.yaml)
+  case              rate        runs  verdict
+  find-rate-limits  3/3 (100%)     3  PASS
+  list-endpoints    2/4 (50%)      4  PASS · FLAKY
+  book-table        0/3 (0%)       3  FAIL · must_pass
+
+Totals:
+  accuracy:  5/10 (50%)
+  cases:     2 passed · 1 failed · 1 flaky · 0 errored
+  gate:      0.80 → NOT MET (50% < 80%)
+  verdict:   FAIL
+```
+
+The run fails (**exit `3`**) when a `must_pass` case does not pass, or when a
+`--gate` is set and the overall weighted accuracy falls below it. Without a gate
+and without any `must_pass` case there is nothing to enforce, so `jig eval` is
+informational (exit `0`) — add `--gate` or mark cases `must_pass` to turn a suite
+into a CI regression gate. Every report ends with a **pinned-context block**
+(model id + *reported* version, temperature, runs, suite files, system prompt,
+and the deterministic-scoring rubric) so a run is reproducible.
+
+**Honest framing.** v1 scoring is **deterministic matchers only** — `exact`,
+`contains`, `regex`, `one_of`, `range`, tool name, and schema validity. There is
+deliberately **no LLM-judge**: a regression gate must itself be reproducible.
+
+#### The save-case loop: exploration → regression test
+
+`jig bench --save-case <file>` closes the loop. After a bench run it drafts a
+case into a `.jig` file (creating the file and any parent directory), with the
+expected tool and `exact` argument matchers taken from the majority run:
+
+```sh
+# 1) explore
+jig bench --stdio "<cmd>" --task "Book a table for two outdoors on 2026-01-01" \
+    --model gpt-4o --runs 3 --save-case .jig/reservations.yaml
+# → drafts:
+#   # TODO: review drafted case
+#   - id: book-a-table-for-two-outdoors
+#     task: "Book a table for two outdoors on 2026-01-01"
+#     expect:
+#       tool: make_reservation
+#       args:
+#         date: "2026-01-01"
+#         party: { exact: {"seating":"outdoor","size":2} }
+#     runs: 3
+# 2) review the TODO, tighten the matchers, commit — now it's a regression test
+jig eval --stdio "<cmd>" --suite .jig/reservations.yaml
+```
+
+Drafting is refused (nothing is written) when the majority outcome was not a tool
+selection — there is no selection to assert.
 
 ## License
 

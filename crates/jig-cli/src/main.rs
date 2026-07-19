@@ -8,6 +8,13 @@
 //! * `jig bench --stdio "<cmd>" --task "<text>" [--model <id>...]` — put a real
 //!   model in the loop and measure which tool it selects across runs
 //!   (see [`mod@bench`]).
+//! * `jig eval --stdio "<cmd>" [--suite <path>...]` — run a `.jig` eval suite:
+//!   replay `prompt → expected tool` cases and gate on the selection rate across
+//!   N runs (see [`mod@eval`]).
+//!
+//! Exit codes are uniform: `0` success, `1` a jig-level failure, `2` reserved
+//! for a tool reporting an error (`jig call`), and `3` a `jig eval` gate /
+//! `must_pass` failure.
 //!
 //! All support `--json` for machine output and `--tap <file>` to dump the raw
 //! protocol traffic as JSONL. Every stdout write goes through [`emit`], which
@@ -24,6 +31,7 @@ use serde_json::{json, Value};
 
 mod bench;
 mod budget;
+mod eval;
 mod render;
 
 /// Write `s` to stdout, flushing, in a broken-pipe-safe way.
@@ -193,6 +201,62 @@ enum Command {
         /// auth, and every raw provider response).
         #[arg(long)]
         json: bool,
+        /// After the run, draft a `.jig` eval case into this file (creating it
+        /// and any parent dir). The expected tool + arg matchers come from the
+        /// majority run; refused if the majority outcome was not a selection.
+        #[arg(long, value_name = "FILE")]
+        save_case: Option<PathBuf>,
+        /// Write the raw protocol traffic to this file as JSONL.
+        #[arg(long, value_name = "FILE")]
+        tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
+        /// Maximum size in bytes of a single inbound message (0 = no cap).
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
+    },
+    /// Run a `.jig` eval suite: replay `prompt → expected tool` cases against a
+    /// live model and gate on the selection rate across N runs.
+    Eval {
+        /// The server command to run over stdio. Mutually exclusive with --http.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// A remote MCP endpoint URL to connect to over Streamable HTTP.
+        /// Mutually exclusive with --stdio.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Extra HTTP header for --http, "Name: Value" (repeatable).
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
+        /// A `.jig` suite file or a directory of them; repeatable. Default:
+        /// `./.jig/` (every `*.yaml` in it).
+        #[arg(long = "suite", value_name = "PATH")]
+        suites: Vec<PathBuf>,
+        /// Model id to eval against. Known: gpt-4o, gpt-4, claude-sonnet,
+        /// claude-opus. Default: claude-sonnet if ANTHROPIC_API_KEY is set, else
+        /// gpt-4o.
+        #[arg(long = "model", value_name = "ID")]
+        model: Option<String>,
+        /// Override the concrete API model string sent on the wire.
+        #[arg(long, value_name = "STRING")]
+        api_model: Option<String>,
+        /// Force N runs for every case, overriding case/suite defaults.
+        #[arg(long, value_name = "N")]
+        runs_override: Option<usize>,
+        /// Override the sampling temperature for every suite.
+        #[arg(long, value_name = "T")]
+        temp: Option<f64>,
+        /// Gate the whole run: fail (exit 3) if the overall weighted selection
+        /// accuracy is below this fraction (0..=1).
+        #[arg(long, value_name = "0..1")]
+        gate: Option<f64>,
+        /// Emit full machine-readable JSON (every case, every run, full detail).
+        #[arg(long)]
+        json: bool,
+        /// Write a CI-native JUnit XML report to this file.
+        #[arg(long, value_name = "FILE")]
+        junit: Option<PathBuf>,
         /// Write the raw protocol traffic to this file as JSONL.
         #[arg(long, value_name = "FILE")]
         tap: Option<PathBuf>,
@@ -299,6 +363,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             runs,
             temp,
             json,
+            save_case,
             tap,
             timeout,
             max_message_bytes,
@@ -312,6 +377,40 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 runs,
                 temp,
                 json,
+                save_case.as_deref(),
+                tap.as_deref(),
+                timeout,
+                max_message_bytes,
+            )
+            .await
+        }
+        Command::Eval {
+            stdio,
+            http,
+            header,
+            suites,
+            model,
+            api_model,
+            runs_override,
+            temp,
+            gate,
+            json,
+            junit,
+            tap,
+            timeout,
+            max_message_bytes,
+        } => {
+            let target = Target::resolve(stdio, http, header)?;
+            eval::run(
+                &target,
+                suites,
+                model,
+                api_model,
+                runs_override,
+                temp,
+                gate,
+                json,
+                junit.as_deref(),
                 tap.as_deref(),
                 timeout,
                 max_message_bytes,

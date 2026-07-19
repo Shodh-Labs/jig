@@ -23,6 +23,15 @@ tokio = { version = "1", features = [
 ] }
 clap = { version = "4", features = ["derive"] }
 tiktoken-rs = "0.12"
+# `.jig` eval-suite parsing. `serde_yaml` (dtolnay) is archived/unmaintained;
+# `serde_yaml_ng` is the actively-maintained drop-in fork with the same serde
+# API — including `deny_unknown_fields` and error `Display` carrying the
+# `line`/`column` we surface as file:line diagnostics for a typo in a test file.
+serde_yaml_ng = "0.10"
+# The `regex` matcher for eval arg assertions. Already present transitively in
+# the lockfile (pulled in via the TLS/token stack), so this is a free promotion
+# to a direct dependency rather than a new tree entry.
+regex = "1"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",

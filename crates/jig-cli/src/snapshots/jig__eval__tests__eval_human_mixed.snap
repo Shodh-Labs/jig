@@ -1,0 +1,39 @@
+---
+source: crates/jig-cli/src/eval.rs
+expression: render_human(&mixed_report())
+---
+Eval — 1 suite, 4 cases
+Model: gpt-4o (openai, api=gpt-4o) — reported version: gpt-mock-1
+
+Suite: search-basics  (.jig/search.yaml)
+  case              rate        runs  verdict
+  find-rate-limits  3/3 (100%)     3  PASS
+  list-endpoints    2/4 (50%)      4  PASS · FLAKY
+      run 2: selected `fetch_page` (expected `search_docs`)
+      run 4: selected `fetch_page` (expected `search_docs`)
+  book-table        0/3 (0%)       3  FAIL · must_pass
+      run 1: selected `search_docs` (expected `make_reservation`)
+      run 2: no tool selected (expected `make_reservation`)
+      run 3: selected `search_docs` (expected `make_reservation`)
+  flaky-provider    0/0 (n/a)      3  ERRORED
+      run 1: provider error: HTTP 500: boom
+      run 2: provider error: HTTP 500: boom
+      run 3: provider error: HTTP 500: boom
+
+Totals:
+  accuracy:  5/10 (50%)
+  cases:     2 passed · 1 failed · 1 flaky · 1 errored
+  gate:      0.80 → NOT MET (50% < 80%)
+  must_pass: 1 failing must_pass case(s): book-table
+  verdict:   FAIL
+
+Pinned context (reproduce this run):
+  model:             gpt-4o (openai)
+  api model:         gpt-4o
+  reported version:  gpt-mock-1
+  temperature:       1
+  runs:              3, 4 (per case)
+  scoring:           deterministic matchers only (v1): exact · contains · regex · one_of · range; selected args are JSON-Schema validated
+  system prompt:     "You are connected to a set of tools. Read the user's task and, if one of the available tools is appropriate, call exactly one tool to accomplish it. If no tool fits, answer in plain text."
+  suites:
+    search-basics  (.jig/search.yaml)  4 cases

@@ -25,6 +25,10 @@
 //!   must record args-unparseable, never panic.
 //! * `retry_then_success` — first request `429` with `Retry-After: 0`, then a
 //!   `selected` success (exercises bounded retry).
+//! * `alternate` — alternates the selected tool per successful request (even
+//!   hits pick `echo`, odd hits pick `make_reservation`) using the server-side
+//!   hit counter. This produces a deterministic *mixed* selection across runs so
+//!   the eval runner's rate-based/flaky scoring can be exercised end-to-end.
 //! * `error_500` — always `500` (exhausts retries → `provider_error`).
 //! * `error_429` — always `429` (exhausts retries → `provider_error`).
 
@@ -96,7 +100,8 @@ async fn anthropic(
     if let Some(resp) = error_scenario(&state, &scenario) {
         return resp;
     }
-    ok_json(anthropic_body(&scenario))
+    let hit = state.hits.fetch_add(1, Ordering::SeqCst);
+    ok_json(anthropic_body(&scenario, hit))
 }
 
 /// OpenAI Chat Completions endpoint.
@@ -104,7 +109,8 @@ async fn openai(State(state): State<Arc<ProviderState>>, Path(scenario): Path<St
     if let Some(resp) = error_scenario(&state, &scenario) {
         return resp;
     }
-    ok_json(openai_body(&scenario))
+    let hit = state.hits.fetch_add(1, Ordering::SeqCst);
+    ok_json(openai_body(&scenario, hit))
 }
 
 /// Handle the error/retry scenarios shared by both dialects. Returns `Some` when
@@ -128,7 +134,10 @@ fn error_scenario(state: &ProviderState, scenario: &str) -> Option<Response> {
 
 /// The Anthropic response body for a success scenario. Unknown scenarios default
 /// to `selected` so a typo fails loudly in the assertion, not the transport.
-fn anthropic_body(scenario: &str) -> Value {
+///
+/// `hit` is the per-process request index (used only by the `alternate`
+/// scenario to vary the selected tool across calls).
+fn anthropic_body(scenario: &str, hit: u64) -> Value {
     let usage = json!({ "input_tokens": 42, "output_tokens": 7 });
     let base = |content: Value| {
         json!({
@@ -160,7 +169,12 @@ fn anthropic_body(scenario: &str) -> Value {
             // size wrong type, seating bad enum, `date` missing.
             json!({ "party": { "size": "two", "seating": "rooftop" } }),
         ),
-        // "selected", "retry_then_success", and any default.
+        "alternate" if hit % 2 == 1 => tool_use_anthropic(
+            base,
+            "make_reservation",
+            json!({ "party": { "size": 2, "seating": "outdoor" }, "date": "2026-01-01" }),
+        ),
+        // "selected", "retry_then_success", even-hit "alternate", and any default.
         _ => tool_use_anthropic(base, "echo", json!({ "text": "hello" })),
     }
 }
@@ -174,7 +188,10 @@ fn tool_use_anthropic(base: impl Fn(Value) -> Value, name: &str, input: Value) -
 }
 
 /// The OpenAI response body for a success scenario.
-fn openai_body(scenario: &str) -> Value {
+///
+/// `hit` is the per-process request index (used only by the `alternate`
+/// scenario to vary the selected tool across calls).
+fn openai_body(scenario: &str, hit: u64) -> Value {
     let usage = json!({ "prompt_tokens": 42, "completion_tokens": 7, "total_tokens": 49 });
     let base = |message: Value, finish: &str| {
         json!({
@@ -211,6 +228,13 @@ fn openai_body(scenario: &str) -> Value {
         "malformed_args" => base(
             // Deliberately-broken JSON in `arguments` — models really do this.
             tool_calls_openai("echo", "{not valid json"),
+            "tool_calls",
+        ),
+        "alternate" if hit % 2 == 1 => base(
+            tool_calls_openai(
+                "make_reservation",
+                "{\"party\":{\"size\":2,\"seating\":\"outdoor\"},\"date\":\"2026-01-01\"}",
+            ),
             "tool_calls",
         ),
         _ => base(
