@@ -16,7 +16,7 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: check
         run: |
           set -euo pipefail
@@ -51,7 +51,7 @@ jobs:
             os: macos-latest
             archive: tar.gz
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Select stable toolchain + target
         shell: bash
         run: |
@@ -141,7 +141,7 @@ jobs:
   #   needs: [guard, release]
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v7
   #     - run: rustup default stable
   #     - run: cargo publish -p jig-core --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
   #     - run: cargo publish -p jig-cli  --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
