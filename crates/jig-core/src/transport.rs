@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -48,9 +48,13 @@ pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// / the `--max-message-bytes` flag; `None` disables the cap.
 pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 
-/// Grace period, on a detected disconnect, to let the separate stderr-drain
-/// task flush the child's final lines before they are quoted in the error.
-const DISCONNECT_GRACE: Duration = Duration::from_millis(100);
+/// Upper bound on how long a disconnect diagnosis waits for the separate
+/// stderr-drain task to finish flushing the child's final lines. Reached only if
+/// the drain is unusually slow; normally it settles in a few milliseconds once
+/// the child's stderr hits EOF.
+const STDERR_SETTLE_TIMEOUT: Duration = Duration::from_millis(750);
+/// Poll interval while waiting for [`STDERR_SETTLE_TIMEOUT`].
+const STDERR_SETTLE_POLL: Duration = Duration::from_millis(5);
 
 /// How many trailing stderr lines to retain for error context.
 const STDERR_TAIL_LINES: usize = 20;
@@ -72,6 +76,10 @@ pub struct StdioTransport {
     read_fault: ReadFault,
     /// The child's most recent stderr lines, for enriching disconnect errors.
     stderr_tail: StderrTail,
+    /// Set true when the stderr-drain task finishes (the child's stderr reached
+    /// EOF and every line has been captured), so a disconnect diagnosis can wait
+    /// for the full tail rather than guess at a fixed grace period.
+    stderr_done: Arc<AtomicBool>,
     reader: JoinHandle<()>,
     stderr_drain: JoinHandle<()>,
 }
@@ -152,6 +160,7 @@ impl StdioTransport {
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
         let read_fault: ReadFault = Arc::new(Mutex::new(None));
         let stderr_tail: StderrTail = Arc::new(Mutex::new(VecDeque::new()));
+        let stderr_done = Arc::new(AtomicBool::new(false));
 
         let reader = tokio::spawn(read_loop(
             stdout,
@@ -160,7 +169,11 @@ impl StdioTransport {
             max_message_bytes,
             Arc::clone(&read_fault),
         ));
-        let stderr_drain = tokio::spawn(drain_stderr(stderr, Arc::clone(&stderr_tail)));
+        let stderr_drain = tokio::spawn(drain_stderr(
+            stderr,
+            Arc::clone(&stderr_tail),
+            Arc::clone(&stderr_done),
+        ));
 
         Ok(StdioTransport {
             child: Mutex::new(child),
@@ -171,6 +184,7 @@ impl StdioTransport {
             request_timeout,
             read_fault,
             stderr_tail,
+            stderr_done,
             reader,
             stderr_drain,
         })
@@ -208,7 +222,7 @@ impl StdioTransport {
             // that names the exit status and the server's own stderr.
             if self.child_exit_status().is_some() {
                 // Let the stderr drain surface the child's last words first.
-                tokio::time::sleep(DISCONNECT_GRACE).await;
+                self.await_stderr_settled().await;
                 return Err(self.describe_disconnect(method, id));
             }
             return Err(write_err);
@@ -229,7 +243,7 @@ impl StdioTransport {
             match rx.await {
                 Ok(v) => Ok(v),
                 Err(_) => {
-                    tokio::time::sleep(DISCONNECT_GRACE).await;
+                    self.await_stderr_settled().await;
                     Err(self.describe_disconnect(method, id))
                 }
             }
@@ -304,6 +318,32 @@ impl StdioTransport {
             None => JigError::transport(format!(
                 "connection closed before response to '{method}' (id {id}){stderr}"
             )),
+        }
+    }
+
+    /// Wait, bounded, for a disconnect to fully "settle" before it is diagnosed:
+    /// the child observably exited (so its exit *status* is available, not just
+    /// its closed pipes) **and** the stderr-drain task finished (so its final
+    /// lines are captured). These two race the stdout EOF that triggered us, and
+    /// on some platforms the process is not immediately reapable the instant its
+    /// pipes close.
+    ///
+    /// Returns immediately when a fatal read fault is already recorded (an
+    /// oversized message is self-explanatory and the child may still be alive),
+    /// and caps out at [`STDERR_SETTLE_TIMEOUT`] so a child that lingers with an
+    /// open stderr cannot stall the error path.
+    async fn await_stderr_settled(&self) {
+        if lock(&self.read_fault).is_some() {
+            return;
+        }
+        let deadline = tokio::time::Instant::now() + STDERR_SETTLE_TIMEOUT;
+        loop {
+            let exited = self.child_exit_status().is_some();
+            let stderr_done = self.stderr_done.load(Ordering::Relaxed);
+            if (exited && stderr_done) || tokio::time::Instant::now() >= deadline {
+                return;
+            }
+            tokio::time::sleep(STDERR_SETTLE_POLL).await;
         }
     }
 
@@ -649,7 +689,11 @@ async fn read_loop(
 /// most recent [`STDERR_TAIL_LINES`] lines are retained so a crash/exit error
 /// can quote the server's own diagnostics — the difference between "connection
 /// closed" and "connection closed. Last server stderr: panicked at ...".
-async fn drain_stderr(stderr: tokio::process::ChildStderr, tail: StderrTail) {
+async fn drain_stderr(
+    stderr: tokio::process::ChildStderr,
+    tail: StderrTail,
+    done: Arc<AtomicBool>,
+) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let mut line = line;
@@ -662,6 +706,9 @@ async fn drain_stderr(stderr: tokio::process::ChildStderr, tail: StderrTail) {
         }
         guard.push_back(line);
     }
+    // stderr reached EOF (the child closed it, typically on exit): the tail is
+    // now complete, so a disconnect diagnosis can stop waiting for it.
+    done.store(true, Ordering::Relaxed);
 }
 
 /// Human-readable description of how a child process ended.
