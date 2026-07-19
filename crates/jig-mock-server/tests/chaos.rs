@@ -194,7 +194,11 @@ async fn giant_message_handled_under_default_cap() {
 #[tokio::test]
 async fn giant_message_rejected_over_low_cap() {
     let options = ClientOptions {
-        request_timeout: Some(OP_TIMEOUT),
+        // Generous timeout on purpose: this test asserts the CAP aborts the
+        // read, and must not race the clock — under full-workspace parallel
+        // test load a tight timeout can fire before 1 MiB accumulates (seen
+        // flaking at 2s on a loaded Windows runner).
+        request_timeout: Some(Duration::from_secs(30)),
         // 1 MiB: the small handshake fits, the 20 MiB list does not.
         max_message_bytes: Some(1024 * 1024),
         ..ClientOptions::default()
