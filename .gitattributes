@@ -1,0 +1,4 @@
+* text=auto
+*.rs text
+*.md text
+*.toml text
