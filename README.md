@@ -17,7 +17,7 @@ MCP servers can't be tested like APIs. An API is deterministic: send a request, 
 
 Jig makes that surface visible, measurable, and regression-safe:
 
-- 🔍 **Inspect** — the exact rendered context a model receives from your server. Not what your code says; what the wire says.
+- 🔍 **[See what the model sees](#jig-context--see-exactly-what-the-model-sees)** — the exact rendered context a model receives from your server. Not what your code says; what the wire says.
 - 🧮 **Token budget** — what your server costs in context before the user types a word, per tool, per model tokenizer.
 - 🎯 **Model bench** — give it a task in plain language; watch which tool a real model selects, with what arguments, across repeated runs.
 - ✅ **Eval suites** — `prompt → expected tool call` test cases, versioned in git next to your server, runnable locally and in CI.
@@ -39,7 +39,7 @@ Jig is a Rust workspace (`cargo` 1.80+). Milestone 1 ships the core engine and t
 ```
 crates/
   jig-core         # library: stdio + Streamable HTTP transports, MCP handshake + ops, protocol tap
-  jig-cli          # binary `jig`: check / inspect / call / read / prompt / budget / bench / eval / servers / search / info
+  jig-cli          # binary `jig`: check / inspect / call / read / prompt / context / budget / bench / eval / servers / search / info
   jig-mock-server  # binary: a minimal MCP server (stdio + HTTP) used as a test fixture
 ```
 
@@ -69,6 +69,8 @@ cargo build
 # fetch a prompt by name, filling its arguments
 ./target/debug/jig prompt --stdio "./target/debug/jig-mock-server --resources-prompts" \
     --name greet --args '{"name":"Ada"}'
+# see exactly what the model sees — the token-annotated request body, no key needed
+./target/debug/jig context --stdio "./target/debug/jig-mock-server"
 # what does this server cost in context tokens, per tool, per model?
 ./target/debug/jig budget --stdio "./target/debug/jig-mock-server"
 # which tool does a real model pick for a task? (needs ANTHROPIC_API_KEY / OPENAI_API_KEY)
@@ -137,6 +139,65 @@ the session, never assumed. `--min-score <n>` is the CI gate: wire
 drops the grade fails the build. See
 [`docs/percentiles-schema.md`](docs/percentiles-schema.md) for the dataset
 format.
+
+### `jig context` — see exactly what the model sees
+
+The founding promise: developers write tool descriptions blind, never seeing the
+context block a model actually receives. `jig context` renders it —
+**token-annotated** — by assembling the exact provider API request body that
+[`jig bench`](#jig-bench--the-model-in-the-loop-bench) would send: your tools
+mapped to the provider dialect, the system prompt, and a placeholder user
+message. It reuses bench's request assembly, so what you see is byte-identical to
+what bench sends (minus the placeholder task). It needs **no API key** and sends
+nothing anywhere — everything is computed locally.
+
+```sh
+jig context --stdio "npx -y @modelcontextprotocol/server-everything"   # human view (default)
+jig context --stdio "<cmd>" --model claude-sonnet                       # Anthropic dialect + tokenizer
+jig context --stdio "<cmd>" --provider anthropic                        # force a dialect (no key needed)
+jig context --stdio "<cmd>" --raw                                       # the full JSON request body, pretty-printed
+jig context --stdio "<cmd>" --json                                      # body + per-section tokens + provenance
+```
+
+```
+Context — what gpt-4o (openai dialect) receives from jig-mock-server v0.1.0  [nothing is sent to any API]
+
+  system prompt                                         42 tok
+    You are connected to a set of tools. Read the user's task and, if one of the …
+
+  server instructions                                    8 tok
+    (offered by the server; not sent by `jig bench` — see footer)
+    A toy MCP server for exercising Jig.
+
+  tools (3)                                            190 tok
+  ├─ make_reservation                                  104 tok
+  │    "Book a table. Demonstrates a nested object argument and an enum."
+  │    date: string (required) — "ISO-8601 date."
+  │    party: object (required)
+  │      seating: string — one of [indoor, outdoor, bar]
+  │      size: integer (required)
+  ├─ echo                                               47 tok
+  │    "Echo the provided text straight back."
+  │    text: string (required) — "Text to echo."
+  └─ always_fails                                       39 tok
+       "A tool that always reports an error, for testing error paths."
+       (no parameters)
+
+  TOTAL context before the user's first word           232 tok  (gpt-4o, exact)
+```
+
+`--model` picks the provider dialect + tokenizer via the shared model registry
+(`gpt-4o`, `gpt-4`, `claude-sonnet`, `claude-opus`; default: `claude-sonnet` if
+`ANTHROPIC_API_KEY` is set, else `gpt-4o` — no key is used either way).
+`--provider anthropic|openai` overrides the dialect directly. Token counts carry
+the same exactness labels as [`jig budget`](#jig-budget--the-token-budget-engine)
+(exact for OpenAI's real tokenizer, `~approx` for Claude).
+
+**Honesty.** This is the *provider API* rendering — what `jig bench` sends. Chat
+clients (Claude Desktop, Cursor, …) may render tool context differently;
+per-client renderings are a future milestone. Server `instructions` are shown for
+reference but are **not** in the bench request body (bench sends only the system
+prompt + tools), so they are excluded from the request total.
 
 ### Transports: stdio and Streamable HTTP
 

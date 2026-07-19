@@ -1,0 +1,91 @@
+---
+source: crates/jig-cli/src/context.rs
+expression: render_raw(&v)
+---
+{
+  "messages": [
+    {
+      "content": "You are connected to a set of tools. Read the user's task and, if one of the available tools is appropriate, call exactly one tool to accomplish it. If no tool fits, answer in plain text.",
+      "role": "system"
+    },
+    {
+      "content": "<your task here>",
+      "role": "user"
+    }
+  ],
+  "model": "gpt-4o",
+  "temperature": 1.0,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "Echo the provided text straight back.",
+        "name": "echo",
+        "parameters": {
+          "properties": {
+            "text": {
+              "description": "Text to echo.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Book a table. Demonstrates a nested object argument and an enum.",
+        "name": "make_reservation",
+        "parameters": {
+          "properties": {
+            "date": {
+              "description": "ISO-8601 date.",
+              "type": "string"
+            },
+            "party": {
+              "properties": {
+                "seating": {
+                  "enum": [
+                    "indoor",
+                    "outdoor",
+                    "bar"
+                  ],
+                  "type": "string"
+                },
+                "size": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "size"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "party",
+            "date"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "A tool that always reports an error, for testing error paths.",
+        "name": "always_fails",
+        "parameters": {
+          "properties": {},
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

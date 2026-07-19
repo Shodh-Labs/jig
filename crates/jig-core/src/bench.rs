@@ -543,23 +543,39 @@ fn input_schema_or_empty(tool: &Tool) -> Value {
     }
 }
 
+/// Render the request body for a provider from explicit parts, with **no**
+/// [`BenchConfig`] and no API key.
+///
+/// This is the key-free assembly `jig context` reuses to show the exact body
+/// `jig bench` sends without ever executing a request or touching a key.
+/// [`render_request`] delegates here so the bench send-path and the `context`
+/// rendering can never drift.
+pub fn render_request_parts(
+    provider: Provider,
+    tools: &[Tool],
+    task: &str,
+    api_model: &str,
+    temperature: f64,
+    max_tokens: u32,
+) -> Value {
+    match provider {
+        Provider::Anthropic => {
+            render_anthropic_request(tools, task, api_model, temperature, max_tokens)
+        }
+        Provider::OpenAI => render_openai_request(tools, task, api_model, temperature),
+    }
+}
+
 /// Render the request body for either provider (dispatch helper).
 pub fn render_request(provider: Provider, config: &BenchConfig, tools: &[Tool]) -> Value {
-    match provider {
-        Provider::Anthropic => render_anthropic_request(
-            tools,
-            &config.task,
-            &config.model.api_model,
-            config.temperature,
-            config.max_tokens,
-        ),
-        Provider::OpenAI => render_openai_request(
-            tools,
-            &config.task,
-            &config.model.api_model,
-            config.temperature,
-        ),
-    }
+    render_request_parts(
+        provider,
+        tools,
+        &config.task,
+        &config.model.api_model,
+        config.temperature,
+        config.max_tokens,
+    )
 }
 
 // ---------------------------------------------------------------------------

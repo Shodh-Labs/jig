@@ -1,0 +1,154 @@
+---
+source: crates/jig-cli/src/context.rs
+expression: "render_json(&mock_server(), &v)"
+---
+{
+  "note": "No API key is used; nothing is sent to any provider. This is the bench request body (system prompt + tools + placeholder task). Server instructions are shown but not sent by `jig bench`.",
+  "provenance": {
+    "apiModel": "gpt-4o",
+    "dialect": "openai",
+    "exactness": {
+      "exact": true
+    },
+    "model": "gpt-4o",
+    "tokenizer": "o200k_base"
+  },
+  "requestBody": {
+    "messages": [
+      {
+        "content": "You are connected to a set of tools. Read the user's task and, if one of the available tools is appropriate, call exactly one tool to accomplish it. If no tool fits, answer in plain text.",
+        "role": "system"
+      },
+      {
+        "content": "<your task here>",
+        "role": "user"
+      }
+    ],
+    "model": "gpt-4o",
+    "temperature": 1.0,
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "function": {
+          "description": "Echo the provided text straight back.",
+          "name": "echo",
+          "parameters": {
+            "properties": {
+              "text": {
+                "description": "Text to echo.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "Book a table. Demonstrates a nested object argument and an enum.",
+          "name": "make_reservation",
+          "parameters": {
+            "properties": {
+              "date": {
+                "description": "ISO-8601 date.",
+                "type": "string"
+              },
+              "party": {
+                "properties": {
+                  "seating": {
+                    "enum": [
+                      "indoor",
+                      "outdoor",
+                      "bar"
+                    ],
+                    "type": "string"
+                  },
+                  "size": {
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "size"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "party",
+              "date"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "A tool that always reports an error, for testing error paths.",
+          "name": "always_fails",
+          "parameters": {
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "sections": {
+    "serverInstructions": {
+      "sentByBench": false,
+      "text": "A toy MCP server for exercising Jig.",
+      "tokens": 8
+    },
+    "systemPrompt": {
+      "sentByBench": true,
+      "text": "You are connected to a set of tools. Read the user's task and, if one of the available tools is appropriate, call exactly one tool to accomplish it. If no tool fits, answer in plain text.",
+      "tokens": 42
+    },
+    "tools": {
+      "count": 3,
+      "items": [
+        {
+          "description": "Book a table. Demonstrates a nested object argument and an enum.",
+          "name": "make_reservation",
+          "schema": [
+            "date: string (required) — \"ISO-8601 date.\"",
+            "party: object (required)",
+            "  seating: string — one of [indoor, outdoor, bar]",
+            "  size: integer (required)"
+          ],
+          "tokens": 104
+        },
+        {
+          "description": "Echo the provided text straight back.",
+          "name": "echo",
+          "schema": [
+            "text: string (required) — \"Text to echo.\""
+          ],
+          "tokens": 47
+        },
+        {
+          "description": "A tool that always reports an error, for testing error paths.",
+          "name": "always_fails",
+          "schema": [
+            "(no parameters)"
+          ],
+          "tokens": 39
+        }
+      ],
+      "tokens": 190
+    }
+  },
+  "serverInfo": {
+    "name": "jig-mock-server",
+    "version": "0.1.0"
+  },
+  "taskPlaceholder": "<your task here>",
+  "totalTokens": 232
+}

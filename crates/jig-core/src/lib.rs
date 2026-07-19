@@ -31,6 +31,7 @@
 pub mod bench;
 pub mod check;
 pub mod client;
+pub mod context;
 pub mod discovery;
 pub mod ecosystem;
 pub mod error;
@@ -50,6 +51,10 @@ pub use check::{
     Percentiles, Report as CheckReport, Severity, RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};
+pub use context::{
+    build as build_context, schema_to_human_lines, ContextView, InstructionsSection, ToolContext,
+    CONTEXT_TASK_PLACEHOLDER, CONTEXT_TEMPERATURE,
+};
 pub use discovery::{
     discover, discover_from, DiscoveredTransport, Discovery, ResolveError, ServerEntry, Source,
     REDACTED,

@@ -7,6 +7,9 @@
 //! * `jig call --stdio "<cmd>" --tool <name> --args '<json>'` — invoke a tool.
 //! * `jig budget --stdio "<cmd>" [--model <id>...]` — price the tool surface in
 //!   context tokens, per tool and per model (see [`budget`]).
+//! * `jig context --stdio "<cmd>" [--model <id>]` — render the exact provider
+//!   API request body `jig bench` would send, token-annotated. Sends nothing and
+//!   needs no key (see [`mod@context`]).
 //! * `jig bench --stdio "<cmd>" --task "<text>" [--model <id>...]` — put a real
 //!   model in the loop and measure which tool it selects across runs
 //!   (see [`mod@bench`]).
@@ -46,6 +49,7 @@ use serde_json::{json, Value};
 mod bench;
 mod budget;
 mod check;
+mod context;
 mod ecosystem;
 mod eval;
 mod render;
@@ -247,6 +251,56 @@ enum Command {
         /// approximation on any error).
         #[arg(long)]
         exact_anthropic: bool,
+    },
+    /// Render exactly what the model sees: the provider API request body
+    /// `jig bench` would send (tools in the provider dialect + system prompt +
+    /// a placeholder task), token-annotated. Sends nothing; needs no API key.
+    Context {
+        /// The server command to run over stdio, e.g. "npx -y my-server".
+        /// Mutually exclusive with --http.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// A remote MCP endpoint URL to connect to over Streamable HTTP.
+        /// Mutually exclusive with --stdio.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Connect to a server discovered from a local client config by name
+        /// (see `jig servers`). Use `source:name` to disambiguate. Mutually
+        /// exclusive with --stdio/--http.
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["stdio", "http"])]
+        server: Option<String>,
+        /// Extra HTTP header for --http, "Name: Value" (repeatable).
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
+        /// Model whose tokenizer + provider dialect to render. Known: gpt-4o,
+        /// gpt-4, claude-sonnet, claude-opus. Default: claude-sonnet if
+        /// ANTHROPIC_API_KEY is set, else gpt-4o (no key is used either way).
+        #[arg(long, value_name = "ID")]
+        model: Option<String>,
+        /// Override the concrete API model string placed in the rendered body.
+        #[arg(long, value_name = "STRING")]
+        api_model: Option<String>,
+        /// Force the provider dialect (anthropic|openai), overriding the model's
+        /// registry provider. No key is needed to pick a dialect.
+        #[arg(long, value_enum, value_name = "PROVIDER")]
+        provider: Option<ProviderArg>,
+        /// Print the full JSON request body, pretty-printed, exactly as the API
+        /// would receive it (minus auth).
+        #[arg(long, conflicts_with = "json")]
+        raw: bool,
+        /// Emit machine output: the raw body + per-section token annotations +
+        /// provenance (model, tokenizer, exactness, dialect).
+        #[arg(long)]
+        json: bool,
+        /// Write the raw protocol traffic to this file as JSONL.
+        #[arg(long, value_name = "FILE")]
+        tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
+        /// Maximum size in bytes of a single inbound message (0 = no cap).
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
     },
     /// Bench a live model against the server's tools: which tool does a real
     /// model pick for a task, with what args, across repeated runs?
@@ -492,6 +546,24 @@ enum Command {
     },
 }
 
+/// The `--provider` dialect override for `jig context`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ProviderArg {
+    /// Anthropic Messages API dialect.
+    Anthropic,
+    /// OpenAI Chat Completions dialect.
+    Openai,
+}
+
+impl From<ProviderArg> for jig_core::bench::Provider {
+    fn from(p: ProviderArg) -> Self {
+        match p {
+            ProviderArg::Anthropic => jig_core::bench::Provider::Anthropic,
+            ProviderArg::Openai => jig_core::bench::Provider::OpenAI,
+        }
+    }
+}
+
 /// The `--source` selector for `jig search`.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SearchSource {
@@ -602,6 +674,34 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 timeout,
                 max_message_bytes,
                 exact_anthropic,
+            )
+            .await
+        }
+        Command::Context {
+            stdio,
+            http,
+            server,
+            header,
+            model,
+            api_model,
+            provider,
+            raw,
+            json,
+            tap,
+            timeout,
+            max_message_bytes,
+        } => {
+            let target = Target::resolve(stdio, http, server, header)?;
+            context::run(
+                &target,
+                model,
+                api_model,
+                provider.map(Into::into),
+                raw,
+                json,
+                tap.as_deref(),
+                timeout,
+                max_message_bytes,
             )
             .await
         }

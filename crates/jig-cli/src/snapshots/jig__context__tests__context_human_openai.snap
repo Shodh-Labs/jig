@@ -1,0 +1,36 @@
+---
+source: crates/jig-cli/src/context.rs
+expression: "render_human(&mock_server(), &v)"
+---
+Context — what gpt-4o (openai dialect) receives from jig-mock-server v0.1.0  [nothing is sent to any API]
+
+  system prompt                                         42 tok
+    You are connected to a set of tools. Read the user's task and, if one of the available tools is appropriate, call exactly one tool to accomplish it. If no tool fits, answer in plain text.
+
+  server instructions                                    8 tok
+    (offered by the server; not sent by `jig bench` — see footer)
+    A toy MCP server for exercising Jig.
+
+  tools (3)                                            190 tok
+  ├─ make_reservation                                  104 tok
+  │    "Book a table. Demonstrates a nested object argument and an enum."
+  │    date: string (required) — "ISO-8601 date."
+  │    party: object (required)
+  │      seating: string — one of [indoor, outdoor, bar]
+  │      size: integer (required)
+  ├─ echo                                               47 tok
+  │    "Echo the provided text straight back."
+  │    text: string (required) — "Text to echo."
+  └─ always_fails                                       39 tok
+       "A tool that always reports an error, for testing error paths."
+       (no parameters)
+
+  TOTAL context before the user's first word           232 tok  (gpt-4o, exact)
+
+This is the openai API rendering — what `jig bench` sends. Chat clients (Claude Desktop,
+Cursor, …) may render tool context differently; per-client renderings are a future
+milestone.
+No API key is needed or used: context computes this locally and sends nothing to any
+provider.
+Server instructions are shown for reference but are not in the request body: `jig
+bench` sends only the system prompt + tools.

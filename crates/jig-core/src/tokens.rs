@@ -261,6 +261,12 @@ impl ModelCounter {
         &self.model_id
     }
 
+    /// The tiktoken encoding label backing this counter (e.g. `o200k_base`),
+    /// for provenance in machine output.
+    pub fn encoding_label(&self) -> &'static str {
+        self.encoding_label
+    }
+
     /// The exactness of this model's per-tool counts.
     pub fn exactness(&self) -> Exactness {
         if self.anthropic {
