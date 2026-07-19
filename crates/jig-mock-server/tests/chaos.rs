@@ -65,7 +65,8 @@ fn inbound_with_id(entries: &[TapEntry], id: i64) -> usize {
     entries
         .iter()
         .filter(|e| {
-            e.direction == Direction::Inbound && e.message.get("id").and_then(Value::as_i64) == Some(id)
+            e.direction == Direction::Inbound
+                && e.message.get("id").and_then(Value::as_i64) == Some(id)
         })
         .count()
 }
@@ -107,7 +108,10 @@ async fn mid_session_crash_reports_exit_code_and_stderr() {
 
     let msg = err.to_string();
     assert!(msg.contains("exited with code 7"), "got: {msg}");
-    assert!(msg.contains("mid-session-crash"), "stderr not surfaced: {msg}");
+    assert!(
+        msg.contains("mid-session-crash"),
+        "stderr not surfaced: {msg}"
+    );
     insta::assert_snapshot!("mid_session_crash_error", msg);
 }
 
@@ -130,7 +134,10 @@ async fn malformed_json_times_out_and_flags_pollution() {
     );
 
     let bad = client.tap().non_protocol_inbound();
-    assert!(!bad.is_empty(), "the garbled line must be flagged as pollution");
+    assert!(
+        !bad.is_empty(),
+        "the garbled line must be flagged as pollution"
+    );
     assert!(
         bad.iter().any(|(_, raw)| raw.contains("\"result\"")),
         "expected the truncated fragment in the tap: {bad:?}"
@@ -152,7 +159,10 @@ async fn binary_garbage_is_survived_and_flagged() {
     assert_eq!(tools.len(), 3);
 
     let bad = client.tap().non_protocol_inbound();
-    assert!(!bad.is_empty(), "binary garbage must be flagged as pollution");
+    assert!(
+        !bad.is_empty(),
+        "binary garbage must be flagged as pollution"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +183,10 @@ async fn giant_message_handled_under_default_cap() {
         .expect("a 20 MiB response is under the 64 MiB default cap");
     assert_eq!(tools.len(), 1);
     let desc = tools[0].description.as_deref().unwrap_or("");
-    assert!(desc.len() >= 20 * 1024 * 1024, "expected a ~20 MiB description");
+    assert!(
+        desc.len() >= 20 * 1024 * 1024,
+        "expected a ~20 MiB description"
+    );
 }
 
 /// `giant-message` under a low `--max-message-bytes`: Jig must fail with a
@@ -238,9 +251,17 @@ async fn wrong_id_times_out_and_records_the_stray_response() {
     // The stray response (id 987654321) is present in the tap, but was routed
     // nowhere (the real tools/list id received nothing).
     let entries = client.tap().entries();
-    assert_eq!(inbound_with_id(&entries, 987654321), 1, "stray response missing");
+    assert_eq!(
+        inbound_with_id(&entries, 987654321),
+        1,
+        "stray response missing"
+    );
     let real_id = outbound_request_id(&entries, "tools/list").expect("a tools/list request");
-    assert_eq!(inbound_with_id(&entries, real_id), 0, "the real id got no answer");
+    assert_eq!(
+        inbound_with_id(&entries, real_id),
+        0,
+        "the real id got no answer"
+    );
 }
 
 /// `duplicate-id`: the server answers the same request twice. The first answer

@@ -64,6 +64,37 @@ jobs:
       - name: cargo doc
         run: cargo doc --workspace --no-deps
 
+  coverage:
+    name: coverage (llvm-cov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select stable toolchain
+        run: rustup default stable
+      - name: Add llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Collect coverage (lcov + summary)
+        # Visibility first: no hard threshold gate. Produce an lcov artifact and
+        # drop a human-readable summary onto the run's summary page.
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path lcov.info
+          {
+            echo "## Coverage (cargo-llvm-cov)"
+            echo ""
+            echo '```'
+            cargo llvm-cov report --summary-only
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload lcov artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          if-no-files-found: error
+
   dogfood:
     name: dogfood (self-demonstration)
     runs-on: ubuntu-latest

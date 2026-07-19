@@ -107,7 +107,10 @@ async fn taps_are_equivalent_across_transports() {
     let expected: Signature = vec![
         (Direction::Outbound, Some("initialize".to_string())),
         (Direction::Inbound, None),
-        (Direction::Outbound, Some("notifications/initialized".to_string())),
+        (
+            Direction::Outbound,
+            Some("notifications/initialized".to_string()),
+        ),
         (Direction::Outbound, Some("tools/list".to_string())),
         (Direction::Inbound, None),
         (Direction::Outbound, Some("tools/call".to_string())),
