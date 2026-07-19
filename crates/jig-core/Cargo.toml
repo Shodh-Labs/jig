@@ -11,6 +11,15 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tiktoken-rs.workspace = true
+reqwest = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enables `jig budget --exact-anthropic`: an HTTP client used to call
+# Anthropic's `count_tokens` endpoint. Feature-gated so library consumers that
+# only need local tokenization don't pull in reqwest + rustls.
+exact-anthropic = ["dep:reqwest"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

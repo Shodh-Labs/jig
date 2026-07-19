@@ -32,6 +32,7 @@ pub mod client;
 pub mod error;
 pub mod protocol;
 pub mod tap;
+pub mod tokens;
 pub mod transport;
 
 pub use client::{Client, ClientOptions};
@@ -41,4 +42,8 @@ pub use protocol::{
     ToolCallResult, LATEST_PROTOCOL_VERSION,
 };
 pub use tap::{Direction, ProtocolTap, TapEntry};
+pub use tokens::{
+    budget_local, canonical_tool_json, Exactness, ModelBudget, ModelCounter, TokenError,
+    ToolBudget, CANONICAL_RENDERING_DOC,
+};
 pub use transport::{StdioTransport, DEFAULT_REQUEST_TIMEOUT};
