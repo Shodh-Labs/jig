@@ -25,3 +25,4 @@ exact-anthropic = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+proptest = { workspace = true }

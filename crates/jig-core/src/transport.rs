@@ -476,11 +476,41 @@ fn resolve_program(program: &str) -> std::path::PathBuf {
     PathBuf::from(program)
 }
 
+/// Classify one inbound stdio line's raw bytes the way the reader does: the
+/// [`Value`] to record in the tap, and the request id it should be routed to
+/// (`Some` only for a correlatable JSON-RPC *response* — one carrying an integer
+/// id together with a `result` or `error`).
+///
+/// This is the single source of truth for inbound-line handling, shared by the
+/// background reader and by the property/fuzz harnesses. It is **total**: any
+/// byte sequence (invalid UTF-8, non-JSON, a bare scalar, a notification) yields
+/// a value and a routing decision, never a panic. Non-UTF-8 input is decoded
+/// lossily and non-JSON input is preserved verbatim as a JSON string, exactly
+/// as the tap records it.
+pub fn classify_inbound(bytes: &[u8]) -> (Value, Option<i64>) {
+    let line = String::from_utf8_lossy(bytes);
+    let value: Value =
+        serde_json::from_str(&line).unwrap_or_else(|_| Value::String(line.into_owned()));
+    let route_id = response_route_id(&value);
+    (value, route_id)
+}
+
+/// The id a message should be routed to, or `None` if it is not a correlatable
+/// response (a notification, a request, or a non-object).
+fn response_route_id(value: &Value) -> Option<i64> {
+    let id = value.get("id").and_then(Value::as_i64)?;
+    if value.get("result").is_some() || value.get("error").is_some() {
+        Some(id)
+    } else {
+        None
+    }
+}
+
 /// Parse a raw JSON-RPC response value into either its `result` or an error.
 ///
 /// Shared by both transports: the JSON-RPC response envelope is identical over
 /// stdio and HTTP.
-pub(crate) fn parse_response(response: Value) -> Result<Value> {
+pub fn parse_response(response: Value) -> Result<Value> {
     if let Some(err) = response.get("error") {
         let code = err.get("code").and_then(Value::as_i64).unwrap_or(0);
         let message = err
@@ -579,27 +609,22 @@ async fn read_loop(
     loop {
         match read_frame(&mut reader, max_bytes).await {
             Frame::Line(bytes) => {
-                // Decode lossily: a non-UTF-8 server pollutes the stream but must
-                // not silently kill the reader. The lossy text still reaches the
-                // tap so the truth about what arrived is preserved.
-                let line = String::from_utf8_lossy(&bytes);
-                if line.trim().is_empty() {
+                // A blank line carries no message; skip it before classifying.
+                if bytes.iter().all(|b| b.is_ascii_whitespace()) {
                     continue;
                 }
-                // If a line is not valid JSON (a misbehaving server), preserve it
-                // verbatim as a string so the tap still tells the truth.
-                let value: Value = serde_json::from_str(&line)
-                    .unwrap_or_else(|_| Value::String(line.into_owned()));
+                // `classify_inbound` decodes lossily (a non-UTF-8 server pollutes
+                // the stream but must not kill the reader), records non-JSON
+                // verbatim, and tells us the routing id — the same logic the
+                // property/fuzz harnesses exercise directly.
+                let (value, route_id) = classify_inbound(&bytes);
                 tap.record(Direction::Inbound, value.clone());
 
-                // Route responses (they carry an id and result/error) to the
-                // waiting request. Notifications have no id and are ignored at
-                // the transport layer.
-                if let Some(id) = value.get("id").and_then(Value::as_i64) {
-                    if value.get("result").is_some() || value.get("error").is_some() {
-                        if let Some(tx) = lock(&pending).remove(&id) {
-                            let _ = tx.send(value);
-                        }
+                // Route a correlatable response to its waiting request.
+                // Notifications and stray messages are recorded but not routed.
+                if let Some(id) = route_id {
+                    if let Some(tx) = lock(&pending).remove(&id) {
+                        let _ = tx.send(value);
                     }
                 }
             }

@@ -398,7 +398,11 @@ fn is_response_to(msg: &Value, id: i64) -> bool {
 /// (mirroring the stdio reader's truth-telling about malformed input) so it
 /// still lands in the tap. If the stream claims to be an event-stream but yields
 /// no events at all from a non-empty body, that is flagged as invalid framing.
-fn parse_sse(text: &str, method: &str) -> Result<Vec<Value>> {
+///
+/// Total over arbitrary input: any string yields either a `Vec` of messages or a
+/// typed [`JigError::Protocol`] — never a panic — which the property and fuzz
+/// harnesses rely on.
+pub fn parse_sse(text: &str, method: &str) -> Result<Vec<Value>> {
     let mut messages = Vec::new();
     let mut data = String::new();
     let mut have_data = false;
