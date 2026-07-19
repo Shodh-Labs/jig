@@ -66,7 +66,7 @@ jobs:
       - name: Build release binary
         # Cargo.lock is intentionally untracked in this repo (see .gitignore), so
         # no --locked; the tag guard already pins the version.
-        run: cargo build --release -p jig-cli --target ${{ matrix.target }}
+        run: cargo build --release --locked -p jig-cli --target ${{ matrix.target }}
       - name: Package archive + checksum
         shell: bash
         env:
