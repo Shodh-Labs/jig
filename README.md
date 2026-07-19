@@ -9,7 +9,7 @@
 
 <p align="center"><em>A real session against <code>@modelcontextprotocol/server-everything</code>, rendered from jig's protocol tap:
 the 8-second npx cold start folded out of the way, an unsolicited mid-request notification caught on the wire,
-payload inspector open. Workbench UI in development — the CLI ships today.</em></p>
+payload inspector open. This is an interactive design prototype — the workbench app is not built yet; the CLI ships today.</em></p>
 
 ## Why
 
@@ -17,7 +17,7 @@ MCP servers can't be tested like APIs. An API is deterministic: send a request, 
 
 Jig makes that surface visible, measurable, and regression-safe:
 
-- 🔍 **[See what the model sees](#jig-context--see-exactly-what-the-model-sees)** — the exact rendered context a model receives from your server. Not what your code says; what the wire says.
+- 🔍 **[See what the model sees](#jig-context--see-exactly-what-the-model-sees)** — the exact tool-use request a model API receives from your server, token-priced, per provider dialect (Anthropic/OpenAI). Not what your code says; what `jig bench` puts on the wire. (Chat clients may render tool context differently — that's a future milestone.)
 - 🧮 **Token budget** — what your server costs in context before the user types a word, per tool, per model tokenizer.
 - 🎯 **Model bench** — give it a task in plain language; watch which tool a real model selects, with what arguments, across repeated runs.
 - ✅ **Eval suites** — `prompt → expected tool call` test cases, versioned in git next to your server, runnable locally and in CI.
@@ -28,7 +28,7 @@ Jig makes that surface visible, measurable, and regression-safe:
 
 ## Roadmap (short version)
 
-1. Desktop workbench: connect (stdio / streamable HTTP), inspect, token budget, direct invoke, model bench — *in progress*
+1. Desktop workbench: connect (stdio / streamable HTTP), inspect, token budget, direct invoke, model bench — *in design* (an interactive prototype exists; no app code yet — the CLI is where the engine ships today)
 2. Local eval suites (`.jig/`) with honest, statistical scoring — selection rate across N runs, never single-run pass/fail
 3. CI: `jig run` in your pipeline, PR annotations, regression gates
 
@@ -131,7 +131,8 @@ Context cost scored with absolute bands (no ecosystem dataset available).
 
 **Honest scoring.** Context cost is graded against an ecosystem percentile
 dataset when `data/percentiles.json` is present (the report then says e.g.
-`94th percentile (heaviest 6%)`); absent, it uses documented absolute bands and
+`94th percentile of n=29 measured servers — heavier than 94%`, always naming the
+sample size); absent, it uses documented absolute bands and
 says so. Description quality is deterministic heuristics — labelled "heuristic",
 never an LLM verdict — and robustness scores only what was actually observed in
 the session, never assumed. `--min-score <n>` is the CI gate: wire

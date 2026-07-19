@@ -54,6 +54,11 @@ Prebuilt binaries are published for:
 | macOS (Apple) | arm64         | `darwin/arm64`       | `aarch64-apple-darwin`      |
 | Linux         | x64           | `linux/x64`          | `x86_64-unknown-linux-musl` |
 
+The end-to-end install flow — download, checksum-verify, extract, and run the
+shim (`jig --version` + `jig inspect`) against a real release archive served from
+localhost — is exercised in CI on Ubuntu, macOS, and Windows on every change, so
+"works on macOS/Linux/Windows" is a tested claim, not an aspiration.
+
 On any other platform/arch the installer fails with a clear message pointing you
 at the `cargo` build path:
 
