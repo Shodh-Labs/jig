@@ -32,9 +32,9 @@ Jig is a Rust workspace (`cargo` 1.80+). Milestone 1 ships the core engine and t
 
 ```
 crates/
-  jig-core         # library: stdio JSON-RPC transport, MCP handshake + ops, protocol tap
+  jig-core         # library: stdio + Streamable HTTP transports, MCP handshake + ops, protocol tap
   jig-cli          # binary `jig`: inspect / call / budget subcommands
-  jig-mock-server  # binary: a minimal MCP server used as a test fixture
+  jig-mock-server  # binary: a minimal MCP server (stdio + HTTP) used as a test fixture
 ```
 
 Build and test the whole workspace:
@@ -58,6 +58,30 @@ cargo build
 # what does this server cost in context tokens, per tool, per model?
 ./target/debug/jig budget --stdio "./target/debug/jig-mock-server"
 ```
+
+### Transports: stdio and Streamable HTTP
+
+Every command takes **either** `--stdio "<command>"` (launch a local server as a
+subprocess) **or** `--http <url>` (connect to a remote MCP endpoint over the
+[Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
+transport) — the two are mutually exclusive. The protocol tap captures
+HTTP-carried traffic identically to stdio.
+
+```sh
+# a remote server over Streamable HTTP (JSON or SSE responses, both handled)
+jig inspect --http "https://example.com/mcp"
+# many remote/SaaS servers need auth — pass headers with --header (repeatable)
+jig inspect --http "https://api.example.com/mcp" \
+    --header "Authorization: Bearer $TOKEN"
+jig call --http "https://example.com/mcp" --tool echo --args '{"message":"hi"}'
+```
+
+Session handling follows the spec: jig captures the `Mcp-Session-Id` issued at
+`initialize` and echoes it (plus the negotiated `MCP-Protocol-Version`) on every
+later request, and sends an HTTP `DELETE` to end the session on shutdown. If the
+server reports the session expired (HTTP 404), jig surfaces a clear error rather
+than silently reconnecting — it is a diagnostic tool and tells the truth. OAuth
+flows are not yet implemented; supply a token via `--header` for now.
 
 ### `jig budget` — the token-budget engine
 
