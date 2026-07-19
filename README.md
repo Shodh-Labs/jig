@@ -39,7 +39,7 @@ Jig is a Rust workspace (`cargo` 1.80+). Milestone 1 ships the core engine and t
 ```
 crates/
   jig-core         # library: stdio + Streamable HTTP transports, MCP handshake + ops, protocol tap
-  jig-cli          # binary `jig`: check / inspect / call / read / prompt / budget / bench subcommands
+  jig-cli          # binary `jig`: check / inspect / call / read / prompt / budget / bench / servers / search / info
   jig-mock-server  # binary: a minimal MCP server (stdio + HTTP) used as a test fixture
 ```
 
@@ -183,6 +183,90 @@ honestly: an empty result for `ping` (per spec), and JSON-RPC
 `-32601 method not found` for anything else — each exchange tapped both
 directions. A server that offers no stream answers the `GET` with HTTP 405,
 which jig records as spec-permitted, not an error.
+### Discovery: `jig servers`, `jig search`, `jig info`
+
+Three verbs close the loop from *"what MCP servers exist / what do I already
+have?"* to *"inspect it"*.
+
+**`jig servers`** — the MCP servers already configured on this machine, merged
+and labelled by source. It reads the config files the popular clients write:
+
+| Source          | Location |
+|-----------------|----------|
+| `claude-desktop`| `%APPDATA%\Claude\claude_desktop_config.json` (Windows), `~/Library/Application Support/Claude/…` (macOS), `~/.config/Claude/…` (Linux) |
+| `claude-code`   | `~/.claude.json` (top-level **and** per-project `mcpServers`) |
+| `project`       | `.mcp.json`, searched from the current directory upward |
+| `cursor`        | `~/.cursor/mcp.json` |
+| `vscode`        | `.vscode/mcp.json` (`servers` or `mcpServers` key — both accepted) |
+
+Foreign files are parsed tolerantly: unknown fields are ignored and a malformed
+file becomes a warning, never a crash. **Environment-variable values are always
+redacted** (`KEY=•••`) in both the table and `--json` — only key names are shown,
+because these blocks routinely hold API keys and tokens.
+
+```sh
+jig servers            # human table
+jig servers --json     # machine-readable (env values redacted)
+```
+
+Any connecting verb can then reach a discovered server by name with
+`--server <name>` (mutually exclusive with `--stdio`/`--http`); its declared
+`env` block is passed to the spawned process. Use `--server <source>:<name>`
+when the same name appears in more than one source:
+
+```sh
+jig inspect --server github
+jig budget  --server project:my-server
+```
+
+**`jig search <query>`** — search the MCP ecosystem. Two sources are queried
+**concurrently** and merged (registry first), each result labelled with its
+source and version:
+
+* the **official MCP registry** (`registry.modelcontextprotocol.io`, `GET
+  /v0/servers?search=…`), and
+* **npm** (`/-/v1/search`), filtered to plausible MCP servers — a hit is kept
+  when its name contains `mcp` or its keywords include `mcp` / `model context
+  protocol`.
+
+A network failure of one source degrades gracefully: the other source's results
+are still shown, the failure is reported (`registry unreachable`), and the exit
+code is `0` if *any* source succeeded (`1` only if all failed).
+
+```sh
+jig search filesystem
+jig search github --source npm --limit 10
+jig search database --json
+```
+
+**`jig info <name>`** — detailed info for one server/package: the registry entry
+(if found) and npm metadata (description, version, published date, install
+command), each labelled by source with *"not found in X"* stated plainly.
+
+```sh
+jig info @modelcontextprotocol/server-everything
+jig info some-mcp-server --probe --yes
+```
+
+#### `--probe` and its security model
+
+`jig info --probe` doesn't just read metadata — it **actually runs the server**
+(`npx -y <pkg>` over stdio) and reports the live handshake: `serverInfo`,
+protocol version, capabilities, the tool count + names, and the total context
+cost in tokens (reusing the [budget engine](#jig-budget--the-token-budget-engine),
+gpt-4o, exact).
+
+This runs **third-party code from npm on your machine.** Because `jig` is a
+non-interactive CLI (no TTY prompt), the consent mechanism is a printed notice
+plus a short delay before anything executes:
+
+```
+jig: probe runs third-party code from npm on your machine (npx -y <pkg>) — Ctrl-C to abort
+```
+
+You have a 2-second window to `Ctrl-C`. `--yes` skips the delay for scripted use.
+Without `--probe`, `jig info` performs read-only metadata lookups and never
+executes anything.
 
 ### `jig budget` — the token-budget engine
 

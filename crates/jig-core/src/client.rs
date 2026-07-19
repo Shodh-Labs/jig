@@ -96,9 +96,28 @@ impl Client {
         tap: ProtocolTap,
         options: ClientOptions,
     ) -> Result<Self> {
-        let transport = Transport::Stdio(Box::new(StdioTransport::spawn_with_limits(
+        Self::connect_with_env(program, args, &[], tap, options).await
+    }
+
+    /// Like [`Client::connect_with_options`], but injects extra environment
+    /// variables into the spawned server process.
+    ///
+    /// `env` is a list of `(key, value)` pairs added on top of the inherited
+    /// environment — the mechanism by which a server resolved from a local
+    /// client config (`jig inspect --server <name>`) receives the credentials
+    /// its config declares. The values are handed only to the child; they are
+    /// never logged or echoed.
+    pub async fn connect_with_env(
+        program: &str,
+        args: &[String],
+        env: &[(String, String)],
+        tap: ProtocolTap,
+        options: ClientOptions,
+    ) -> Result<Self> {
+        let transport = Transport::Stdio(Box::new(StdioTransport::spawn_with_env(
             program,
             args,
+            env,
             tap,
             options.request_timeout,
             options.max_message_bytes,

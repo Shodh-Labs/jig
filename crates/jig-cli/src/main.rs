@@ -10,6 +10,17 @@
 //! * `jig bench --stdio "<cmd>" --task "<text>" [--model <id>...]` — put a real
 //!   model in the loop and measure which tool it selects across runs
 //!   (see [`mod@bench`]).
+//! * `jig servers` — discover the MCP servers already configured on this
+//!   machine (Claude Desktop/Code, Cursor, VS Code, project `.mcp.json`), merged
+//!   and labelled by source (see [`servers`]).
+//! * `jig search <query>` — search the MCP ecosystem (official registry + npm)
+//!   for servers (see [`ecosystem`]).
+//! * `jig info <name>` — detailed info for one server/package, with an optional
+//!   `--probe` that actually launches it and reports the live handshake.
+//!
+//! The connecting verbs (`inspect`/`budget`/`call`/`bench`) additionally accept
+//! `--server <name>` to connect to a server discovered by [`servers`] without
+//! retyping its command line.
 //!
 //! All support `--json` for machine output and `--tap <file>` to dump the raw
 //! protocol traffic as JSONL. Every stdout write goes through [`emit`], which
@@ -19,15 +30,18 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use jig_cli::{parse_headers, split_command};
-use jig_core::{Client, ClientOptions, ProtocolTap, ToolCallResult};
+use jig_core::discovery::{self, DiscoveredTransport};
+use jig_core::{Client, ClientOptions, ProtocolTap, SourceSelector, ToolCallResult};
 use serde_json::{json, Value};
 
 mod bench;
 mod budget;
 mod check;
+mod ecosystem;
 mod render;
+mod servers;
 
 /// Write `s` to stdout, flushing, in a broken-pipe-safe way.
 ///
@@ -148,6 +162,11 @@ enum Command {
         /// `https://example.com/mcp`. Mutually exclusive with --stdio.
         #[arg(long, value_name = "URL", conflicts_with = "stdio")]
         http: Option<String>,
+        /// Connect to a server discovered from a local client config by name
+        /// (see `jig servers`). Use `source:name` to disambiguate. Mutually
+        /// exclusive with --stdio/--http.
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["stdio", "http"])]
+        server: Option<String>,
         /// Extra HTTP header for --http, "Name: Value" (repeatable). Typically
         /// `Authorization: Bearer <token>` for remote servers.
         #[arg(long = "header", value_name = "NAME: VALUE")]
@@ -186,6 +205,11 @@ enum Command {
         /// exclusive with --stdio.
         #[arg(long, value_name = "URL", conflicts_with = "stdio")]
         http: Option<String>,
+        /// Connect to a server discovered from a local client config by name
+        /// (see `jig servers`). Use `source:name` to disambiguate. Mutually
+        /// exclusive with --stdio/--http.
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["stdio", "http"])]
+        server: Option<String>,
         /// Extra HTTP header for --http, "Name: Value" (repeatable).
         #[arg(long = "header", value_name = "NAME: VALUE")]
         header: Vec<String>,
@@ -226,6 +250,11 @@ enum Command {
         /// Mutually exclusive with --stdio.
         #[arg(long, value_name = "URL", conflicts_with = "stdio")]
         http: Option<String>,
+        /// Connect to a server discovered from a local client config by name
+        /// (see `jig servers`). Use `source:name` to disambiguate. Mutually
+        /// exclusive with --stdio/--http.
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["stdio", "http"])]
+        server: Option<String>,
         /// Extra HTTP header for --http, "Name: Value" (repeatable).
         #[arg(long = "header", value_name = "NAME: VALUE")]
         header: Vec<String>,
@@ -270,6 +299,11 @@ enum Command {
         /// Mutually exclusive with --stdio.
         #[arg(long, value_name = "URL", conflicts_with = "stdio")]
         http: Option<String>,
+        /// Connect to a server discovered from a local client config by name
+        /// (see `jig servers`). Use `source:name` to disambiguate. Mutually
+        /// exclusive with --stdio/--http.
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["stdio", "http"])]
+        server: Option<String>,
         /// Extra HTTP header for --http, "Name: Value" (repeatable).
         #[arg(long = "header", value_name = "NAME: VALUE")]
         header: Vec<String>,
@@ -353,6 +387,66 @@ enum Command {
         #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
         max_message_bytes: u64,
     },
+    /// List the MCP servers already configured on this machine, by source.
+    Servers {
+        /// Emit machine-readable JSON (env values redacted) instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search the MCP ecosystem (official registry + npm) for servers.
+    Search {
+        /// The search query.
+        #[arg(value_name = "QUERY")]
+        query: String,
+        /// Which source(s) to query.
+        #[arg(long, value_enum, default_value_t = SearchSource::All)]
+        source: SearchSource,
+        /// Maximum results to show per source.
+        #[arg(long, value_name = "N", default_value_t = 20)]
+        limit: usize,
+        /// Emit machine-readable JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show detailed info for one server/package (registry + npm), optionally
+    /// probing it live.
+    Info {
+        /// The server name or npm package to look up.
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// Actually run it (`npx -y <name>`) over stdio and report the live
+        /// handshake: serverInfo, protocol, capabilities, tools, token cost.
+        /// Runs third-party code — see the printed notice.
+        #[arg(long)]
+        probe: bool,
+        /// With --probe, skip the 2-second consent delay.
+        #[arg(long)]
+        yes: bool,
+        /// Emit machine-readable JSON instead of a report.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// The `--source` selector for `jig search`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SearchSource {
+    /// Both the MCP registry and npm.
+    All,
+    /// The official MCP registry only.
+    Registry,
+    /// npm only.
+    Npm,
+}
+
+impl From<SearchSource> for SourceSelector {
+    fn from(s: SearchSource) -> Self {
+        match s {
+            SearchSource::All => SourceSelector::All,
+            SearchSource::Registry => SourceSelector::Registry,
+            SearchSource::Npm => SourceSelector::Npm,
+        }
+    }
 }
 
 #[tokio::main]
@@ -381,7 +475,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             timeout,
             max_message_bytes,
         } => {
-            let target = Target::resolve(stdio, http, header)?;
+            let target = Target::resolve(stdio, http, None, header)?;
             check::run(
                 &target,
                 json,
@@ -397,6 +491,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Inspect {
             stdio,
             http,
+            server,
             header,
             json,
             tap,
@@ -405,7 +500,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             listen,
             duration,
         } => {
-            let target = Target::resolve(stdio, http, header)?;
+            let target = Target::resolve(stdio, http, server, header)?;
             if listen && !matches!(target, Target::Http { .. }) {
                 return Err("--listen requires --http (stdio has no server→client stream)".into());
             }
@@ -423,6 +518,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Budget {
             stdio,
             http,
+            server,
             header,
             models,
             json,
@@ -432,7 +528,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             max_message_bytes,
             exact_anthropic,
         } => {
-            let target = Target::resolve(stdio, http, header)?;
+            let target = Target::resolve(stdio, http, server, header)?;
             budget::run(
                 &target,
                 models,
@@ -448,6 +544,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Bench {
             stdio,
             http,
+            server,
             header,
             task,
             models,
@@ -459,7 +556,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             timeout,
             max_message_bytes,
         } => {
-            let target = Target::resolve(stdio, http, header)?;
+            let target = Target::resolve(stdio, http, server, header)?;
             bench::run(
                 &target,
                 models,
@@ -477,6 +574,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Call {
             stdio,
             http,
+            server,
             header,
             tool,
             args,
@@ -485,7 +583,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             timeout,
             max_message_bytes,
         } => {
-            let target = Target::resolve(stdio, http, header)?;
+            let target = Target::resolve(stdio, http, server, header)?;
             call(
                 &target,
                 &tool,
@@ -507,7 +605,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             timeout,
             max_message_bytes,
         } => {
-            let target = Target::resolve(stdio, http, header)?;
+            let target = Target::resolve(stdio, http, None, header)?;
             read(
                 &target,
                 &uri,
@@ -529,7 +627,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             timeout,
             max_message_bytes,
         } => {
-            let target = Target::resolve(stdio, http, header)?;
+            let target = Target::resolve(stdio, http, None, header)?;
             prompt(
                 &target,
                 &name,
@@ -541,6 +639,19 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             )
             .await
         }
+        Command::Servers { json } => servers::run(json),
+        Command::Search {
+            query,
+            source,
+            limit,
+            json,
+        } => ecosystem::run_search(&query, source.into(), limit, json).await,
+        Command::Info {
+            name,
+            probe,
+            yes,
+            json,
+        } => ecosystem::run_info(&name, probe, yes, json).await,
     }
 }
 
@@ -554,6 +665,9 @@ pub(crate) enum Target {
         program: String,
         /// Its arguments.
         args: Vec<String>,
+        /// Environment variables to inject into the child (from a `--server`
+        /// config entry). Empty for a plain `--stdio` command.
+        env: Vec<(String, String)>,
     },
     /// A remote server reached over Streamable HTTP.
     Http {
@@ -565,18 +679,30 @@ pub(crate) enum Target {
 }
 
 impl Target {
-    /// Resolve the mutually-exclusive `--stdio` / `--http` flags (plus
-    /// `--header`) into a single target, rejecting nonsensical combinations
-    /// with a clear message. clap already enforces the `conflicts_with`, so the
-    /// both-present case is defensive.
+    /// Resolve the mutually-exclusive `--stdio` / `--http` / `--server` flags
+    /// (plus `--header`) into a single target, rejecting nonsensical
+    /// combinations with a clear message. clap already enforces the
+    /// `conflicts_with`, so the both-present cases are defensive.
     pub(crate) fn resolve(
         stdio: Option<String>,
         http: Option<String>,
+        server: Option<String>,
         header: Vec<String>,
     ) -> Result<Target, String> {
+        // `--server <name>` resolves against the machine's discovered configs.
+        if let Some(name) = server {
+            if stdio.is_some() || http.is_some() {
+                return Err("--server is mutually exclusive with --stdio/--http".to_string());
+            }
+            return Self::from_discovered(&name, header);
+        }
+
         match (stdio, http) {
             (Some(_), Some(_)) => Err("--stdio and --http are mutually exclusive".to_string()),
-            (None, None) => Err("one of --stdio <command> or --http <url> is required".to_string()),
+            (None, None) => Err(
+                "one of --stdio <command>, --http <url>, or --server <name> is required"
+                    .to_string(),
+            ),
             (Some(cmd), None) => {
                 if !header.is_empty() {
                     return Err(
@@ -585,10 +711,48 @@ impl Target {
                     );
                 }
                 let (program, args) = split_command(&cmd)?;
-                Ok(Target::Stdio { program, args })
+                Ok(Target::Stdio {
+                    program,
+                    args,
+                    env: Vec::new(),
+                })
             }
             (None, Some(url)) => Ok(Target::Http {
                 url,
+                headers: parse_headers(&header)?,
+            }),
+        }
+    }
+
+    /// Resolve `--server <name>` (or `source:name`) against the MCP server
+    /// configs discovered on this machine, building a target that carries the
+    /// entry's transport and (for stdio) its environment.
+    fn from_discovered(name: &str, header: Vec<String>) -> Result<Target, String> {
+        let discovered = discovery::discover();
+        for w in &discovered.warnings {
+            eprintln!("jig: warning: {w}");
+        }
+        let entry = discovered.resolve(name).map_err(|e| e.to_string())?;
+        if entry.disabled {
+            eprintln!(
+                "jig: note: server '{}' is marked disabled in {} — connecting anyway",
+                entry.name,
+                entry.source_file.display()
+            );
+        }
+        match &entry.transport {
+            DiscoveredTransport::Stdio { command, args } => {
+                if !header.is_empty() {
+                    return Err("--header applies only to HTTP servers".to_string());
+                }
+                Ok(Target::Stdio {
+                    program: command.clone(),
+                    args: args.clone(),
+                    env: entry.env.clone(),
+                })
+            }
+            DiscoveredTransport::Http { url } => Ok(Target::Http {
+                url: url.clone(),
                 headers: parse_headers(&header)?,
             }),
         }
@@ -620,8 +784,8 @@ impl Target {
         let mut opts = client_options(timeout_secs, max_message_bytes);
         opts.listen = listen;
         let client = match self {
-            Target::Stdio { program, args } => {
-                Client::connect_with_options(program, args, tap, opts).await
+            Target::Stdio { program, args, env } => {
+                Client::connect_with_env(program, args, env, tap, opts).await
             }
             Target::Http { url, headers } => {
                 Client::connect_http_with_options(url, headers.clone(), tap, opts).await

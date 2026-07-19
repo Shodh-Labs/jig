@@ -31,6 +31,8 @@
 pub mod bench;
 pub mod check;
 pub mod client;
+pub mod discovery;
+pub mod ecosystem;
 pub mod error;
 pub mod http;
 pub mod protocol;
@@ -47,6 +49,14 @@ pub use check::{
     Percentiles, Report as CheckReport, Severity, RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};
+pub use discovery::{
+    discover, discover_from, DiscoveredTransport, Discovery, ResolveError, ServerEntry, Source,
+    REDACTED,
+};
+pub use ecosystem::{
+    search, EcoSource, NpmInfo, RegistryInfo, SearchOutcome, SearchResult, SourceSelector,
+    NPM_BASE, REGISTRY_BASE,
+};
 pub use error::{JigError, Result};
 pub use http::{HttpTransport, ListenSummary};
 pub use protocol::{

@@ -126,6 +126,25 @@ impl StdioTransport {
         request_timeout: Option<Duration>,
         max_message_bytes: Option<usize>,
     ) -> Result<Self> {
+        Self::spawn_with_env(program, args, &[], tap, request_timeout, max_message_bytes)
+    }
+
+    /// Like [`StdioTransport::spawn_with_limits`], but also injects extra
+    /// environment variables into the spawned child.
+    ///
+    /// `env` is a list of `(key, value)` pairs added *on top of* the inherited
+    /// environment — this is how a server discovered from a client config
+    /// (`jig inspect --server <name>`) receives the API keys/tokens its config
+    /// declares. The pairs are passed only to the child process; Jig never logs
+    /// or echoes the values.
+    pub fn spawn_with_env(
+        program: &str,
+        args: &[String],
+        env: &[(String, String)],
+        tap: ProtocolTap,
+        request_timeout: Option<Duration>,
+        max_message_bytes: Option<usize>,
+    ) -> Result<Self> {
         // On Windows, `npx`/`npm`/`yarn` etc. are `.cmd` shims, and
         // `Command::new("npx")` looks for a file named literally "npx" — which
         // does not exist — so the spawn fails with "program not found". The OS
@@ -135,12 +154,17 @@ impl StdioTransport {
         // Rust (>=1.77) then spawns the resolved `.cmd`/`.bat` safely via the
         // command processor with proper argument escaping. See `resolve_program`.
         let resolved = resolve_program(program);
-        let mut child = Command::new(&resolved)
+        let mut command = Command::new(&resolved);
+        command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let mut child = command
             .spawn()
             .map_err(|e| JigError::transport(format!("failed to spawn '{program}': {e}")))?;
 
