@@ -227,6 +227,25 @@ mod tests {
         }
     }
 
+    /// Regression: found by `fuzz_tap_jsonl_roundtrip` on its first run.
+    /// Without serde_json's `float_roundtrip` feature the parser is up to
+    /// 2 ULP off on extreme floats, so a wire value would not survive a
+    /// tap JSONL round trip — the tap would misreport what it saw.
+    #[test]
+    fn extreme_float_survives_jsonl_roundtrip_exactly() {
+        let wire: Value = serde_json::from_str("1.000877015e+211").expect("valid JSON number");
+        let tap = ProtocolTap::new();
+        tap.record(Direction::Inbound, wire.clone());
+
+        let jsonl = tap.to_jsonl();
+        let reparsed: TapEntry =
+            serde_json::from_str(jsonl.lines().next().expect("one line")).expect("tap line parses");
+        assert_eq!(
+            reparsed.message, wire,
+            "tap JSONL round-trip must reproduce wire floats exactly"
+        );
+    }
+
     #[test]
     fn non_protocol_inbound_flags_stdout_pollution() {
         let tap = ProtocolTap::new();

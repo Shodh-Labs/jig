@@ -10,7 +10,11 @@ repository = "https://github.com/Shodh-Labs/jig"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: the protocol tap must reproduce wire values EXACTLY.
+# serde_json's default float parse is fast but can be off by up to 2 ULP on
+# extreme values (found by fuzz_tap_jsonl_roundtrip on its first run:
+# 1.000877015e+211 did not survive a JSONL round trip).
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 tokio = { version = "1", features = [
     "process",
