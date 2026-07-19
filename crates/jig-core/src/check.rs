@@ -723,23 +723,24 @@ fn score_context(
                 clamp_score(90.0 - (pct - 50.0) * 1.7)
             };
             let pct_round = pct.round() as u32;
+            let n = p.context_cost_tokens.samples.len();
+            // Always surface the sample size: a percentile is only as
+            // trustworthy as the population it was measured against.
             let label = if pct >= 50.0 {
                 format!(
-                    "{}th percentile — heavier than {}% of measured servers",
-                    pct_round, pct_round
+                    "{pct_round}th percentile of n={n} measured servers — heavier than {pct_round}%"
                 )
             } else {
                 format!(
-                    "{}th percentile — lighter than {}% of measured servers",
-                    pct_round,
-                    (100 - pct_round.min(100))
+                    "{pct_round}th percentile of n={n} measured servers — lighter than {}%",
+                    100 - pct_round.min(100)
                 )
             };
             (
                 score,
                 ContextProvenance::Percentile {
                     percentile: pct_round,
-                    n: p.context_cost_tokens.samples.len(),
+                    n,
                     collected: p.collected.clone(),
                 },
                 label,
