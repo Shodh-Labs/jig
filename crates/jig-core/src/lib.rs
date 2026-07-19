@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod auth;
 pub mod bench;
 pub mod check;
 pub mod client;
@@ -42,6 +43,11 @@ pub mod tap;
 pub mod tokens;
 pub mod transport;
 
+pub use auth::{
+    probe as probe_auth, AuthFinding, AuthReport, AuthServerMetadata, HttpExchange,
+    Probe as AuthProbe, ProtectedResourceMetadata, Status as AuthStatus, Verdict as AuthVerdict,
+    WwwAuthenticate, MCP_AUTH_SPEC_REVISION,
+};
 pub use bench::{
     ArgCheck, BenchConfig, BenchError, BenchModel, BenchReport, Distribution, Outcome, Provider,
     RunResult, Usage, BENCH_SYSTEM_PROMPT,

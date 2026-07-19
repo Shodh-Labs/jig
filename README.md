@@ -31,6 +31,7 @@ Jig makes that surface visible, measurable, and regression-safe:
 1. Desktop workbench: connect (stdio / streamable HTTP), inspect, token budget, direct invoke, model bench — *in design* (an interactive prototype exists; no app code yet — the CLI is where the engine ships today)
 2. Local eval suites (`.jig/`) with honest, statistical scoring — selection rate across N runs, never single-run pass/fail
 3. CI: `jig run` in your pipeline, PR annotations, regression gates
+4. Auth: `jig auth` grades the discoverable OAuth surface today (RFC 9728 / 8414 / 7591 / 8707 / 9207); the full authorization-code + PKCE login flow is next
 
 ## Development
 
@@ -140,6 +141,63 @@ the session, never assumed. `--min-score <n>` is the CI gate: wire
 drops the grade fails the build. See
 [`docs/percentiles-schema.md`](docs/percentiles-schema.md) for the dataset
 format.
+
+### `jig auth` — probe OAuth conformance (no login required)
+
+Authorization is MCP's number-one integration pain: across the public ecosystem
+only ~8.5% of servers implement the OAuth 2.1 flow the spec calls for, and the
+failures are almost always in the *discoverable* surface — a missing
+`WWW-Authenticate` challenge, metadata that points nowhere, an authorization
+server that never advertises PKCE. `jig auth` grades exactly that surface.
+
+It is **not a login tool.** V1 performs no authorization flow, opens no browser,
+and needs no credentials: it sends one unauthenticated `initialize`, follows the
+`401` challenge to the RFC 9728 / RFC 8414 metadata, and renders a conformance
+table with a spec citation on every line. Everything checkable, nothing
+probabilistic — the house style.
+
+```sh
+jig auth --http "https://mcp.example.com/mcp"                 # the conformance table
+jig auth --http "https://mcp.example.com/mcp" --json          # every finding + every raw HTTP exchange (redacted)
+jig auth --http "https://mcp.example.com/mcp" \
+    --header "Authorization: Bearer $TOKEN"                   # also test that a real token is accepted
+```
+
+The four probes, each producing typed `PASS` / `FAIL` / `NOT-ADVERTISED` /
+`UNREACHABLE` findings:
+
+| Probe | What it grades | Spec |
+|:------|:---------------|:-----|
+| Unauthenticated challenge | 401? `WWW-Authenticate: Bearer`? carries `resource_metadata`? (a `200` is reported as "no auth") | RFC 6750, RFC 9728 §5.1 |
+| Protected Resource Metadata | `resource`, `authorization_servers`, and an audience-match check (`resource` == the probed server) | RFC 9728, RFC 8707 |
+| Authorization Server Metadata | PKCE `S256` (MCP **requires** it), DCR `registration_endpoint`, the auth/token endpoints, the RFC 9207 `iss` parameter | RFC 8414, RFC 7591, RFC 9207 |
+| Header passthrough | *(only when you pass a token)* does `initialize` now succeed where the bare probe got 401? | RFC 6750 §2.1 |
+
+```
+jig auth · https://mcp.example.com/mcp
+resource https://mcp.example.com/mcp · MCP auth spec 2025-06-18
+
+  verdict: PARTIALLY CONFORMANT — some auth surfaces are missing or non-conformant
+  12 pass · 1 fail · 0 not-advertised · 0 unreachable
+
+Authorization Server Metadata
+  ✓ PASS            fetched authorization-server metadata …  [RFC 8414 §3]
+  ✗ FAIL            code_challenge_methods_supported = [plain] does not include the REQUIRED `S256`  [MCP 2025-06-18 (PKCE) · RFC 8414 §2]
+  ✓ PASS            advertises both `authorization_endpoint` and `token_endpoint`  [RFC 8414 §2]
+  …
+```
+
+`jig auth` targets HTTP servers only (auth is an HTTP-transport concern in MCP; a
+stdio target gets a clear error). Every HTTP exchange is captured to the tap
+(`--tap`) and to `--json`, with any token redacted. `jig check --http` also
+surfaces a compact, informational auth line — the auth dimension is **not** scored
+into `rubric-v1` in this milestone.
+
+> **Scope (honest framing).** `jig auth` probes the *discoverable* auth surface.
+> It does **not** perform the authorization-code + PKCE login flow, exchange a
+> code for a token, or exercise dynamic client registration — those are on the
+> roadmap. What it grades today is precisely the surface that most real servers
+> get wrong.
 
 ### `jig context` — see exactly what the model sees
 

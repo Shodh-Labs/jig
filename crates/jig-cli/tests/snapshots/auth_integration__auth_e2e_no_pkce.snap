@@ -1,0 +1,31 @@
+---
+source: crates/jig-cli/tests/auth_integration.rs
+expression: redact_port(&report)
+---
+jig auth · http://127.0.0.1:PORT/mcp
+resource http://127.0.0.1:PORT/mcp · MCP auth spec 2025-06-18
+
+  verdict: PARTIALLY CONFORMANT — some auth surfaces are missing or non-conformant
+  12 pass · 1 fail · 0 not-advertised · 0 unreachable
+
+Unauthenticated challenge
+  ✓ PASS            unauthenticated initialize returned HTTP 401 Unauthorized  [MCP 2025-06-18 · RFC 6750 §3]
+  ✓ PASS            WWW-Authenticate header present (scheme `Bearer`)  [RFC 9728 §5.1 · RFC 6750 §3]
+  ✓ PASS            challenge uses the `Bearer` auth-scheme  [RFC 6750 §3]
+  ✓ PASS            challenge advertises `resource_metadata=http://127.0.0.1:PORT/.well-known/oauth-protected-resource`  [RFC 9728 §5.1]
+
+Protected Resource Metadata
+  ✓ PASS            fetched protected-resource metadata from http://127.0.0.1:PORT/.well-known/oauth-protected-resource  [RFC 9728 §3]
+  ✓ PASS            `resource` (http://127.0.0.1:PORT/mcp) matches the probed server (audience binding)  [RFC 9728 §2 · RFC 8707 §2]
+  ✓ PASS            advertises 1 authorization server(s): http://127.0.0.1:PORT  [RFC 9728 §2 · MCP 2025-06-18]
+  ✓ PASS            bearer_methods_supported = [header]  [RFC 9728 §2 · RFC 6750 §2]
+
+Authorization Server Metadata
+  ✓ PASS            fetched authorization-server metadata for http://127.0.0.1:PORT from http://127.0.0.1:PORT/.well-known/oauth-authorization-server  [RFC 8414 §3]
+  ✗ FAIL            code_challenge_methods_supported = [plain] does not include the REQUIRED `S256`  [MCP 2025-06-18 (PKCE) · RFC 8414 §2]
+  ✓ PASS            advertises both `authorization_endpoint` and `token_endpoint`  [RFC 8414 §2]
+  ✓ PASS            advertises a `registration_endpoint` (Dynamic Client Registration)  [RFC 7591 · MCP 2025-06-18]
+  ✓ PASS            sets `authorization_response_iss_parameter_supported` (RFC 9207 mix-up defence)  [RFC 9207 §3]
+
+Pass --header "Authorization: Bearer <token>" to also test that a real token is accepted (header passthrough).
+jig auth probes discoverable auth surfaces; it performs no login flow (roadmap).

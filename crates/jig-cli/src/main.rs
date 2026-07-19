@@ -46,6 +46,7 @@ use jig_core::discovery::{self, DiscoveredTransport};
 use jig_core::{Client, ClientOptions, ProtocolTap, SourceSelector, ToolCallResult};
 use serde_json::{json, Value};
 
+mod auth;
 mod bench;
 mod budget;
 mod check;
@@ -163,6 +164,36 @@ enum Command {
         /// Maximum size in bytes of a single inbound message (0 = no cap).
         #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
         max_message_bytes: u64,
+    },
+    /// Probe and grade a remote server's discoverable OAuth conformance
+    /// (RFC 9728 / 8414 / 7591 / 8707 / 9207 / 6750). Performs NO login flow,
+    /// opens no browser, and needs no credentials: it sends one unauthenticated
+    /// `initialize`, follows the challenge to the metadata, and renders a
+    /// conformance table + verdict. HTTP transport only.
+    Auth {
+        /// A remote MCP endpoint URL to probe over Streamable HTTP, e.g.
+        /// `https://example.com/mcp`.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Present only to give a clear "auth is an HTTP concern" error; auth
+        /// probing does not support stdio targets.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// Extra HTTP header, "Name: Value" (repeatable). Pass
+        /// `Authorization: Bearer <token>` to also test header passthrough — Jig
+        /// never fabricates a token.
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
+        /// Emit the full conformance report as JSON (every finding + every raw
+        /// HTTP exchange, tokens redacted).
+        #[arg(long)]
+        json: bool,
+        /// Write the probe's HTTP traffic to this file as JSONL.
+        #[arg(long, value_name = "FILE")]
+        tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
     },
     /// Connect to an MCP server, handshake, and report what it exposes.
     Inspect {
@@ -585,8 +616,48 @@ impl From<SearchSource> for SourceSelector {
     }
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+/// Stack size for the thread that hosts the runtime. The clap command tree and
+/// the (deeply nested, reqwest-carrying) async command futures are large; in an
+/// unoptimized build — every `cargo test` / `cargo build` binary — they can
+/// overflow the platform's default *main-thread* stack (only ~1 MiB on Windows),
+/// overflowing on any invocation including `--help`. Hosting the runtime on a
+/// thread with a generous stack makes `jig` behave identically in debug and
+/// release, on every platform.
+const MAIN_STACK_BYTES: usize = 32 * 1024 * 1024;
+
+fn main() -> ExitCode {
+    match std::thread::Builder::new()
+        .name("jig-main".to_string())
+        .stack_size(MAIN_STACK_BYTES)
+        .spawn(run_on_runtime)
+    {
+        Ok(handle) => handle.join().unwrap_or_else(|_| {
+            eprintln!("jig: error: the main worker thread panicked");
+            ExitCode::from(EXIT_FAILURE)
+        }),
+        Err(e) => {
+            eprintln!("jig: error: could not start the main worker thread: {e}");
+            ExitCode::from(EXIT_FAILURE)
+        }
+    }
+}
+
+/// Build a Tokio runtime on the current (big-stack) thread and drive the CLI.
+fn run_on_runtime() -> ExitCode {
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("jig: error: could not start the async runtime: {e}");
+            return ExitCode::from(EXIT_FAILURE);
+        }
+    };
+    rt.block_on(async_main())
+}
+
+async fn async_main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli).await {
         Ok(code) => code,
@@ -623,6 +694,17 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 max_message_bytes,
             )
             .await
+        }
+        Command::Auth {
+            http,
+            stdio,
+            header,
+            json,
+            tap,
+            timeout,
+        } => {
+            let target = Target::resolve(stdio, http, None, header)?;
+            auth::run(&target, json, tap.as_deref(), timeout).await
         }
         Command::Inspect {
             stdio,

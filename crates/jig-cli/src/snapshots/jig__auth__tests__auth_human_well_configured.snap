@@ -1,0 +1,22 @@
+---
+source: crates/jig-cli/src/auth.rs
+expression: "render_human(&well_configured(), false)"
+---
+jig auth · http://127.0.0.1:PORT/mcp
+resource http://127.0.0.1:PORT/mcp · MCP auth spec 2025-06-18
+
+  verdict: CONFORMANT — the discoverable OAuth surface matches the spec
+  4 pass · 0 fail · 0 not-advertised · 0 unreachable
+
+Unauthenticated challenge
+  ✓ PASS            unauthenticated initialize returned HTTP 401 Unauthorized  [RFC 9728 §5.1]
+  ✓ PASS            challenge advertises `resource_metadata=…`  [RFC 9728 §5.1]
+
+Protected Resource Metadata
+  ✓ PASS            `resource` matches the probed server (audience binding)  [RFC 9728 §5.1]
+
+Authorization Server Metadata
+  ✓ PASS            advertises PKCE `S256` in code_challenge_methods_supported  [RFC 9728 §5.1]
+
+Pass --header "Authorization: Bearer <token>" to also test that a real token is accepted (header passthrough).
+jig auth probes discoverable auth surfaces; it performs no login flow (roadmap).

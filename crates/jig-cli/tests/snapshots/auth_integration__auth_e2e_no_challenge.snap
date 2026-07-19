@@ -1,0 +1,22 @@
+---
+source: crates/jig-cli/tests/auth_integration.rs
+expression: redact_port(&report)
+---
+jig auth · http://127.0.0.1:PORT/mcp
+resource http://127.0.0.1:PORT/mcp · MCP auth spec 2025-06-18
+
+  verdict: PARTIALLY CONFORMANT — some auth surfaces are missing or non-conformant
+  1 pass · 1 fail · 2 not-advertised · 0 unreachable
+
+Unauthenticated challenge
+  ✓ PASS            unauthenticated initialize returned HTTP 401 Unauthorized  [MCP 2025-06-18 · RFC 6750 §3]
+  ✗ FAIL            401 carried no `WWW-Authenticate` header; a compliant server MUST send one to locate its resource metadata  [RFC 9728 §5.1 · RFC 6750 §3]
+
+Protected Resource Metadata
+  · NOT-ADVERTISED  no protected-resource metadata at the RFC 9728 well-known locations  [RFC 9728 §3]
+
+Authorization Server Metadata
+  · NOT-ADVERTISED  no authorization server was advertised, so its metadata cannot be graded  [RFC 8414 §3]
+
+Pass --header "Authorization: Bearer <token>" to also test that a real token is accepted (header passthrough).
+jig auth probes discoverable auth surfaces; it performs no login flow (roadmap).

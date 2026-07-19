@@ -1,0 +1,19 @@
+---
+source: crates/jig-cli/src/auth.rs
+expression: "render_human(&broken_no_challenge(), false)"
+---
+jig auth · http://127.0.0.1:PORT/mcp
+resource http://127.0.0.1:PORT/mcp · MCP auth spec 2025-06-18
+
+  verdict: NON-CONFORMANT — the server challenges for auth but the OAuth surface is broken
+  1 pass · 1 fail · 1 not-advertised · 0 unreachable
+
+Unauthenticated challenge
+  ✓ PASS            unauthenticated initialize returned HTTP 401 Unauthorized  [RFC 9728 §5.1]
+  ✗ FAIL            401 carried no `WWW-Authenticate` header  [RFC 9728 §5.1]
+
+Protected Resource Metadata
+  · NOT-ADVERTISED  no protected-resource metadata at the RFC 9728 well-known locations  [RFC 9728 §5.1]
+
+Pass --header "Authorization: Bearer <token>" to also test that a real token is accepted (header passthrough).
+jig auth probes discoverable auth surfaces; it performs no login flow (roadmap).
