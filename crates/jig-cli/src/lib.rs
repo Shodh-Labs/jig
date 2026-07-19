@@ -53,6 +53,11 @@ pub fn split_command(input: &str) -> Result<(String, Vec<String>), String> {
     let program = it
         .next()
         .ok_or_else(|| "--stdio command was empty".to_string())?;
+    // A quoted-empty first token (`"" …`) parses as a token but names no
+    // program. Found by proptest in CI (minimal input: `""\u{b}`).
+    if program.is_empty() {
+        return Err("--stdio command names an empty program".to_string());
+    }
     Ok((program, it.collect()))
 }
 
