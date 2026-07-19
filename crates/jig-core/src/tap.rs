@@ -46,6 +46,13 @@ pub struct TapEntry {
     /// Microseconds since the tap was created (monotonic; from
     /// [`std::time::Instant`], never wall-clock, so it cannot go backwards).
     pub elapsed_micros: u64,
+    /// Byte offset in the server's stdout stream where this line began, for
+    /// inbound stdio traffic. `None` for outbound messages and for transports
+    /// (HTTP) that do not carry a single byte-addressable stream. This is what
+    /// lets a stdout-pollution finding point at the *exact* byte where the
+    /// framing broke.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
     /// The full parsed JSON-RPC message, exactly as it appeared on the wire.
     pub message: Value,
 }
@@ -56,6 +63,20 @@ impl TapEntry {
     pub fn method(&self) -> Option<&str> {
         self.message.get("method").and_then(Value::as_str)
     }
+}
+
+/// A non-protocol (framing-breaking) inbound line, with its location in the
+/// server's stdout stream. Produced by
+/// [`ProtocolTap::non_protocol_inbound_detailed`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NonProtocolLine {
+    /// The tap sequence number of the offending entry.
+    pub seq: u64,
+    /// Byte offset in the stdout stream where the line began, if the transport
+    /// tracked one (stdio does; HTTP does not).
+    pub offset: Option<u64>,
+    /// The offending line's text (lossily decoded, non-JSON preserved verbatim).
+    pub raw: String,
 }
 
 #[derive(Debug)]
@@ -96,6 +117,19 @@ impl ProtocolTap {
     /// inner data rather than unwinding, because losing the ability to record
     /// traffic must not take down a session.
     pub fn record(&self, direction: Direction, message: Value) {
+        self.record_at(direction, None, message);
+    }
+
+    /// Record an **inbound** line together with the byte `offset` in the
+    /// server's stdout stream where it began. Used by the stdio reader so a
+    /// stdout-pollution finding can name the exact byte position of the break.
+    pub fn record_inbound_at(&self, offset: u64, message: Value) {
+        self.record_at(Direction::Inbound, Some(offset), message);
+    }
+
+    /// Shared recorder: assign a sequence number and push an entry, optionally
+    /// with a stream byte offset.
+    fn record_at(&self, direction: Direction, offset: Option<u64>, message: Value) {
         let elapsed_micros = self.start.elapsed().as_micros() as u64;
         let mut guard = match self.inner.lock() {
             Ok(g) => g,
@@ -107,6 +141,7 @@ impl ProtocolTap {
             seq,
             direction,
             elapsed_micros,
+            offset,
             message,
         });
     }
@@ -138,6 +173,28 @@ impl ProtocolTap {
                     other => other.to_string(),
                 };
                 (e.seq, raw)
+            })
+            .collect()
+    }
+
+    /// Like [`ProtocolTap::non_protocol_inbound`], but carries each offending
+    /// line's byte `offset` in the stdout stream (when the transport tracked
+    /// one). The finding layer uses the offset and the raw text to point a
+    /// stdout-pollution fix at the exact byte and quote the first bytes.
+    pub fn non_protocol_inbound_detailed(&self) -> Vec<NonProtocolLine> {
+        self.entries()
+            .into_iter()
+            .filter(|e| e.direction == Direction::Inbound && !e.message.is_object())
+            .map(|e| {
+                let raw = match &e.message {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                NonProtocolLine {
+                    seq: e.seq,
+                    offset: e.offset,
+                    raw,
+                }
             })
             .collect()
     }
@@ -268,6 +325,22 @@ mod tests {
         assert_eq!(bad.len(), 2);
         assert_eq!(bad[0], (1, "[info] server started".to_string()));
         assert_eq!(bad[1], (2, "42".to_string()));
+    }
+
+    #[test]
+    fn non_protocol_inbound_detailed_carries_offset_and_raw() {
+        let tap = ProtocolTap::new();
+        tap.record_inbound_at(0, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }));
+        tap.record_inbound_at(37, Value::String("[info] server started".into()));
+        let bad = tap.non_protocol_inbound_detailed();
+        assert_eq!(bad.len(), 1);
+        assert_eq!(bad[0].offset, Some(37));
+        assert_eq!(bad[0].raw, "[info] server started");
+        // The legacy accessor still agrees on the raw text.
+        assert_eq!(
+            tap.non_protocol_inbound(),
+            vec![(1, "[info] server started".to_string())]
+        );
     }
 
     #[test]

@@ -276,7 +276,7 @@ proptest! {
                 list_timed_out,
                 list_latency: latency_ms.map(Duration::from_millis),
                 clean_shutdown,
-                stderr_noise_bytes: None,
+                ..Default::default()
             },
         };
 
@@ -287,6 +287,8 @@ proptest! {
             Some(Percentiles {
                 context_cost_tokens: MetricSamples { samples },
                 collected: None,
+                census_date: None,
+                startup_failure_rate: None,
             })
         };
 

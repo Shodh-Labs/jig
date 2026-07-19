@@ -51,11 +51,28 @@ A server at the **94th percentile** is heavier than ~94% of the ecosystem —
 i.e. in the heaviest ~6%. Context-cost score is `round(100 - percentile)`, so
 a lean server (10th percentile) scores 90 and a bloated one (94th) scores 6.
 
+## Optional top-level `startup_failure_rate`
+
+An optional top-level number: the fraction (`0..1`, or an already-scaled
+percentage `>1`) of surveyed public servers that **failed at startup / during
+the handshake** — i.e. never became reachable in the census. When present,
+`jig check` appends one line of ecosystem cohort context to a *startup-failure*
+error (a stdio server that dies before/during the handshake):
+
+```
+For context: in the 2026-07 census, 42% of surveyed public MCP servers also failed at startup.
+```
+
+The month is taken from the top-level `collected` date. The field is **optional**
+— when absent, `jig check` silently omits the cohort line. The census script
+emits it as `failed / attempted` from the raw run.
+
 ## Notes for the data-collection job
 
 * Emit **exactly** this shape. Extra top-level metrics are allowed and ignored
   by v1 (forward-compatible), but `context_cost_tokens.samples` must be present
   and numeric to enable percentile scoring.
+* `startup_failure_rate` (optional) is `failed / attempted` for the run.
 * Use the **gpt-4o exact** total (`jig budget --stdio "<cmd>" --model gpt-4o`,
   the `TOTAL` row) as each sample — the same metric `jig check` computes, so the
   comparison is apples-to-apples.

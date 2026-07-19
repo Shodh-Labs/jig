@@ -1264,7 +1264,7 @@ async fn prompt_inner(
 const MAX_POLLUTION_LINES_SHOWN: usize = 5;
 
 pub(crate) fn warn_non_protocol_output(tap: &ProtocolTap) {
-    let bad = tap.non_protocol_inbound();
+    let bad = tap.non_protocol_inbound_detailed();
     if bad.is_empty() {
         return;
     }
@@ -1273,9 +1273,13 @@ pub(crate) fn warn_non_protocol_output(tap: &ProtocolTap) {
          (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)",
         bad.len()
     );
-    for (seq, raw) in bad.iter().take(MAX_POLLUTION_LINES_SHOWN) {
-        let preview: String = raw.chars().take(120).collect();
-        eprintln!("jig:   [tap seq {seq}] {preview}");
+    for line in bad.iter().take(MAX_POLLUTION_LINES_SHOWN) {
+        let preview: String = line.raw.chars().take(120).collect();
+        let at = match line.offset {
+            Some(off) => format!("byte {off}"),
+            None => format!("tap seq {}", line.seq),
+        };
+        eprintln!("jig:   [{at}] {preview}");
     }
     if bad.len() > MAX_POLLUTION_LINES_SHOWN {
         eprintln!(

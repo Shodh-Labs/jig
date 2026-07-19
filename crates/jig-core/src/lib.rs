@@ -47,8 +47,9 @@ pub use bench::{
     RunResult, Usage, BENCH_SYSTEM_PROMPT,
 };
 pub use check::{
-    badge_color, evaluate, CheckInput, Dimension, DimensionScore, Finding, Observations,
-    Percentiles, Report as CheckReport, Severity, RUBRIC_VERSION,
+    badge_color, capability_offspec_note, evaluate, CheckInput, Dimension, DimensionScore, Finding,
+    Observations, Percentiles, PollutionSite, Report as CheckReport, Severity, UnknownMethodProbe,
+    RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};
 pub use context::{
@@ -74,7 +75,7 @@ pub use protocol::{
     PromptMessage, Resource, ResourceContents, ResourceReadResult, Tool, ToolCallResult,
     LATEST_PROTOCOL_VERSION,
 };
-pub use tap::{Direction, ProtocolTap, TapEntry};
+pub use tap::{Direction, NonProtocolLine, ProtocolTap, TapEntry};
 pub use tokens::{
     budget_local, canonical_tool_json, Exactness, ModelBudget, ModelCounter, TokenError,
     ToolBudget, CANONICAL_RENDERING_DOC,

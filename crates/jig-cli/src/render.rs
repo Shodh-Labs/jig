@@ -82,7 +82,7 @@ fn inspect_report_from(
     s.push_str(&format!("Protocol:     {}\n", protocol_version));
     s.push_str(&format!(
         "Capabilities: {}\n",
-        summarize_capabilities(capabilities)
+        summarize_capabilities(capabilities, protocol_version)
     ));
     if let Some(instr) = instructions {
         s.push_str(&format!("Instructions: {}\n", truncate(instr, DESC_MAX)));
@@ -226,23 +226,13 @@ pub fn listen_summary(summary: &ListenSummary) -> String {
     )
 }
 
-/// Server capability keys defined by the MCP spec revision Jig speaks
-/// (`2025-06-18`). Anything a server advertises outside this set is annotated,
-/// so a novel/experimental capability (e.g. `tasks` on server-everything) is
-/// surfaced honestly rather than passing silently.
-const KNOWN_SERVER_CAPABILITIES: &[&str] = &[
-    "logging",
-    "prompts",
-    "resources",
-    "tools",
-    "completions",
-    "experimental",
-];
-
 /// Summarize a capabilities object as a comma-separated list of advertised
 /// keys, annotating notable sub-flags (e.g. `tools(listChanged)`) and flagging
-/// any capability not in the negotiated spec revision.
-fn summarize_capabilities(caps: &Value) -> String {
+/// any capability not defined in the **negotiated** spec revision. Legality is
+/// version-relative — the same version-aware table `jig check` grades against
+/// (see [`jig_core::capability_offspec_note`]) — so a capability like `tasks` is
+/// flagged under `2025-06-18` but not under a revision that defines it.
+fn summarize_capabilities(caps: &Value, protocol_version: &str) -> String {
     let Some(map) = caps.as_object() else {
         return "(none)".to_string();
     };
@@ -264,8 +254,8 @@ fn summarize_capabilities(caps: &Value) -> String {
         } else {
             format!("{}({})", key, flags.join(","))
         };
-        if !KNOWN_SERVER_CAPABILITIES.contains(&key.as_str()) {
-            label.push_str(" (not in negotiated spec revision)");
+        if let Some(note) = jig_core::capability_offspec_note(key, protocol_version) {
+            label.push_str(&format!(" ({note})"));
         }
         parts.push(label);
     }
@@ -408,21 +398,29 @@ mod tests {
     #[test]
     fn capabilities_summary_lists_keys_with_flags() {
         let caps = json!({ "tools": { "listChanged": true }, "prompts": {} });
-        let out = summarize_capabilities(&caps);
+        let out = summarize_capabilities(&caps, "2025-06-18");
         assert!(out.contains("tools(listChanged)"));
         assert!(out.contains("prompts"));
     }
 
     #[test]
-    fn capabilities_summary_flags_unknown_capability() {
+    fn capabilities_summary_flags_offspec_capability_version_aware() {
         let caps = json!({ "tools": {}, "tasks": {} });
-        let out = summarize_capabilities(&caps);
+        // Under 2025-06-18, `tasks` is off-spec (first defined in 2025-11-25).
+        let out = summarize_capabilities(&caps, "2025-06-18");
         assert!(
-            out.contains("tasks (not in negotiated spec revision)"),
+            out.contains("tasks (not defined in negotiated revision 2025-06-18"),
             "got: {out}"
         );
-        // A known capability is not annotated.
-        assert!(!out.contains("tools (not in"), "got: {out}");
+        assert!(
+            out.contains("2025-11-25"),
+            "names where tasks is defined: {out}"
+        );
+        assert!(!out.contains("tools (not defined"), "got: {out}");
+
+        // Under 2025-11-25, `tasks` is in-spec and not annotated.
+        let out = summarize_capabilities(&caps, "2025-11-25");
+        assert!(!out.contains("tasks (not defined"), "got: {out}");
     }
 
     #[test]

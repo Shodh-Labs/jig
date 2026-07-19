@@ -18,7 +18,7 @@ use std::time::Instant;
 use jig_core::check::{ContextProvenance, DimensionScore, Finding, Severity};
 use jig_core::{
     self, badge_color, evaluate, CheckInput, CheckReport, JigError, Observations, Percentiles,
-    ProtocolTap,
+    PollutionSite, ProtocolTap,
 };
 use serde_json::{json, Value};
 
@@ -81,6 +81,23 @@ fn load_percentiles(explicit: Option<&Path>) -> Result<Option<Percentiles>, Stri
     }
 }
 
+/// Build the error for a server that failed to connect/handshake. For a stdio
+/// target this is a *startup failure*; when the ecosystem dataset carries a
+/// `startup_failure_rate` we append one line of cohort context so the failure
+/// reads against the wider ecosystem rather than in isolation. Silent (just the
+/// raw error) when the target is HTTP or the dataset lacks the field.
+fn startup_failure_message(
+    target: &Target,
+    err: String,
+    percentiles: Option<&Percentiles>,
+) -> String {
+    let is_stdio = matches!(target, Target::Stdio { .. });
+    match percentiles.and_then(Percentiles::startup_failure_note) {
+        Some(note) if is_stdio => format!("{err}\n  {note}"),
+        _ => err,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_inner(
     target: &Target,
@@ -92,9 +109,16 @@ async fn run_inner(
     timeout_secs: u64,
     max_message_bytes: u64,
 ) -> Result<ExitCode, String> {
-    let client = target
+    let client = match target
         .connect(tap.clone(), timeout_secs, max_message_bytes)
-        .await?;
+        .await
+    {
+        Ok(client) => client,
+        // A stdio server that dies before/during the handshake is a startup
+        // failure. Add one line of ecosystem cohort context when the dataset
+        // carries it (silent otherwise) — our strongest census signal.
+        Err(e) => return Err(startup_failure_message(target, e, percentiles)),
+    };
 
     // The one session: time the list operation, then read the surface. A list
     // that the server accepts but never answers is a timeout, not a hard error —
@@ -107,6 +131,9 @@ async fn run_inner(
     };
     let list_latency = Some(t0.elapsed());
 
+    // Error-code correctness on unknown methods (conformance: negative).
+    let unknown_method = client.probe_unknown_method().await;
+
     let server = client.server_info().clone();
     let protocol_version = client.protocol_version().to_string();
     let capabilities = client.capabilities().clone();
@@ -116,7 +143,14 @@ async fn run_inner(
     let clean_shutdown = client.shutdown().await.is_ok();
 
     // Pollution is whatever non-protocol noise the tap captured this session.
-    let pollution_lines = tap.non_protocol_inbound().len();
+    // The detailed view carries the byte offset + first bytes of the first
+    // offending line so the finding can point at the exact break.
+    let polluting = tap.non_protocol_inbound_detailed();
+    let pollution_lines = polluting.len();
+    let first_pollution = polluting.first().map(|l| PollutionSite {
+        offset: l.offset,
+        line: l.raw.clone(),
+    });
 
     let input = CheckInput {
         server_name: server.name.clone(),
@@ -127,12 +161,14 @@ async fn run_inner(
         tools,
         observations: Observations {
             pollution_lines,
+            first_pollution,
             list_timed_out,
             list_latency,
             clean_shutdown,
             // Child stderr volume is not plumbed through the client; left
             // unobserved rather than assumed.
             stderr_noise_bytes: None,
+            unknown_method,
         },
     };
 
@@ -447,10 +483,10 @@ mod tests {
             ],
             observations: Observations {
                 pollution_lines: 0,
-                list_timed_out: false,
                 list_latency: Some(std::time::Duration::from_millis(12)),
                 clean_shutdown: true,
-                stderr_noise_bytes: None,
+                unknown_method: jig_core::UnknownMethodProbe::Errored(-32601),
+                ..Default::default()
             },
         }
     }
@@ -461,6 +497,10 @@ mod tests {
         let mut input = mock_input();
         input.capabilities = json!({ "tools": {}, "tasks": {} });
         input.observations.pollution_lines = 1;
+        input.observations.first_pollution = Some(jig_core::PollutionSite {
+            offset: Some(128),
+            line: "[info] listening on :3000".to_string(),
+        });
         // Break echo's `text` param: no type, no description.
         input.tools[0] = tool(
             "echo",
@@ -519,6 +559,8 @@ mod tests {
                 samples: vec![50.0, 100.0, 150.0, 5000.0, 90000.0],
             },
             collected: Some("2026-07-19".to_string()),
+            census_date: Some("2026-07-19".to_string()),
+            startup_failure_rate: None,
         };
         let report = evaluate(&mock_input(), Some(&p));
         insta::assert_snapshot!("check_human_percentile", render_human(&report));
