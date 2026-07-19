@@ -39,7 +39,7 @@ Jig is a Rust workspace (`cargo` 1.80+). Milestone 1 ships the core engine and t
 ```
 crates/
   jig-core         # library: stdio + Streamable HTTP transports, MCP handshake + ops, protocol tap
-  jig-cli          # binary `jig`: inspect / call / budget subcommands
+  jig-cli          # binary `jig`: inspect / call / read / prompt / budget / bench subcommands
   jig-mock-server  # binary: a minimal MCP server (stdio + HTTP) used as a test fixture
 ```
 
@@ -61,6 +61,12 @@ cargo build
 # invoke a single tool
 ./target/debug/jig call --stdio "./target/debug/jig-mock-server" \
     --tool echo --args '{"text":"hello"}'
+# read a resource by URI (text prints verbatim; a blob prints its mimeType + base64 length)
+./target/debug/jig read --stdio "./target/debug/jig-mock-server --resources-prompts" \
+    --uri "mock://text/hello"
+# fetch a prompt by name, filling its arguments
+./target/debug/jig prompt --stdio "./target/debug/jig-mock-server --resources-prompts" \
+    --name greet --args '{"name":"Ada"}'
 # what does this server cost in context tokens, per tool, per model?
 ./target/debug/jig budget --stdio "./target/debug/jig-mock-server"
 # which tool does a real model pick for a task? (needs ANTHROPIC_API_KEY / OPENAI_API_KEY)
@@ -91,6 +97,28 @@ later request, and sends an HTTP `DELETE` to end the session on shutdown. If the
 server reports the session expired (HTTP 404), jig surfaces a clear error rather
 than silently reconnecting — it is a diagnostic tool and tells the truth. OAuth
 flows are not yet implemented; supply a token via `--header` for now.
+
+#### Listening for server-initiated messages (`--listen`)
+
+Per the spec a Streamable HTTP server MAY open a standalone `GET` SSE stream to
+push **notifications** and even server→client **requests** (`ping`,
+`sampling/createMessage`, `roots/list`, …). `jig inspect --http … --listen`
+opts in: after listing, jig holds that stream open for `--duration` seconds and
+reports what arrived — everything captured in the tap.
+
+```sh
+# after inspecting, watch the server stream for 10s
+jig inspect --http "https://example.com/mcp" --listen --duration 10 --tap traffic.jsonl
+# => GET stream: opened (HTTP 200). Observed 2 notification(s), 1 server ping(s),
+#    0 other server request(s) in 10.0s. (See the tap for full detail.)
+```
+
+Listening is **off by default** (a diagnostic tool does what you ask). jig
+advertises no client capabilities, so it answers each server→client request
+honestly: an empty result for `ping` (per spec), and JSON-RPC
+`-32601 method not found` for anything else — each exchange tapped both
+directions. A server that offers no stream answers the `GET` with HTTP 405,
+which jig records as spec-permitted, not an error.
 
 ### `jig budget` — the token-budget engine
 

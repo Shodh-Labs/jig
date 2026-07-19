@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 use crate::error::{JigError, Result};
 use crate::http::HttpTransport;
 use crate::protocol::{
-    Implementation, InitializeResult, Prompt, Resource, Tool, ToolCallResult,
-    LATEST_PROTOCOL_VERSION,
+    Implementation, InitializeResult, Prompt, PromptGetResult, Resource, ResourceReadResult, Tool,
+    ToolCallResult, LATEST_PROTOCOL_VERSION,
 };
 use crate::tap::ProtocolTap;
 use crate::transport::{
@@ -39,6 +39,11 @@ pub struct ClientOptions {
     ///
     /// [`JigError::MessageTooLarge`]: crate::JigError::MessageTooLarge
     pub max_message_bytes: Option<usize>,
+    /// Whether the HTTP transport may open the standalone server→client GET SSE
+    /// stream (see [`Client::listen`]). Default `false`: a diagnostic tool opens
+    /// that stream only when explicitly asked (`--listen`). Ignored by stdio,
+    /// which has no such stream.
+    pub listen: bool,
 }
 
 impl Default for ClientOptions {
@@ -46,6 +51,7 @@ impl Default for ClientOptions {
         ClientOptions {
             request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
             max_message_bytes: Some(DEFAULT_MAX_MESSAGE_BYTES),
+            listen: false,
         }
     }
 }
@@ -130,6 +136,7 @@ impl Client {
             tap,
             options.request_timeout,
             options.max_message_bytes,
+            options.listen,
         )?);
         let init = Self::handshake(&transport).await?;
         Ok(Client { transport, init })
@@ -281,6 +288,43 @@ impl Client {
         let result = self.transport.request("tools/call", params).await?;
         serde_json::from_value(result)
             .map_err(|e| JigError::protocol(format!("invalid tools/call result: {e}")))
+    }
+
+    /// Read a resource's contents by URI (`resources/read`). Returns the content
+    /// items the server provides — each either UTF-8 `text` or a base64 `blob`.
+    ///
+    /// Unlike the graceful `*/list` operations, this is an explicit invocation:
+    /// a server error (e.g. `-32002 resource not found`) surfaces as `Err`, not
+    /// an empty result, because the caller asked for a specific URI.
+    pub async fn read_resource(&self, uri: &str) -> Result<ResourceReadResult> {
+        let params = json!({ "uri": uri });
+        let result = self.transport.request("resources/read", params).await?;
+        serde_json::from_value(result)
+            .map_err(|e| JigError::protocol(format!("invalid resources/read result: {e}")))
+    }
+
+    /// Fetch a prompt's rendered messages by name (`prompts/get`), passing an
+    /// `arguments` map (use `json!({})` for none). A server error (e.g.
+    /// `-32602 invalid params`) surfaces as `Err`.
+    pub async fn get_prompt(&self, name: &str, arguments: Value) -> Result<PromptGetResult> {
+        let params = json!({ "name": name, "arguments": arguments });
+        let result = self.transport.request("prompts/get", params).await?;
+        serde_json::from_value(result)
+            .map_err(|e| JigError::protocol(format!("invalid prompts/get result: {e}")))
+    }
+
+    /// Open the standalone server→client stream (HTTP GET SSE) and process
+    /// pushed traffic — notifications and server-initiated requests — for
+    /// `duration`, returning a [`ListenSummary`]. Every pushed message and every
+    /// reply Jig sends is captured in the tap.
+    ///
+    /// Only meaningful on the Streamable HTTP transport and only when
+    /// [`ClientOptions::listen`] was set; otherwise this returns a clear error
+    /// rather than silently doing nothing.
+    ///
+    /// [`ListenSummary`]: crate::ListenSummary
+    pub async fn listen(&self, duration: Duration) -> Result<crate::ListenSummary> {
+        self.transport.listen(duration).await
     }
 
     /// Whether the server advertised a top-level capability key (e.g.

@@ -59,9 +59,11 @@ fn signature(entries: &[TapEntry]) -> Signature {
 /// Connect over `kind`, drive the identical conversation, and return the tap's
 /// signature. The connection is cleanly shut down before returning.
 async fn connect_and_drive(kind: Kind) -> Signature {
+    // The mock is asked to serve resources + prompts on both transports so the
+    // conversation can exercise resources/read and prompts/get at parity.
     match kind {
         Kind::Stdio => {
-            let client = Client::connect(&mock_server(), &[])
+            let client = Client::connect(&mock_server(), &["--resources-prompts".to_string()])
                 .await
                 .expect("stdio handshake");
             let sig = drive(&client).await;
@@ -69,7 +71,7 @@ async fn connect_and_drive(kind: Kind) -> Signature {
             sig
         }
         Kind::Http => {
-            let (_guard, url) = spawn_http(&[]).await;
+            let (_guard, url) = spawn_http(&["--resources-prompts"]).await;
             let client = Client::connect_http(&url).await.expect("http handshake");
             let sig = drive(&client).await;
             client.shutdown().await.expect("http shutdown");
@@ -90,6 +92,20 @@ async fn drive(client: &Client) -> Signature {
         .await
         .expect("tools/call echo");
     assert!(!echo.is_error);
+
+    // resources/read: a text resource, rendered as text.
+    let read = client
+        .read_resource("mock://text/hello")
+        .await
+        .expect("resources/read");
+    assert_eq!(read.contents.len(), 1);
+
+    // prompts/get: expand the greet prompt with an argument.
+    let prompt = client
+        .get_prompt("greet", json!({ "name": "parity" }))
+        .await
+        .expect("prompts/get");
+    assert_eq!(prompt.messages.len(), 1);
 
     signature(&client.tap().entries())
 }
@@ -114,6 +130,10 @@ async fn taps_are_equivalent_across_transports() {
         (Direction::Outbound, Some("tools/list".to_string())),
         (Direction::Inbound, None),
         (Direction::Outbound, Some("tools/call".to_string())),
+        (Direction::Inbound, None),
+        (Direction::Outbound, Some("resources/read".to_string())),
+        (Direction::Inbound, None),
+        (Direction::Outbound, Some("prompts/get".to_string())),
         (Direction::Inbound, None),
     ];
 

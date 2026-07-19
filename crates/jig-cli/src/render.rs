@@ -4,7 +4,10 @@
 //! untruncated data. Both are built here from plain data (not a live
 //! [`Client`]) so their exact output can be locked with snapshot tests.
 
-use jig_core::{Client, Implementation, Prompt, Resource, Tool, ToolCallResult};
+use jig_core::{
+    Client, Implementation, ListenSummary, Prompt, PromptGetResult, Resource, ResourceReadResult,
+    Tool, ToolCallResult,
+};
 use serde_json::{json, Value};
 
 /// Build the machine-readable `jig inspect --json` document from plain data.
@@ -161,6 +164,66 @@ pub fn call_result(tool: &str, result: &ToolCallResult) -> String {
     }
 
     s
+}
+
+/// Render a `jig read` result (`resources/read`) for a person.
+///
+/// Text contents are shown verbatim; a blob is summarized as its MIME type and
+/// base64 length — never dumped as raw bytes to the terminal (use `--json` for
+/// the full base64).
+pub fn resource_read_result(uri: &str, result: &ResourceReadResult) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("Resource: {uri}\n"));
+    s.push_str(&format!("Contents ({}):\n", result.contents.len()));
+    if result.contents.is_empty() {
+        s.push_str("  (no contents)\n");
+    }
+    for c in &result.contents {
+        let mime = c.mime_type().unwrap_or("(no mimeType)");
+        s.push_str(&format!("  - {} [{}]\n", c.uri(), mime));
+        for line in c.render().lines() {
+            s.push_str(&format!("      {line}\n"));
+        }
+    }
+    s
+}
+
+/// Render a `jig prompt` result (`prompts/get`) for a person: the optional
+/// description followed by each message's role and content.
+pub fn prompt_get_result(name: &str, result: &PromptGetResult) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("Prompt: {name}\n"));
+    if let Some(d) = &result.description {
+        s.push_str(&format!("Description: {}\n", truncate(d, DESC_MAX)));
+    }
+    s.push_str(&format!("Messages ({}):\n", result.messages.len()));
+    if result.messages.is_empty() {
+        s.push_str("  (no messages)\n");
+    }
+    for m in &result.messages {
+        s.push_str(&format!("  [{}]\n", m.role));
+        for line in m.content.render().lines() {
+            s.push_str(&format!("      {line}\n"));
+        }
+    }
+    s
+}
+
+/// Render the standalone-GET-stream listening summary for a person.
+pub fn listen_summary(summary: &ListenSummary) -> String {
+    let secs = summary.duration.as_secs_f64();
+    if !summary.opened {
+        return format!(
+            "GET stream: not offered (HTTP {}). The server has no standalone server→client \
+             stream — spec-permitted, not an error.\n",
+            summary.status
+        );
+    }
+    format!(
+        "GET stream: opened (HTTP {}). Observed {} notification(s), {} server ping(s), \
+         {} other server request(s) in {:.1}s. (See the tap for full detail.)\n",
+        summary.status, summary.notifications, summary.pings, summary.other_requests, secs
+    )
 }
 
 /// Server capability keys defined by the MCP spec revision Jig speaks
@@ -482,5 +545,77 @@ mod tests {
         }))
         .unwrap();
         insta::assert_snapshot!("call_result_error", call_result("always_fails", &result));
+    }
+
+    #[test]
+    fn read_result_text_snapshot() {
+        let result: ResourceReadResult = serde_json::from_value(json!({
+            "contents": [
+                {
+                    "uri": "mock://text/hello",
+                    "mimeType": "text/plain",
+                    "text": "Hello from a jig mock text resource.\nSecond line."
+                }
+            ]
+        }))
+        .unwrap();
+        insta::assert_snapshot!(
+            "read_result_text",
+            resource_read_result("mock://text/hello", &result)
+        );
+    }
+
+    #[test]
+    fn read_result_blob_snapshot() {
+        // A blob renders as a summary (mime + base64 length), never raw bytes.
+        let result: ResourceReadResult = serde_json::from_value(json!({
+            "contents": [
+                {
+                    "uri": "mock://blob/logo",
+                    "mimeType": "image/png",
+                    "blob": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGP4DwABBAEAHnGpJQAAAABJRU5ErkJggg=="
+                }
+            ]
+        }))
+        .unwrap();
+        insta::assert_snapshot!(
+            "read_result_blob",
+            resource_read_result("mock://blob/logo", &result)
+        );
+    }
+
+    #[test]
+    fn prompt_result_snapshot() {
+        let result: PromptGetResult = serde_json::from_value(json!({
+            "description": "A friendly greeting.",
+            "messages": [
+                { "role": "user", "content": { "type": "text", "text": "Please greet Ada warmly." } }
+            ]
+        }))
+        .unwrap();
+        insta::assert_snapshot!("prompt_result", prompt_get_result("greet", &result));
+    }
+
+    #[test]
+    fn listen_summary_opened_snapshot() {
+        let summary = ListenSummary {
+            opened: true,
+            status: 200,
+            notifications: 2,
+            pings: 1,
+            other_requests: 1,
+            duration: std::time::Duration::from_secs_f64(10.0),
+        };
+        insta::assert_snapshot!("listen_summary_opened", listen_summary(&summary));
+    }
+
+    #[test]
+    fn listen_summary_405_snapshot() {
+        let summary = ListenSummary {
+            opened: false,
+            status: 405,
+            ..Default::default()
+        };
+        insta::assert_snapshot!("listen_summary_405", listen_summary(&summary));
     }
 }

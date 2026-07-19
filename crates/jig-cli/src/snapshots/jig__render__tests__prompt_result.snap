@@ -1,0 +1,9 @@
+---
+source: crates/jig-cli/src/render.rs
+expression: "prompt_get_result(\"greet\", &result)"
+---
+Prompt: greet
+Description: A friendly greeting.
+Messages (1):
+  [user]
+      Please greet Ada warmly.

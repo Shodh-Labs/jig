@@ -99,6 +99,7 @@ async fn message_too_large_variant_from_giant_response() {
     let options = ClientOptions {
         request_timeout: Some(Duration::from_secs(5)),
         max_message_bytes: Some(1024 * 1024),
+        ..ClientOptions::default()
     };
     let client = Client::connect_with_options(
         &mock_server(),

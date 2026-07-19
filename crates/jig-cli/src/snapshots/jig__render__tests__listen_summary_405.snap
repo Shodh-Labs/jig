@@ -1,0 +1,5 @@
+---
+source: crates/jig-cli/src/render.rs
+expression: listen_summary(&summary)
+---
+GET stream: not offered (HTTP 405). The server has no standalone server→client stream — spec-permitted, not an error.
