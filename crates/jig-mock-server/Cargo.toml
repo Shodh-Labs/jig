@@ -1,0 +1,18 @@
+[package]
+name = "jig-mock-server"
+description = "A minimal MCP server over stdio: an integration-test fixture and a handy scratch server for Jig."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "jig-mock-server"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+jig-core = { path = "../jig-core" }
+tokio.workspace = true

@@ -1,0 +1,200 @@
+//! A minimal MCP server speaking the stdio transport, used as Jig's
+//! integration-test fixture and as a handy scratch server.
+//!
+//! It implements just enough of MCP `2025-06-18` to exercise a client:
+//! `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`.
+//! It deliberately advertises *only* the `tools` capability so that a client's
+//! graceful handling of unsupported `resources`/`prompts` can be observed.
+//!
+//! Framing: read one JSON-RPC message per line from stdin, write one per line
+//! to stdout. Nothing but MCP messages is written to stdout; diagnostics go to
+//! stderr.
+
+use std::io::{self, BufRead, Write};
+
+use serde_json::{json, Value};
+
+const PROTOCOL_VERSION: &str = "2025-06-18";
+
+fn main() {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("jig-mock-server: stdin read error: {e}");
+                break;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let request: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("jig-mock-server: ignoring non-JSON line: {e}");
+                continue;
+            }
+        };
+
+        let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+        let id = request.get("id").cloned();
+
+        // Notifications (no id) require no response.
+        if id.is_none() {
+            if method == "notifications/initialized" {
+                eprintln!("jig-mock-server: client initialized");
+            }
+            continue;
+        }
+        let id = id.unwrap_or(Value::Null);
+
+        let response = match method {
+            "initialize" => handle_initialize(id),
+            "tools/list" => handle_tools_list(id),
+            "tools/call" => handle_tools_call(id, request.get("params")),
+            other => error_response(id, -32601, &format!("Method not found: {other}")),
+        };
+
+        if let Err(e) = write_message(&mut out, &response) {
+            eprintln!("jig-mock-server: stdout write error: {e}");
+            break;
+        }
+    }
+}
+
+/// Write one newline-delimited JSON-RPC message and flush.
+fn write_message(out: &mut impl Write, message: &Value) -> io::Result<()> {
+    let text = serde_json::to_string(message).unwrap_or_else(|_| "{}".to_string());
+    out.write_all(text.as_bytes())?;
+    out.write_all(b"\n")?;
+    out.flush()
+}
+
+fn success_response(id: Value, result: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
+fn error_response(id: Value, code: i64, message: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message }
+    })
+}
+
+fn handle_initialize(id: Value) -> Value {
+    success_response(
+        id,
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            // Only tools are advertised — resources/prompts are intentionally absent.
+            "capabilities": { "tools": {} },
+            "serverInfo": {
+                "name": "jig-mock-server",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "instructions": "A toy MCP server for exercising Jig."
+        }),
+    )
+}
+
+/// Three tools with deliberately varied schemas:
+/// * `echo` — a single required string (simple).
+/// * `make_reservation` — a nested object plus an enum (structured).
+/// * `always_fails` — takes nothing and reports an error when called.
+fn handle_tools_list(id: Value) -> Value {
+    success_response(
+        id,
+        json!({
+            "tools": [
+                {
+                    "name": "echo",
+                    "description": "Echo the provided text straight back.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "text": { "type": "string", "description": "Text to echo." }
+                        },
+                        "required": ["text"]
+                    }
+                },
+                {
+                    "name": "make_reservation",
+                    "description": "Book a table. Demonstrates a nested object argument and an enum.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "party": {
+                                "type": "object",
+                                "properties": {
+                                    "size": { "type": "integer", "minimum": 1 },
+                                    "seating": {
+                                        "type": "string",
+                                        "enum": ["indoor", "outdoor", "bar"]
+                                    }
+                                },
+                                "required": ["size"]
+                            },
+                            "date": { "type": "string", "description": "ISO-8601 date." }
+                        },
+                        "required": ["party", "date"]
+                    }
+                },
+                {
+                    "name": "always_fails",
+                    "description": "A tool that always reports an error, for testing error paths.",
+                    "inputSchema": { "type": "object", "properties": {} }
+                }
+            ]
+        }),
+    )
+}
+
+fn handle_tools_call(id: Value, params: Option<&Value>) -> Value {
+    let params = params.cloned().unwrap_or(Value::Null);
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+
+    match name {
+        "echo" => {
+            let text = args.get("text").and_then(Value::as_str).unwrap_or("");
+            tool_text_result(id, &format!("echo: {text}"), false)
+        }
+        "make_reservation" => {
+            let size = args
+                .get("party")
+                .and_then(|p| p.get("size"))
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let seating = args
+                .get("party")
+                .and_then(|p| p.get("seating"))
+                .and_then(Value::as_str)
+                .unwrap_or("indoor");
+            let date = args.get("date").and_then(Value::as_str).unwrap_or("?");
+            tool_text_result(
+                id,
+                &format!("Reserved a {seating} table for {size} on {date}."),
+                false,
+            )
+        }
+        "always_fails" => tool_text_result(id, "This tool always fails, by design.", true),
+        other => error_response(id, -32602, &format!("Unknown tool: {other}")),
+    }
+}
+
+/// Build a `tools/call` result carrying a single text content block.
+fn tool_text_result(id: Value, text: &str, is_error: bool) -> Value {
+    success_response(
+        id,
+        json!({
+            "content": [ { "type": "text", "text": text } ],
+            "isError": is_error
+        }),
+    )
+}
