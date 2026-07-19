@@ -1,0 +1,60 @@
+name: Nightly Compatibility Battery
+
+# The recurring real-server battery: run jig against the popular MCP servers as
+# they are published today (npx latest, deliberately unpinned) so we catch
+# ecosystem drift early. Each server is its own matrix entry, so one broken
+# server does not hide the others.
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  battery:
+    name: ${{ matrix.server.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server:
+          - name: everything
+            cmd: "npx -y @modelcontextprotocol/server-everything"
+          - name: filesystem
+            cmd: "npx -y @modelcontextprotocol/server-filesystem /tmp/jig-fs"
+          - name: memory
+            cmd: "npx -y @modelcontextprotocol/server-memory"
+          - name: sequential-thinking
+            cmd: "npx -y @modelcontextprotocol/server-sequential-thinking"
+          - name: playwright
+            cmd: "npx -y @playwright/mcp"
+          - name: context7
+            cmd: "npx -y @upstash/context7-mcp"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Select stable toolchain
+        run: rustup default stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Build jig
+        run: cargo build -p jig-cli
+      - name: Prepare filesystem-server sandbox
+        run: mkdir -p /tmp/jig-fs
+      - name: jig inspect (${{ matrix.server.name }})
+        env:
+          SERVER_CMD: ${{ matrix.server.cmd }}
+        run: ./target/debug/jig inspect --stdio "$SERVER_CMD" --timeout 60
+      - name: jig budget (${{ matrix.server.name }}) -> job summary
+        env:
+          SERVER_CMD: ${{ matrix.server.cmd }}
+        run: |
+          {
+            echo "## Budget — ${{ matrix.server.name }}"
+            echo ""
+            ./target/debug/jig budget --stdio "$SERVER_CMD" --timeout 60 --markdown
+          } >> "$GITHUB_STEP_SUMMARY"
