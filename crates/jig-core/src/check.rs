@@ -168,7 +168,8 @@ impl Severity {
     }
 }
 
-/// One of the five rubric dimensions.
+/// One of the five rubric dimensions, or the [`ToolSet`](Dimension::ToolSet)
+/// advisor category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dimension {
     /// Protocol compliance (weight 25).
@@ -181,10 +182,24 @@ pub enum Dimension {
     DescriptionQuality,
     /// Robustness — observed behavior (weight 15).
     Robustness,
+    /// The tool-set advisor category (see [`crate::advisor`]). **Not a scored
+    /// rubric dimension** — it is deliberately excluded from [`Dimension::all`]
+    /// and never produces a [`DimensionScore`], so it never enters the
+    /// composite. It exists to give the advisor's findings a machine key
+    /// (`tool_set`) and a ranking weight for the shared "Top fixes" list.
+    ToolSet,
 }
 
+/// The ranking weight of an advisor ([`Dimension::ToolSet`]) finding. Used
+/// **only** to order advisor findings against dimension findings in "Top fixes"
+/// — it is not a rubric weight and never enters the composite (no advisor
+/// finding is ever attached to a scored [`DimensionScore`]).
+const TOOL_SET_RANK_WEIGHT: u32 = 18;
+
 impl Dimension {
-    /// The dimension's composite weight.
+    /// The dimension's composite weight (or, for [`ToolSet`](Dimension::ToolSet),
+    /// its fixed "Top fixes" ranking weight — see the `TOOL_SET_RANK_WEIGHT`
+    /// constant).
     pub fn weight(self) -> u32 {
         match self {
             Dimension::Protocol => 25,
@@ -192,6 +207,7 @@ impl Dimension {
             Dimension::SchemaHygiene => 20,
             Dimension::DescriptionQuality => 15,
             Dimension::Robustness => 15,
+            Dimension::ToolSet => TOOL_SET_RANK_WEIGHT,
         }
     }
 
@@ -203,10 +219,11 @@ impl Dimension {
             Dimension::SchemaHygiene => "Schema hygiene",
             Dimension::DescriptionQuality => "Description quality",
             Dimension::Robustness => "Robustness",
+            Dimension::ToolSet => "Tool set",
         }
     }
 
-    /// A short machine key (`protocol`, `context_cost`, …).
+    /// A short machine key (`protocol`, `context_cost`, …, `tool_set`).
     pub fn key(self) -> &'static str {
         match self {
             Dimension::Protocol => "protocol",
@@ -214,6 +231,7 @@ impl Dimension {
             Dimension::SchemaHygiene => "schema_hygiene",
             Dimension::DescriptionQuality => "description_quality",
             Dimension::Robustness => "robustness",
+            Dimension::ToolSet => "tool_set",
         }
     }
 
@@ -223,7 +241,8 @@ impl Dimension {
         matches!(self, Dimension::DescriptionQuality)
     }
 
-    /// The declared weight of every dimension, in rubric order.
+    /// The declared weight of every scored rubric dimension, in rubric order.
+    /// [`ToolSet`](Dimension::ToolSet) is intentionally absent — it is not scored.
     pub fn all() -> [Dimension; 5] {
         [
             Dimension::Protocol,
@@ -319,6 +338,11 @@ pub struct Report {
     pub rubric_version: &'static str,
     /// Number of tools observed.
     pub tool_count: usize,
+    /// Tool-set advisor findings (see [`crate::advisor`]), stably sorted. These
+    /// are tagged [`Dimension::ToolSet`] and are **never** scored into the
+    /// composite; they surface in a dedicated report section and may be ranked
+    /// into "Top fixes". Empty when no advisory fired.
+    pub advisor: Vec<Finding>,
 }
 
 impl Report {
@@ -333,14 +357,18 @@ impl Report {
         self.dimensions.iter().find(|s| s.dimension == d)
     }
 
-    /// The top `n` fixes across all dimensions, ranked by composite impact
-    /// (`points * weight`) descending, ties broken by rubric dimension order
-    /// then message. `Info` findings and zero-impact findings are excluded.
+    /// The top `n` fixes across all dimensions **and the tool-set advisor**,
+    /// ranked by impact (`points * weight`) descending, ties broken by severity,
+    /// then rubric dimension order (advisor findings rank after the five scored
+    /// dimensions), then message. `Info` findings and zero-impact findings are
+    /// excluded. Advisor findings rank by their `points` and the advisor ranking
+    /// weight; they still never affect the composite.
     pub fn top_fixes(&self, n: usize) -> Vec<&Finding> {
         let mut all: Vec<&Finding> = self
             .dimensions
             .iter()
             .flat_map(|d| d.findings.iter())
+            .chain(self.advisor.iter())
             .filter(|f| f.points > 0.0 && f.severity != Severity::Info)
             .collect();
         all.sort_by(|a, b| {
@@ -361,9 +389,14 @@ impl Report {
     }
 }
 
-/// Rubric order rank for stable tie-breaking.
+/// Rubric order rank for stable tie-breaking. The advisor category
+/// ([`Dimension::ToolSet`]) is not in [`Dimension::all`], so it ranks *after*
+/// every scored dimension.
 fn dim_rank(d: Dimension) -> usize {
-    Dimension::all().iter().position(|x| *x == d).unwrap_or(0)
+    Dimension::all()
+        .iter()
+        .position(|x| *x == d)
+        .unwrap_or(Dimension::all().len())
 }
 
 /// Severity rank for tie-breaking: most-severe first.
@@ -576,6 +609,11 @@ pub fn evaluate(input: &CheckInput, percentiles: Option<&Percentiles>) -> Report
     let dimensions = vec![protocol, context, schema, description, robustness];
     let composite = composite_score(&dimensions);
 
+    // The tool-set advisor reuses the per-tool token costs already computed
+    // above — it never re-tokenizes. Its findings are unscored (see
+    // [`Dimension::ToolSet`]).
+    let advisor = crate::advisor::advise(&input.tools, &advisor_costs(&costs));
+
     Report {
         server_name: input.server_name.clone(),
         server_version: input.server_version.clone(),
@@ -586,7 +624,20 @@ pub fn evaluate(input: &CheckInput, percentiles: Option<&Percentiles>) -> Report
         context_provenance: provenance,
         rubric_version: RUBRIC_VERSION,
         tool_count: input.tools.len(),
+        advisor,
     }
+}
+
+/// Adapt the check pass's per-tool token costs into the advisor's input shape.
+fn advisor_costs(costs: &ToolCosts) -> Vec<crate::advisor::ToolTokenCost> {
+    costs
+        .per_tool
+        .iter()
+        .map(|(name, tokens)| crate::advisor::ToolTokenCost {
+            name: name.clone(),
+            tokens: *tokens,
+        })
+        .collect()
 }
 
 /// The weighted composite over the *applicable* dimensions (those with a

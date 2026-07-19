@@ -3,6 +3,7 @@ source: crates/jig-cli/src/check.rs
 expression: render_json(&report)
 ---
 {
+  "advisor": [],
   "composite": 98,
   "compositeExact": 98.12,
   "contextCost": {

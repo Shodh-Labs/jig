@@ -21,7 +21,10 @@ use jig_core::eval::{load_suite_str, Matcher};
 use jig_core::http::parse_sse;
 use jig_core::tokens::canonical_tool_json;
 use jig_core::transport::{classify_inbound, parse_response};
-use jig_core::{evaluate, CheckInput, Direction, Observations, ProtocolTap, TapEntry, Tool};
+use jig_core::{
+    advise_tool_set, evaluate, CheckInput, Direction, Observations, ProtocolTap, Severity,
+    TapEntry, Tool, ToolTokenCost,
+};
 
 use proptest::prelude::*;
 use serde_json::{json, Map, Value};
@@ -309,6 +312,47 @@ proptest! {
             }
             // Ranking is total too, and honors the requested cap.
             prop_assert!(report.top_fixes(3).len() <= 3);
+        }
+    }
+
+    // ---- Tool-set advisor: total and deterministic ------------------------
+
+    /// The tool-set advisor never panics over an arbitrary tool list and
+    /// arbitrary per-tool costs, and is **deterministic**: the same input yields
+    /// byte-identical findings in the same order, stably sorted by severity.
+    #[test]
+    fn advisor_is_total_and_deterministic(
+        tools in arb_tools(),
+        costs in prop::collection::vec(0usize..5_000, 0..12),
+    ) {
+        // Attach arbitrary token counts to whatever tools exist; extra costs are
+        // ignored and missing ones default to 0 inside the advisor.
+        let tool_costs: Vec<ToolTokenCost> = tools
+            .iter()
+            .zip(costs.iter())
+            .map(|(t, &tok)| ToolTokenCost { name: t.name.clone(), tokens: tok })
+            .collect();
+
+        let a = advise_tool_set(&tools, &tool_costs);
+        let b = advise_tool_set(&tools, &tool_costs);
+
+        // Determinism: identical (severity, message, fix) sequence.
+        prop_assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            prop_assert!(x.severity == y.severity);
+            prop_assert_eq!(&x.message, &y.message);
+            prop_assert_eq!(&x.fix, &y.fix);
+        }
+
+        // Stable ordering: severity rank is non-decreasing down the list.
+        let rank = |s| match s {
+            Severity::High => 0u8,
+            Severity::Medium => 1,
+            Severity::Low => 2,
+            Severity::Info => 3,
+        };
+        for w in a.windows(2) {
+            prop_assert!(rank(w[0].severity) <= rank(w[1].severity));
         }
     }
 }

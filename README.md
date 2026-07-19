@@ -141,6 +141,47 @@ drops the grade fails the build. See
 [`docs/percentiles-schema.md`](docs/percentiles-schema.md) for the dataset
 format.
 
+#### Tool-set advisor
+
+The rubric grades one tool at a time. But the failures that most reliably make a
+model pick the *wrong* tool are emergent — they live in the relationship
+*between* tools. `jig check` runs three deterministic detectors (no LLM) and, when
+any fire, prints an `Advisor (tool-set)` block between the dimension lines and Top
+fixes. The findings are tagged `tool_set` and are **not** scored into the
+composite (whether to weight tool-set health is a separate decision), though they
+can appear in Top fixes.
+
+- **Naming collisions & ambiguity.** Tool names are tokenized (kebab/snake/camel
+  all normalized) and compared. Names that reduce to the same action modulo known
+  synonyms are flagged `high`; names that differ only by a generic word, or tools
+  whose descriptions overlap ≥ 80% (Jaccard, stopwords removed), are `medium`:
+
+  ```
+  [high] `get_status` vs `fetch_status`: models cannot reliably distinguish these — same action, interchangeable words
+    → merge them into one tool, or rename one with a token that names the real difference
+  ```
+
+- **Accuracy cliff.** Selection accuracy degrades materially once a server exposes
+  more than a few dozen tools — a property of the count, not any one tool. `> 30`
+  tools is `medium`, `> 50` is `high`:
+
+  ```
+  [medium] 31 tools exposed — past ~30 a model's tool-selection accuracy degrades materially
+    → split into focused servers or defer rarely-used tools (server-side tool search is the structural fix)
+  ```
+
+- **Cost dominance.** Reusing the token budget already computed, a tool costing
+  more than 3× the server's median (and over 200 tokens), or a top-3 that carries
+  the majority of the surface's tokens, is called out:
+
+  ```
+  [medium] `take_screenshot` costs 231 tok — 8.2x your median tool; it dominates the surface's context bill
+    → trim its description or flatten its input schema
+  ```
+
+The same block is available after the token table with
+[`jig budget --advise`](#jig-budget--the-token-budget-engine).
+
 ### `jig context` — see exactly what the model sees
 
 The founding promise: developers write tool descriptions blind, never seeing the
@@ -343,6 +384,7 @@ jig budget --stdio "<cmd>" --model gpt-4o --model gpt-4     # a column per model
 jig budget --stdio "<cmd>" --markdown                       # shareable card for a PR/tweet
 jig budget --stdio "<cmd>" --json                           # machine output + exactness metadata
 jig budget --stdio "<cmd>" --model claude-sonnet --exact-anthropic  # exact Claude total via the API
+jig budget --stdio "<cmd>" --advise                         # table + the tool-set advisor block
 ```
 
 **Accuracy honesty is a hard rule.** Numbers are exact where we can be exact and

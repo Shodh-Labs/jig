@@ -223,6 +223,13 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
         s.push_str(&dimension_line(d, label_width));
     }
 
+    // Tool-set advisor: emergent, cross-tool problems the per-tool dimensions
+    // can't see. Rendered only when it has something to say.
+    if let Some(section) = crate::advisor_view::render_section(&report.advisor) {
+        s.push('\n');
+        s.push_str(&section);
+    }
+
     // Top fixes.
     let fixes = report.top_fixes(3);
     if !fixes.is_empty() {
@@ -332,6 +339,7 @@ fn render_json(report: &CheckReport) -> String {
             "provenance": provenance_json(&report.context_provenance),
         },
         "dimensions": dimensions,
+        "advisor": report.advisor.iter().map(finding_json).collect::<Vec<_>>(),
         "topFixes": top_fixes,
     });
     format!(
@@ -468,6 +476,79 @@ mod tests {
             json!({ "type": "object", "properties": { "text": {} } }),
         );
         input
+    }
+
+    /// A tool titled, described (non-terse, non-verbose) and annotated, with no
+    /// parameters — so it draws *no* per-tool dimension finding and any advisor
+    /// finding stands alone in the report.
+    fn clean_tool(name: &str, desc: &str) -> Tool {
+        let mut m = serde_json::Map::new();
+        m.insert("name".to_string(), json!(name));
+        m.insert("title".to_string(), json!(format!("The {name} tool")));
+        m.insert("description".to_string(), json!(desc));
+        m.insert(
+            "inputSchema".to_string(),
+            json!({ "type": "object", "properties": {}, "annotations": {} }),
+        );
+        serde_json::from_value(Value::Object(m)).unwrap()
+    }
+
+    /// A fixture that fires every analyzer-1 rule plus the accuracy cliff: a
+    /// synonym collision (`get_status`/`fetch_status`), a generic-subset pair
+    /// (`get_user`/`get_user_info`), a description near-duplicate pair, and 31
+    /// tools total (past the ~30 cliff). The 25 filler tools carry unique,
+    /// non-overlapping descriptions so they draw no advisories of their own.
+    fn advisor_input() -> CheckInput {
+        let mut tools = vec![
+            clean_tool(
+                "get_status",
+                "Return the current status of the primary job.",
+            ),
+            clean_tool(
+                "fetch_status",
+                "Retrieve the present status of the primary job.",
+            ),
+            clean_tool("get_user", "Return the user account record by identifier."),
+            clean_tool(
+                "get_user_info",
+                "Return the user account record plus contact number.",
+            ),
+            clean_tool(
+                "list_reports",
+                "alpha bravo charlie delta echo foxtrot golf hotel unique1",
+            ),
+            clean_tool(
+                "list_summaries",
+                "alpha bravo charlie delta echo foxtrot golf hotel unique2",
+            ),
+        ];
+        for i in 0..25 {
+            tools.push(clean_tool(
+                &format!("filler_{i:02}"),
+                &format!("uniqueverb{i} uniquenoun{i} uniqueadj{i} uniqueadverb{i} distinctly"),
+            ));
+        }
+        CheckInput {
+            tools,
+            ..mock_input()
+        }
+    }
+
+    #[test]
+    fn human_report_advisor_snapshot() {
+        let report = evaluate(&advisor_input(), None);
+        // The advisor fired all four expected classes.
+        assert!(report
+            .advisor
+            .iter()
+            .any(|f| f.message.contains("cannot reliably distinguish")));
+        assert!(report.advisor.iter().any(|f| f.message.contains("generic")));
+        assert!(report.advisor.iter().any(|f| f.message.contains("overlap")));
+        assert!(report
+            .advisor
+            .iter()
+            .any(|f| f.message.contains("tools exposed")));
+        insta::assert_snapshot!("check_human_advisor", render_human(&report));
     }
 
     #[test]
