@@ -48,6 +48,10 @@ pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// / the `--max-message-bytes` flag; `None` disables the cap.
 pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 
+/// Grace period, on a detected disconnect, to let the separate stderr-drain
+/// task flush the child's final lines before they are quoted in the error.
+const DISCONNECT_GRACE: Duration = Duration::from_millis(100);
+
 /// How many trailing stderr lines to retain for error context.
 const STDERR_TAIL_LINES: usize = 20;
 /// Max characters kept per retained stderr line (defends against a single
@@ -203,6 +207,8 @@ impl StdioTransport {
             // exited during the handshake). If so, prefer the richer diagnosis
             // that names the exit status and the server's own stderr.
             if self.child_exit_status().is_some() {
+                // Let the stderr drain surface the child's last words first.
+                tokio::time::sleep(DISCONNECT_GRACE).await;
                 return Err(self.describe_disconnect(method, id));
             }
             return Err(write_err);
@@ -216,8 +222,18 @@ impl StdioTransport {
         // closed (EOF), the stream faulted, or the child crashed. Rather than a
         // bare "connection closed", report the specific cause — a recorded read
         // fault (e.g. an oversized message) if there is one, otherwise the
-        // child's exit status and its last stderr lines.
-        let recv = async { rx.await.map_err(|_| self.describe_disconnect(method, id)) };
+        // child's exit status and its last stderr lines. A brief grace lets the
+        // separate stderr-drain task flush the child's final lines so they can
+        // be quoted in the error.
+        let recv = async {
+            match rx.await {
+                Ok(v) => Ok(v),
+                Err(_) => {
+                    tokio::time::sleep(DISCONNECT_GRACE).await;
+                    Err(self.describe_disconnect(method, id))
+                }
+            }
+        };
 
         let response = match self.request_timeout {
             Some(dur) => match tokio::time::timeout(dur, recv).await {

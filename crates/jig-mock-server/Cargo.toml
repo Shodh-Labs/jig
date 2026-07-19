@@ -20,3 +20,4 @@ tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros"] }
 [dev-dependencies]
 jig-core = { path = "../jig-core" }
 tokio.workspace = true
+insta = { workspace = true }

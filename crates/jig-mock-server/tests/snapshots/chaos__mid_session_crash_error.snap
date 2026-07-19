@@ -1,0 +1,5 @@
+---
+source: crates/jig-mock-server/tests/chaos.rs
+expression: msg
+---
+transport error: server process exited with code 7 before responding to 'tools/list' (id 2). Last server stderr: jig-mock-server: client initialized | jig-mock-server: chaos mid-session-crash — exiting before tools/list response

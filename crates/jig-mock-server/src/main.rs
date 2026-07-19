@@ -20,7 +20,11 @@
 //!   but then return HTTP 404 for every post-handshake request, to exercise a
 //!   client's session-expiry path.
 //! * `--pollute-stdout` / `--paginate` — (stdio mode) test fixtures, see below.
+//! * `--chaos <mode[,mode...]>` — (stdio mode) the **hostile-server chaos
+//!   catalog**: deliberately misbehave in one specific way so Jig's degradation
+//!   can be asserted. Repeatable and/or comma-separated. See [`Chaos`].
 
+use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
@@ -28,6 +32,60 @@ use serde_json::{json, Value};
 mod http;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// Size of the `giant-message` payload (~20 MiB of text in one response).
+const GIANT_BYTES: usize = 20 * 1024 * 1024;
+
+/// The hostile-server chaos catalog. Each mode makes the stdio server misbehave
+/// in exactly one way — never a panic, never an unbounded hang on the server's
+/// part beyond what the mode names — so an integration test can assert Jig
+/// produces a specific, actionable error/warning for it.
+///
+/// Modes (all trigger on the first post-handshake `tools/list`, except the two
+/// startup/handshake modes):
+///
+/// * `binary-garbage` — raw non-UTF-8 bytes on stdout at startup, then serve
+///   normally (a robust client survives and flags the pollution).
+/// * `immediate-exit` — exit right after spawn, before the handshake.
+/// * `mid-session-crash` — answer `initialize`, then exit before the next
+///   request's response.
+/// * `malformed-json` — a truncated/garbled JSON line for `tools/list`.
+/// * `giant-message` — a single ~20 MiB `tools/list` response.
+/// * `slow-drip` — write the `tools/list` response one byte at a time.
+/// * `wrong-id` — answer `tools/list` with an id that was never requested.
+/// * `duplicate-id` — answer `tools/list` twice with the same id.
+/// * `no-newline` — a valid `tools/list` response but with no trailing newline,
+///   then stay alive (nothing is ever framed, so the request times out).
+#[derive(Default, Clone)]
+struct Chaos {
+    modes: HashSet<String>,
+}
+
+impl Chaos {
+    /// Collect every `--chaos <value>` occurrence, splitting comma lists, into a
+    /// set of mode names.
+    fn parse(args: &[String]) -> Chaos {
+        let mut modes = HashSet::new();
+        let mut it = args.iter();
+        while let Some(a) = it.next() {
+            if a == "--chaos" {
+                if let Some(v) = it.next() {
+                    for m in v.split(',') {
+                        let m = m.trim();
+                        if !m.is_empty() {
+                            modes.insert(m.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Chaos { modes }
+    }
+
+    fn has(&self, mode: &str) -> bool {
+        self.modes.contains(mode)
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -40,7 +98,17 @@ fn main() {
         return;
     }
 
-    run_stdio();
+    let chaos = Chaos::parse(&args);
+
+    // `immediate-exit`: die right after spawn, before the handshake even starts.
+    // The client must report a clear "server exited during handshake" error that
+    // includes the exit code and this stderr line.
+    if chaos.has("immediate-exit") {
+        eprintln!("jig-mock-server: chaos immediate-exit — exiting before handshake");
+        std::process::exit(3);
+    }
+
+    run_stdio(chaos);
 }
 
 /// Parse `--http <port>` from the argument list, if present.
@@ -52,7 +120,7 @@ fn http_port(args: &[String]) -> Option<u16> {
 /// The original stdio server loop: read one JSON-RPC message per line from
 /// stdin, write one per line to stdout. Nothing but MCP messages is written to
 /// stdout; diagnostics go to stderr.
-fn run_stdio() {
+fn run_stdio(chaos: Chaos) {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -66,6 +134,16 @@ fn run_stdio() {
             out,
             "[startup] mock server listening (this line is NOT JSON-RPC)"
         );
+        let _ = out.flush();
+    }
+
+    // Chaos `binary-garbage`: raw non-UTF-8 bytes on stdout before any protocol
+    // traffic. A robust client must decode lossily, flag the pollution, and
+    // still complete the handshake — it must not abort the whole stream.
+    if chaos.has("binary-garbage") {
+        // Invalid UTF-8 (lone continuation / reserved bytes), newline-terminated
+        // so it lands as a single polluting "line".
+        let _ = out.write_all(&[0xFF, 0xFE, 0x00, 0x80, 0xC0, b'\n']);
         let _ = out.flush();
     }
 
@@ -114,6 +192,15 @@ fn run_stdio() {
             continue;
         }
 
+        // Chaos that targets the first post-handshake operation (`tools/list`).
+        // `initialize` always succeeds so the handshake itself is never the
+        // variable under test (except for the two handshake-phase modes).
+        if method == "tools/list" && apply_tools_list_chaos(&mut out, &chaos, &id) {
+            // The chaos path fully handled (or intentionally abandoned) this
+            // request; move on without the normal response.
+            continue;
+        }
+
         let response = match method {
             "initialize" => handle_initialize(id),
             "tools/list" if paginate => handle_tools_list_paginated(id, request.get("params")),
@@ -127,6 +214,98 @@ fn run_stdio() {
             break;
         }
     }
+}
+
+/// Apply any `tools/list`-targeting chaos mode. Returns `true` if the request
+/// was handled here (the caller should skip the normal response), `false` if no
+/// chaos applied and the normal handler should run.
+///
+/// Never panics; the whole point is to misbehave *cleanly* so Jig's reaction is
+/// the thing under test.
+fn apply_tools_list_chaos(out: &mut impl Write, chaos: &Chaos, id: &Value) -> bool {
+    // `mid-session-crash`: the handshake succeeded, but the server dies before
+    // answering the first real request. Exit code + stderr must reach the client.
+    if chaos.has("mid-session-crash") {
+        eprintln!("jig-mock-server: chaos mid-session-crash — exiting before tools/list response");
+        let _ = out.flush();
+        std::process::exit(7);
+    }
+
+    // `malformed-json`: a truncated JSON-RPC line (valid framing — it ends in a
+    // newline — but unparseable), so the client records stdout pollution and the
+    // request times out with the method named.
+    if chaos.has("malformed-json") {
+        let garbled = format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"tools\":[");
+        let _ = writeln!(out, "{garbled}");
+        let _ = out.flush();
+        return true;
+    }
+
+    // `wrong-id`: a well-formed response carrying an id that was never
+    // requested. The client cannot correlate it (records it, routes nothing) and
+    // the real request times out.
+    if chaos.has("wrong-id") {
+        let resp = handle_tools_list(json!(987654321_i64));
+        let _ = write_message(out, &resp);
+        return true;
+    }
+
+    // `duplicate-id`: answer the same request twice. The first wins and completes
+    // the call; the second is surplus and lands in the tap.
+    if chaos.has("duplicate-id") {
+        let resp = handle_tools_list(id.clone());
+        let _ = write_message(out, &resp);
+        let _ = write_message(out, &resp);
+        return true;
+    }
+
+    // `giant-message`: a single ~20 MiB response. Under the default 64 MiB cap
+    // the client must handle it; under a lower `--max-message-bytes` it must fail
+    // with a clear size error.
+    if chaos.has("giant-message") {
+        let resp = handle_tools_list_giant(id.clone());
+        let _ = write_message(out, &resp);
+        return true;
+    }
+
+    // `slow-drip`: the correct response, but written one byte at a time, each
+    // flushed separately so the client's reader observes many partial reads. A
+    // small delay is inserted periodically (not every byte: on Windows the
+    // ~15 ms timer granularity would otherwise make an 800-byte response take
+    // tens of seconds). The client must reassemble it and complete under a
+    // generous timeout.
+    if chaos.has("slow-drip") {
+        let resp = handle_tools_list(id.clone());
+        let mut text = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
+        text.push('\n');
+        for (i, b) in text.as_bytes().iter().enumerate() {
+            let _ = out.write_all(&[*b]);
+            let _ = out.flush();
+            if i % 16 == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        return true;
+    }
+
+    // `no-newline`: a valid JSON response but with no trailing newline, then stay
+    // alive so no EOF frames it either. Nothing is ever delivered, so the request
+    // times out and the tap shows no inbound response.
+    if chaos.has("no-newline") {
+        let resp = handle_tools_list(id.clone());
+        let text = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
+        let _ = out.write_all(text.as_bytes()); // deliberately no '\n'
+        let _ = out.flush();
+        eprintln!("jig-mock-server: chaos no-newline — response written without newline; holding");
+        // Block until the client gives up and closes stdin (EOF ends the wait).
+        let mut sink = String::new();
+        while io::stdin().lock().read_line(&mut sink).unwrap_or(0) > 0 {
+            sink.clear();
+        }
+        std::process::exit(0);
+    }
+
+    false
 }
 
 /// Write one newline-delimited JSON-RPC message and flush.
@@ -210,6 +389,25 @@ fn handle_tools_list(id: Value) -> Value {
                 {
                     "name": "always_fails",
                     "description": "A tool that always reports an error, for testing error paths.",
+                    "inputSchema": { "type": "object", "properties": {} }
+                }
+            ]
+        }),
+    )
+}
+
+/// `giant-message` variant of `tools/list`: a single tool whose description is
+/// ~20 MiB, producing one multi-megabyte response line. Valid JSON throughout —
+/// the size is the only hostile property.
+fn handle_tools_list_giant(id: Value) -> Value {
+    let giant = "A".repeat(GIANT_BYTES);
+    success_response(
+        id,
+        json!({
+            "tools": [
+                {
+                    "name": "giant",
+                    "description": giant,
                     "inputSchema": { "type": "object", "properties": {} }
                 }
             ]

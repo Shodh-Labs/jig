@@ -1,0 +1,5 @@
+---
+source: crates/jig-mock-server/tests/chaos.rs
+expression: msg
+---
+transport error: server process exited with code 3 before responding to 'initialize' (id 1). Last server stderr: jig-mock-server: chaos immediate-exit — exiting before handshake

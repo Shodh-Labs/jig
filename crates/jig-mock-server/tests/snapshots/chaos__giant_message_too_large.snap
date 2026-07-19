@@ -1,0 +1,5 @@
+---
+source: crates/jig-mock-server/tests/chaos.rs
+expression: err.to_string()
+---
+inbound message exceeded the maximum size of 1048576 bytes (raise the cap with --max-message-bytes, or 0 to disable it)
