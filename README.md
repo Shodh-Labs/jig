@@ -57,6 +57,9 @@ cargo build
     --tool echo --args '{"text":"hello"}'
 # what does this server cost in context tokens, per tool, per model?
 ./target/debug/jig budget --stdio "./target/debug/jig-mock-server"
+# which tool does a real model pick for a task? (needs ANTHROPIC_API_KEY / OPENAI_API_KEY)
+./target/debug/jig bench --stdio "./target/debug/jig-mock-server" \
+    --task "Book a table for two tonight" --model gpt-4o --runs 5
 ```
 
 ### Transports: stdio and Streamable HTTP
@@ -129,6 +132,71 @@ Exit codes: `0` success, `2` when a tool reports an error, non-zero otherwise.
 
 Jig has been validated against a battery of real public MCP servers — see
 [`docs/compat/`](docs/compat/) for the compatibility report.
+
+### `jig bench` — the model-in-the-loop bench
+
+`jig budget` prices a tool surface statically. `jig bench` does something no
+other tool does: it puts a **real model in the loop** and measures which tool
+that model actually picks for a natural-language task, with what arguments,
+across repeated runs. MCP integration is probabilistic — the same task can
+select different tools on different runs — and `jig bench` makes that visible and
+measurable.
+
+```sh
+jig bench --stdio "<cmd>" --task "Find the docs page about rate limits" \
+    --model claude-sonnet --runs 5
+jig bench --stdio "<cmd>" --task "<task>" --model gpt-4o --json   # full machine output
+jig bench --http "https://example.com/mcp" --task "<task>" --model claude-opus
+```
+
+What it does, honestly:
+
+1. Connects to the server (any existing transport) and lists its tools.
+2. Assembles a **real** tool-use API request — the server's tools mapped to the
+   provider's function-calling format, the task as the user message, and a
+   single documented system-prompt constant (visible in `--json`; it is part of
+   the methodology, not a black box).
+3. Sends it `--runs` times (default `3`, sequential) at `--temp` (default `1.0`,
+   always recorded).
+4. Classifies each response into the outcome taxonomy: `selected` (which tool +
+   args), `no_tool` (answered in text), `hallucinated_tool` (a name the server
+   doesn't expose), or `provider_error` (an API failure after bounded retries).
+5. Validates a selected call's arguments against the tool's JSON Schema (types,
+   `required`, `enum`, nested objects) and reports the **distribution** plus a
+   per-run table and a one-line takeaway (`consistent` vs `UNSTABLE`).
+
+```
+Distribution:
+  search_docs  4/5 (80%)
+  fetch_page   1/5 (20%)
+
+Takeaway: UNSTABLE: tool selection varied across runs (2 different tools) — see per-run detail
+```
+
+**Bring your own key.** `jig bench` calls a real provider, so it needs a key
+read **from the environment only**: `ANTHROPIC_API_KEY` for `claude-*` models,
+`OPENAI_API_KEY` for `gpt-*`. A missing key fails fast with a clear message
+naming the variable, *before* connecting to the server. The key is never logged,
+never written to `--json`, never placed in an error message, and never in the
+rendered request (auth rides in a request header, not the body). The default
+model is `claude-sonnet` if `ANTHROPIC_API_KEY` is set, else `gpt-4o`; override
+the concrete API model string with `--api-model` (hardcoded mappings age).
+
+**What it measures — and doesn't.** It measures how a specific model, at a
+specific temperature, maps *your* task onto *this* server's tool surface, and how
+stable that mapping is across runs. It does **not** execute the selected tool,
+judge whether the selection was "correct", or benchmark model quality in the
+abstract — it is a microscope on the tool-selection step of MCP integration, with
+every input (system prompt, rendered request, temperature, N) and every raw
+provider response inspectable via `--json`.
+
+Two provider dialects are supported, verified against the current provider docs:
+the **Anthropic Messages API** (`tools` / `tool_use` blocks) and **OpenAI Chat
+Completions** (`tools` / `tool_calls`). Rate-limit (`429`) and server (`5xx`)
+responses are retried with bounded back-off (respecting `Retry-After`); a
+persistent failure degrades into a `provider_error` outcome rather than crashing
+the bench — a misbehaving provider is Jig's to handle informatively, exactly as
+a misbehaving server is.
 
 ## License
 
