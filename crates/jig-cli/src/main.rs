@@ -9,12 +9,25 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use jig_core::{Client, ProtocolTap, ToolCallResult};
+use jig_core::{Client, ClientOptions, ProtocolTap, ToolCallResult};
 use serde_json::{json, Value};
 
 mod render;
+
+/// Default per-request timeout in seconds, mirrored from
+/// [`jig_core::DEFAULT_REQUEST_TIMEOUT`] so it can be a clap default.
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+
+/// Translate the CLI `--timeout <seconds>` value into [`ClientOptions`].
+/// `0` disables the timeout (wait forever).
+fn client_options(timeout_secs: u64) -> ClientOptions {
+    ClientOptions {
+        request_timeout: (timeout_secs != 0).then(|| Duration::from_secs(timeout_secs)),
+    }
+}
 
 /// Exit code used when a tool call succeeds at the protocol level but the tool
 /// reports `isError: true`.
@@ -47,6 +60,9 @@ enum Command {
         /// Write the raw protocol traffic to this file as JSONL.
         #[arg(long, value_name = "FILE")]
         tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
     },
     /// Invoke a single tool and print its result.
     Call {
@@ -65,6 +81,9 @@ enum Command {
         /// Write the raw protocol traffic to this file as JSONL.
         #[arg(long, value_name = "FILE")]
         tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
     },
 }
 
@@ -82,14 +101,30 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<ExitCode, String> {
     match cli.command {
-        Command::Inspect { stdio, json, tap } => inspect(&stdio, json, tap.as_deref()).await,
+        Command::Inspect {
+            stdio,
+            json,
+            tap,
+            timeout,
+        } => inspect(&stdio, json, tap.as_deref(), timeout).await,
         Command::Call {
             stdio,
             tool,
             args,
             json,
             tap,
-        } => call(&stdio, &tool, args.as_deref(), json, tap.as_deref()).await,
+            timeout,
+        } => {
+            call(
+                &stdio,
+                &tool,
+                args.as_deref(),
+                json,
+                tap.as_deref(),
+                timeout,
+            )
+            .await
+        }
     }
 }
 
@@ -98,12 +133,13 @@ async fn inspect(
     stdio: &str,
     as_json: bool,
     tap_path: Option<&std::path::Path>,
+    timeout_secs: u64,
 ) -> Result<ExitCode, String> {
     let (program, args) = split_command(stdio)?;
 
     // Own the tap so we can flush it even if a later step fails.
     let tap = ProtocolTap::new();
-    let result = inspect_inner(&program, &args, tap.clone(), as_json).await;
+    let result = inspect_inner(&program, &args, tap.clone(), as_json, timeout_secs).await;
 
     write_tap_if_requested(&tap, tap_path);
     result
@@ -114,8 +150,9 @@ async fn inspect_inner(
     args: &[String],
     tap: ProtocolTap,
     as_json: bool,
+    timeout_secs: u64,
 ) -> Result<ExitCode, String> {
-    let client = Client::connect_with_tap(program, args, tap)
+    let client = Client::connect_with_options(program, args, tap, client_options(timeout_secs))
         .await
         .map_err(|e| format!("failed to connect: {e}"))?;
 
@@ -155,6 +192,7 @@ async fn call(
     args_json: Option<&str>,
     as_json: bool,
     tap_path: Option<&std::path::Path>,
+    timeout_secs: u64,
 ) -> Result<ExitCode, String> {
     let (program, args) = split_command(stdio)?;
 
@@ -164,12 +202,22 @@ async fn call(
     };
 
     let tap = ProtocolTap::new();
-    let result = call_inner(&program, &args, tap.clone(), tool, arguments, as_json).await;
+    let result = call_inner(
+        &program,
+        &args,
+        tap.clone(),
+        tool,
+        arguments,
+        as_json,
+        timeout_secs,
+    )
+    .await;
 
     write_tap_if_requested(&tap, tap_path);
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn call_inner(
     program: &str,
     args: &[String],
@@ -177,8 +225,9 @@ async fn call_inner(
     tool: &str,
     arguments: Value,
     as_json: bool,
+    timeout_secs: u64,
 ) -> Result<ExitCode, String> {
-    let client = Client::connect_with_tap(program, args, tap)
+    let client = Client::connect_with_options(program, args, tap, client_options(timeout_secs))
         .await
         .map_err(|e| format!("failed to connect: {e}"))?;
 

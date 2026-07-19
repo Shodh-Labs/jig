@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -27,6 +28,10 @@ use crate::tap::{Direction, ProtocolTap};
 /// Map of in-flight request ids to the channel awaiting their response.
 type PendingMap = Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>;
 
+/// Default per-request timeout: a server that accepts a request and never
+/// answers must not hang Jig forever. Overridable at spawn (`None` disables it).
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A live JSON-RPC-over-stdio connection to a spawned MCP server.
 pub struct StdioTransport {
     child: Mutex<Child>,
@@ -34,17 +39,40 @@ pub struct StdioTransport {
     pending: PendingMap,
     tap: ProtocolTap,
     next_id: AtomicI64,
+    /// Per-request timeout. `None` means wait indefinitely.
+    request_timeout: Option<Duration>,
     reader: JoinHandle<()>,
     stderr_drain: JoinHandle<()>,
 }
 
 impl StdioTransport {
-    /// Spawn `program` with `args` and wire up the stdio transport.
+    /// Spawn `program` with `args` and wire up the stdio transport, using the
+    /// [`DEFAULT_REQUEST_TIMEOUT`] for every request.
     ///
     /// The child is launched with `kill_on_drop` so a dropped transport never
     /// leaks a server process.
     pub fn spawn(program: &str, args: &[String], tap: ProtocolTap) -> Result<Self> {
-        let mut child = Command::new(program)
+        Self::spawn_with_timeout(program, args, tap, Some(DEFAULT_REQUEST_TIMEOUT))
+    }
+
+    /// Like [`StdioTransport::spawn`] but with an explicit per-request timeout.
+    /// `None` disables the timeout (wait forever — use with care).
+    pub fn spawn_with_timeout(
+        program: &str,
+        args: &[String],
+        tap: ProtocolTap,
+        request_timeout: Option<Duration>,
+    ) -> Result<Self> {
+        // On Windows, `npx`/`npm`/`yarn` etc. are `.cmd` shims, and
+        // `Command::new("npx")` looks for a file named literally "npx" — which
+        // does not exist — so the spawn fails with "program not found". The OS
+        // CreateProcess call does *not* apply PATHEXT the way the shell does.
+        // Resolve the program against PATH + PATHEXT ourselves so the everyday
+        // `jig inspect --stdio "npx -y <server>"` invocation just works. Modern
+        // Rust (>=1.77) then spawns the resolved `.cmd`/`.bat` safely via the
+        // command processor with proper argument escaping. See `resolve_program`.
+        let resolved = resolve_program(program);
+        let mut child = Command::new(&resolved)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -77,6 +105,7 @@ impl StdioTransport {
             pending,
             tap,
             next_id: AtomicI64::new(1),
+            request_timeout,
             reader,
             stderr_drain,
         })
@@ -111,11 +140,32 @@ impl StdioTransport {
             lock(&self.pending).remove(&id);
         })?;
 
-        let response = rx.await.map_err(|_| {
-            JigError::transport(format!(
-                "connection closed before response to '{method}' (id {id})"
-            ))
-        })?;
+        // Await the correlated response, bounded by the request timeout. A
+        // server that accepts the request but never answers must surface as a
+        // named `Timeout`, not an indefinite hang.
+        let recv = async {
+            rx.await.map_err(|_| {
+                JigError::transport(format!(
+                    "connection closed before response to '{method}' (id {id})"
+                ))
+            })
+        };
+
+        let response = match self.request_timeout {
+            Some(dur) => match tokio::time::timeout(dur, recv).await {
+                Ok(result) => result?,
+                Err(_elapsed) => {
+                    // Give up on this id so a late response is dropped cleanly
+                    // rather than routed to a channel no one is holding.
+                    lock(&self.pending).remove(&id);
+                    return Err(JigError::Timeout {
+                        method: method.to_string(),
+                        elapsed: dur,
+                    });
+                }
+            },
+            None => recv.await?,
+        };
 
         parse_response(response)
     }
@@ -177,6 +227,68 @@ impl StdioTransport {
 /// Lock helper that recovers from poisoning instead of panicking.
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Resolve a program name to a concrete path the OS can spawn.
+///
+/// On non-Windows platforms this is the identity: the kernel's `execvp`-style
+/// lookup already searches `PATH` and there are no implicit extensions.
+///
+/// On Windows it is *not* the identity. `CreateProcess` (what `std`/`tokio`
+/// call) does not consult `PATHEXT`, so `Command::new("npx")` searches for a
+/// file named exactly `npx` and fails — even though `npx.cmd` sits right there
+/// on `PATH`. Node's `npx`/`npm`, Yarn, pnpm, and countless other tools ship
+/// only as `.cmd`/`.bat` shims, so this bites essentially every real-world
+/// `jig inspect --stdio "npx ..."`. We reproduce the shell's resolution: if the
+/// name has no directory component and no extension, walk `PATH` looking for
+/// `name` + each `PATHEXT` extension and return the first hit. Anything already
+/// absolute/relative, or already carrying an extension, is returned untouched.
+/// If nothing matches we return the original so the caller still gets the
+/// familiar "program not found" spawn error.
+#[cfg(not(windows))]
+fn resolve_program(program: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(program)
+}
+
+#[cfg(windows)]
+fn resolve_program(program: &str) -> std::path::PathBuf {
+    use std::path::{Path, PathBuf};
+
+    let as_path = Path::new(program);
+
+    // A path with a directory component or an explicit extension is taken as
+    // authored — the user pointed us at a specific file.
+    if as_path.extension().is_some()
+        || program.contains('/')
+        || program.contains('\\')
+        || program.contains(':')
+    {
+        return PathBuf::from(program);
+    }
+
+    // Extensions to try, from PATHEXT, falling back to the usual defaults.
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    let exts: Vec<String> = pathext
+        .split(';')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .map(|e| e.to_string())
+        .collect();
+
+    // Search each PATH directory for `program` + each candidate extension.
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            for ext in &exts {
+                let candidate = dir.join(format!("{program}{ext}"));
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+
+    // No shim found: hand back the original and let spawn report the failure.
+    PathBuf::from(program)
 }
 
 /// Parse a raw JSON-RPC response value into either its `result` or an error.
@@ -282,5 +394,44 @@ mod tests {
         let v = json!({ "jsonrpc": "2.0", "id": 1 });
         let err = parse_response(v).unwrap_err();
         assert!(matches!(err, JigError::Protocol(_)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_program_finds_cmd_shim_on_windows() {
+        // `cmd` is guaranteed present on Windows as `cmd.exe`, but there is no
+        // bare file named `cmd` — exactly the PATHEXT gap that breaks
+        // `Command::new("npx")`. Resolution must turn it into a real file.
+        let resolved = resolve_program("cmd");
+        assert!(
+            resolved.is_file(),
+            "expected a concrete existing file, got {resolved:?}"
+        );
+        assert_ne!(
+            resolved,
+            std::path::PathBuf::from("cmd"),
+            "resolution should have appended an extension"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_program_passes_through_explicit_paths_and_extensions() {
+        // A name that already carries an extension is honored verbatim.
+        assert_eq!(
+            resolve_program("server.exe"),
+            std::path::PathBuf::from("server.exe")
+        );
+        // A path with a directory component is the user's explicit choice.
+        assert_eq!(
+            resolve_program(r"C:\tools\server"),
+            std::path::PathBuf::from(r"C:\tools\server")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn resolve_program_is_identity_off_windows() {
+        assert_eq!(resolve_program("npx"), std::path::PathBuf::from("npx"));
     }
 }

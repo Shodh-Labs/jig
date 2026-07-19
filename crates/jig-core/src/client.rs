@@ -1,6 +1,8 @@
 //! The high-level MCP client: spawn a server, perform the handshake, and run
 //! the core operations, all while every message is captured by the tap.
 
+use std::time::Duration;
+
 use serde_json::{json, Value};
 
 use crate::error::{JigError, Result};
@@ -9,11 +11,28 @@ use crate::protocol::{
     LATEST_PROTOCOL_VERSION,
 };
 use crate::tap::ProtocolTap;
-use crate::transport::StdioTransport;
+use crate::transport::{StdioTransport, DEFAULT_REQUEST_TIMEOUT};
 
 /// Jig's identity, advertised to servers as `clientInfo`.
 const CLIENT_NAME: &str = "jig";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Tunable options for a [`Client`] connection.
+#[derive(Debug, Clone)]
+pub struct ClientOptions {
+    /// Per-request timeout applied to every JSON-RPC request (including the
+    /// initialize handshake). `None` waits indefinitely. Defaults to
+    /// [`DEFAULT_REQUEST_TIMEOUT`].
+    pub request_timeout: Option<Duration>,
+}
+
+impl Default for ClientOptions {
+    fn default() -> Self {
+        ClientOptions {
+            request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
+        }
+    }
+}
 
 /// A connected, initialized MCP client over a stdio transport.
 ///
@@ -33,13 +52,27 @@ impl Client {
 
     /// Like [`Client::connect`], but records into a caller-supplied tap. Use
     /// this when you want to own the tap (e.g. to write it out even if the
-    /// handshake fails).
+    /// handshake fails). Uses [`ClientOptions::default`].
     pub async fn connect_with_tap(
         program: &str,
         args: &[String],
         tap: ProtocolTap,
     ) -> Result<Self> {
-        let transport = StdioTransport::spawn(program, args, tap)?;
+        Self::connect_with_options(program, args, tap, ClientOptions::default()).await
+    }
+
+    /// Full-control constructor: caller-supplied tap and [`ClientOptions`]
+    /// (notably the per-request timeout). Spawns the server and completes the
+    /// handshake — which is itself bounded by the configured timeout, so a
+    /// server that never answers `initialize` fails fast instead of hanging.
+    pub async fn connect_with_options(
+        program: &str,
+        args: &[String],
+        tap: ProtocolTap,
+        options: ClientOptions,
+    ) -> Result<Self> {
+        let transport =
+            StdioTransport::spawn_with_timeout(program, args, tap, options.request_timeout)?;
         let init = Self::handshake(&transport).await?;
         Ok(Client { transport, init })
     }

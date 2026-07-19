@@ -12,6 +12,11 @@
 //! * [`JigError::Server`] — the server behaved correctly at the protocol
 //!   level and deliberately returned a JSON-RPC error object. This is a
 //!   *reported* error, distinct from Jig failing to talk to the server.
+//! * [`JigError::Timeout`] — the server accepted a request but did not answer
+//!   within the allotted time. A hang is a first-class failure mode Jig must
+//!   surface (naming the method), never wait out forever.
+
+use std::time::Duration;
 
 use serde_json::Value;
 use thiserror::Error;
@@ -40,6 +45,17 @@ pub enum JigError {
         message: String,
         /// Optional structured `data` payload attached by the server.
         data: Option<Value>,
+    },
+
+    /// The request was sent but no response arrived within the configured
+    /// timeout. The connection may still be alive; the server simply never
+    /// answered *this* method. Naming the method makes a hang diagnosable.
+    #[error("request '{method}' timed out after {elapsed:?} with no response")]
+    Timeout {
+        /// The JSON-RPC method whose response never arrived.
+        method: String,
+        /// How long Jig waited before giving up.
+        elapsed: Duration,
     },
 }
 

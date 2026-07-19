@@ -5,7 +5,9 @@
 //! The mock server binary path is provided by Cargo as `CARGO_BIN_EXE_<name>`
 //! because this test lives in the crate that defines that binary.
 
-use jig_core::{Client, Direction};
+use std::time::Duration;
+
+use jig_core::{Client, Direction, JigError, ProtocolTap, StdioTransport};
 use serde_json::json;
 
 /// Path to the freshly built mock-server binary for this test run.
@@ -132,4 +134,64 @@ async fn tap_serializes_to_jsonl() {
     }
 
     client.shutdown().await.expect("shutdown");
+}
+
+/// A server that accepts a request but never answers it must surface as a
+/// named [`JigError::Timeout`] within the configured window — never an
+/// indefinite hang. `test/hang` is the mock's deliberately-silent method.
+#[tokio::test]
+async fn request_that_gets_no_response_times_out() {
+    let transport = StdioTransport::spawn_with_timeout(
+        &mock_server(),
+        &[],
+        ProtocolTap::new(),
+        Some(Duration::from_millis(300)),
+    )
+    .expect("spawn");
+
+    let started = std::time::Instant::now();
+    let err = transport
+        .request("test/hang", json!({}))
+        .await
+        .expect_err("a silent server must time out, not hang");
+
+    match err {
+        JigError::Timeout { method, elapsed } => {
+            assert_eq!(method, "test/hang");
+            assert_eq!(elapsed, Duration::from_millis(300));
+        }
+        other => panic!("expected JigError::Timeout, got {other:?}"),
+    }
+    // Sanity: it actually gave up near the deadline, not after some long hang.
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "timeout took too long: {:?}",
+        started.elapsed()
+    );
+
+    transport.shutdown().await.expect("shutdown");
+}
+
+/// With the timeout disabled (`None`), a normal request still succeeds — the
+/// no-timeout path must not break ordinary operation.
+#[tokio::test]
+async fn no_timeout_still_completes_normal_requests() {
+    let transport =
+        StdioTransport::spawn_with_timeout(&mock_server(), &[], ProtocolTap::new(), None)
+            .expect("spawn");
+
+    let result = transport
+        .request(
+            "initialize",
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "0" }
+            }),
+        )
+        .await
+        .expect("initialize should succeed with no timeout");
+    assert_eq!(result["serverInfo"]["name"], "jig-mock-server");
+
+    transport.shutdown().await.expect("shutdown");
 }

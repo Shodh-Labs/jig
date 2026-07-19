@@ -34,11 +34,11 @@ pub mod protocol;
 pub mod tap;
 pub mod transport;
 
-pub use client::Client;
+pub use client::{Client, ClientOptions};
 pub use error::{JigError, Result};
 pub use protocol::{
     ContentBlock, Implementation, InitializeResult, Prompt, PromptArgument, Resource, Tool,
     ToolCallResult, LATEST_PROTOCOL_VERSION,
 };
 pub use tap::{Direction, ProtocolTap, TapEntry};
-pub use transport::StdioTransport;
+pub use transport::{StdioTransport, DEFAULT_REQUEST_TIMEOUT};

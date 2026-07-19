@@ -53,6 +53,14 @@ fn main() {
         }
         let id = id.unwrap_or(Value::Null);
 
+        // Test fixture: a request the server deliberately *accepts but never
+        // answers*, so a client's request-timeout path can be exercised
+        // deterministically. A real hung server looks exactly like this.
+        if method == "test/hang" {
+            eprintln!("jig-mock-server: received test/hang; intentionally not responding");
+            continue;
+        }
+
         let response = match method {
             "initialize" => handle_initialize(id),
             "tools/list" => handle_tools_list(id),
