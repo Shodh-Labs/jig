@@ -15,6 +15,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use jig_cli::{parse_headers, split_command};
 use jig_core::{Client, ClientOptions, ProtocolTap, ToolCallResult};
 use serde_json::{json, Value};
 
@@ -50,11 +51,17 @@ pub(crate) fn emit_line(s: &str) {
 /// [`jig_core::DEFAULT_REQUEST_TIMEOUT`] so it can be a clap default.
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
-/// Translate the CLI `--timeout <seconds>` value into [`ClientOptions`].
-/// `0` disables the timeout (wait forever).
-pub(crate) fn client_options(timeout_secs: u64) -> ClientOptions {
+/// Default inbound message size cap in bytes, mirrored from
+/// [`jig_core::DEFAULT_MAX_MESSAGE_BYTES`] so it can be a clap default.
+const DEFAULT_MAX_MESSAGE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Translate the CLI `--timeout <seconds>` and `--max-message-bytes <n>` values
+/// into [`ClientOptions`]. A timeout of `0` disables the timeout (wait forever);
+/// a cap of `0` disables the inbound size cap (unbounded buffering).
+pub(crate) fn client_options(timeout_secs: u64, max_message_bytes: u64) -> ClientOptions {
     ClientOptions {
         request_timeout: (timeout_secs != 0).then(|| Duration::from_secs(timeout_secs)),
+        max_message_bytes: (max_message_bytes != 0).then_some(max_message_bytes as usize),
     }
 }
 
@@ -101,6 +108,11 @@ enum Command {
         /// Per-request timeout in seconds (0 = wait forever).
         #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
         timeout: u64,
+        /// Maximum size in bytes of a single inbound message (0 = no cap).
+        /// A larger message fails with a clear size error instead of being
+        /// buffered without limit.
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
     },
     /// Estimate the context-token cost of a server's tool surface, per model.
     Budget {
@@ -131,6 +143,11 @@ enum Command {
         /// Per-request timeout in seconds (0 = wait forever).
         #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
         timeout: u64,
+        /// Maximum size in bytes of a single inbound message (0 = no cap).
+        /// A larger message fails with a clear size error instead of being
+        /// buffered without limit.
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
         /// For Anthropic models: call the official count_tokens endpoint for an
         /// exact total (requires ANTHROPIC_API_KEY; degrades to the labelled
         /// approximation on any error).
@@ -164,6 +181,11 @@ enum Command {
         /// Per-request timeout in seconds (0 = wait forever).
         #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
         timeout: u64,
+        /// Maximum size in bytes of a single inbound message (0 = no cap).
+        /// A larger message fails with a clear size error instead of being
+        /// buffered without limit.
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
     },
 }
 
@@ -188,9 +210,10 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             json,
             tap,
             timeout,
+            max_message_bytes,
         } => {
             let target = Target::resolve(stdio, http, header)?;
-            inspect(&target, json, tap.as_deref(), timeout).await
+            inspect(&target, json, tap.as_deref(), timeout, max_message_bytes).await
         }
         Command::Budget {
             stdio,
@@ -201,6 +224,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             markdown,
             tap,
             timeout,
+            max_message_bytes,
             exact_anthropic,
         } => {
             let target = Target::resolve(stdio, http, header)?;
@@ -211,6 +235,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 markdown,
                 tap.as_deref(),
                 timeout,
+                max_message_bytes,
                 exact_anthropic,
             )
             .await
@@ -224,6 +249,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             json,
             tap,
             timeout,
+            max_message_bytes,
         } => {
             let target = Target::resolve(stdio, http, header)?;
             call(
@@ -233,6 +259,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 json,
                 tap.as_deref(),
                 timeout,
+                max_message_bytes,
             )
             .await
         }
@@ -295,8 +322,9 @@ impl Target {
         &self,
         tap: ProtocolTap,
         timeout_secs: u64,
+        max_message_bytes: u64,
     ) -> Result<Client, String> {
-        let opts = client_options(timeout_secs);
+        let opts = client_options(timeout_secs, max_message_bytes);
         let client = match self {
             Target::Stdio { program, args } => {
                 Client::connect_with_options(program, args, tap, opts).await
@@ -309,35 +337,24 @@ impl Target {
     }
 }
 
-/// Parse repeated `--header "Name: Value"` strings into (name, value) pairs.
-/// The value may itself contain colons (e.g. a URL), so only the first colon
-/// splits. Surrounding whitespace on the value is trimmed.
-pub(crate) fn parse_headers(raw: &[String]) -> Result<Vec<(String, String)>, String> {
-    let mut out = Vec::with_capacity(raw.len());
-    for h in raw {
-        let (name, value) = h
-            .split_once(':')
-            .ok_or_else(|| format!("invalid --header '{h}': expected \"Name: Value\""))?;
-        let name = name.trim();
-        let value = value.trim();
-        if name.is_empty() {
-            return Err(format!("invalid --header '{h}': empty header name"));
-        }
-        out.push((name.to_string(), value.to_string()));
-    }
-    Ok(out)
-}
-
 /// Run `jig inspect`.
 async fn inspect(
     target: &Target,
     as_json: bool,
     tap_path: Option<&std::path::Path>,
     timeout_secs: u64,
+    max_message_bytes: u64,
 ) -> Result<ExitCode, String> {
     // Own the tap so we can flush it even if a later step fails.
     let tap = ProtocolTap::new();
-    let result = inspect_inner(target, tap.clone(), as_json, timeout_secs).await;
+    let result = inspect_inner(
+        target,
+        tap.clone(),
+        as_json,
+        timeout_secs,
+        max_message_bytes,
+    )
+    .await;
 
     warn_non_protocol_output(&tap);
     write_tap_if_requested(&tap, tap_path);
@@ -349,8 +366,9 @@ async fn inspect_inner(
     tap: ProtocolTap,
     as_json: bool,
     timeout_secs: u64,
+    max_message_bytes: u64,
 ) -> Result<ExitCode, String> {
-    let client = target.connect(tap, timeout_secs).await?;
+    let client = target.connect(tap, timeout_secs, max_message_bytes).await?;
 
     let tools = client.list_tools().await.map_err(|e| e.to_string())?;
     let resources = client.list_resources().await.map_err(|e| e.to_string())?;
@@ -378,6 +396,7 @@ async fn inspect_inner(
 }
 
 /// Run `jig call`.
+#[allow(clippy::too_many_arguments)]
 async fn call(
     target: &Target,
     tool: &str,
@@ -385,6 +404,7 @@ async fn call(
     as_json: bool,
     tap_path: Option<&std::path::Path>,
     timeout_secs: u64,
+    max_message_bytes: u64,
 ) -> Result<ExitCode, String> {
     let arguments: Value = match args_json {
         Some(s) => serde_json::from_str(s).map_err(|e| format!("--args is not valid JSON: {e}"))?,
@@ -392,13 +412,23 @@ async fn call(
     };
 
     let tap = ProtocolTap::new();
-    let result = call_inner(target, tap.clone(), tool, arguments, as_json, timeout_secs).await;
+    let result = call_inner(
+        target,
+        tap.clone(),
+        tool,
+        arguments,
+        as_json,
+        timeout_secs,
+        max_message_bytes,
+    )
+    .await;
 
     warn_non_protocol_output(&tap);
     write_tap_if_requested(&tap, tap_path);
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn call_inner(
     target: &Target,
     tap: ProtocolTap,
@@ -406,8 +436,9 @@ async fn call_inner(
     arguments: Value,
     as_json: bool,
     timeout_secs: u64,
+    max_message_bytes: u64,
 ) -> Result<ExitCode, String> {
-    let client = target.connect(tap, timeout_secs).await?;
+    let client = target.connect(tap, timeout_secs, max_message_bytes).await?;
 
     let result: ToolCallResult = client
         .call_tool(tool, arguments)
@@ -469,77 +500,5 @@ pub(crate) fn write_tap_if_requested(tap: &ProtocolTap, path: Option<&std::path:
                 path.display()
             ),
         }
-    }
-}
-
-/// Split a single `--stdio` command string into program + args.
-///
-/// Supports double-quoted segments so paths containing spaces survive
-/// (e.g. `"C:\\Program Files\\srv.exe" --flag`). This is a small, purpose-built
-/// splitter rather than a full shell parser.
-pub(crate) fn split_command(input: &str) -> Result<(String, Vec<String>), String> {
-    let mut tokens: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut has_token = false;
-
-    for ch in input.chars() {
-        match ch {
-            '"' => {
-                in_quotes = !in_quotes;
-                has_token = true;
-            }
-            c if c.is_whitespace() && !in_quotes => {
-                if has_token {
-                    tokens.push(std::mem::take(&mut current));
-                    has_token = false;
-                }
-            }
-            c => {
-                current.push(c);
-                has_token = true;
-            }
-        }
-    }
-    if in_quotes {
-        return Err("unbalanced quotes in --stdio command".to_string());
-    }
-    if has_token {
-        tokens.push(current);
-    }
-
-    let mut it = tokens.into_iter();
-    let program = it
-        .next()
-        .ok_or_else(|| "--stdio command was empty".to_string())?;
-    Ok((program, it.collect()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn split_plain_command() {
-        let (p, a) = split_command("server --flag value").unwrap();
-        assert_eq!(p, "server");
-        assert_eq!(a, vec!["--flag", "value"]);
-    }
-
-    #[test]
-    fn split_quoted_path_with_spaces() {
-        let (p, a) = split_command("\"C:\\Program Files\\srv.exe\" --x 1").unwrap();
-        assert_eq!(p, "C:\\Program Files\\srv.exe");
-        assert_eq!(a, vec!["--x", "1"]);
-    }
-
-    #[test]
-    fn split_empty_is_error() {
-        assert!(split_command("   ").is_err());
-    }
-
-    #[test]
-    fn split_unbalanced_quote_is_error() {
-        assert!(split_command("\"oops").is_err());
     }
 }

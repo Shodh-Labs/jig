@@ -28,6 +28,7 @@ pub async fn run(
     as_markdown: bool,
     tap_path: Option<&Path>,
     timeout_secs: u64,
+    max_message_bytes: u64,
     exact_anthropic: bool,
 ) -> Result<ExitCode, String> {
     let models: Vec<String> = if models.is_empty() {
@@ -44,6 +45,7 @@ pub async fn run(
         as_json,
         as_markdown,
         timeout_secs,
+        max_message_bytes,
         exact_anthropic,
     )
     .await;
@@ -53,6 +55,7 @@ pub async fn run(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_inner(
     target: &Target,
     tap: ProtocolTap,
@@ -60,9 +63,10 @@ async fn run_inner(
     as_json: bool,
     as_markdown: bool,
     timeout_secs: u64,
+    max_message_bytes: u64,
     exact_anthropic: bool,
 ) -> Result<ExitCode, String> {
-    let client = target.connect(tap, timeout_secs).await?;
+    let client = target.connect(tap, timeout_secs, max_message_bytes).await?;
 
     let tools = client.list_tools().await.map_err(|e| e.to_string())?;
     let instructions = client.instructions().map(|s| s.to_string());
