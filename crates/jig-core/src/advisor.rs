@@ -344,12 +344,8 @@ fn strict_subset_extra(small: &[String], large: &[String]) -> Option<Vec<String>
     }
     let mut remaining = large.to_vec();
     for tok in small {
-        match remaining.iter().position(|t| t == tok) {
-            Some(pos) => {
-                remaining.swap_remove(pos);
-            }
-            None => return None,
-        }
+        let pos = remaining.iter().position(|t| t == tok)?;
+        remaining.swap_remove(pos);
     }
     Some(remaining)
 }

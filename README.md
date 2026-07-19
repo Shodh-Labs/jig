@@ -8,21 +8,7 @@
 npx -y @shodh/jig check "npx -y your-mcp-server"
 ```
 
-```
-jig check · mcp-servers/everything v2.0.0
-protocol 2025-06-18 · rubric-v1
-
-  ✓  93 / 100   grade A
-
-  ✓  Protocol compliance   90   capability `tasks` not in the negotiated spec revision
-  ✓  Context cost          93   1,406 tokens
-  ✓  Schema hygiene        87   parameter `resourceType` missing a description
-  ✓  Description quality  100   heuristic · consistent names, well-sized descriptions
-  ✓  Robustness           100   list 4ms, clean shutdown
-
-Top fixes
-  1. [protocol] drop or gate off-spec capabilities behind `experimental` …
-```
+![jig check report card — Anthropic's reference server graded 93/A with ranked fixes](docs/media/check-report.png)
 
 *(Real output — Anthropic's own reference server, graded cold over `npx`.)*
 
@@ -228,6 +214,8 @@ only ~8.5% of servers implement the OAuth 2.1 flow the spec calls for, and the
 failures are almost always in the *discoverable* surface — a missing
 `WWW-Authenticate` challenge, metadata that points nowhere, an authorization
 server that never advertises PKCE. `jig auth` grades exactly that surface.
+
+![jig auth conformance table — 13 spec-cited checks across 4 probes, verdict CONFORMANT](docs/media/auth-report.png)
 
 It is **not a login tool.** V1 performs no authorization flow, opens no browser,
 and needs no credentials: it sends one unauthenticated `initialize`, follows the
