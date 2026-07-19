@@ -29,6 +29,7 @@
 #![warn(missing_docs)]
 
 pub mod bench;
+pub mod check;
 pub mod client;
 pub mod error;
 pub mod http;
@@ -40,6 +41,10 @@ pub mod transport;
 pub use bench::{
     ArgCheck, BenchConfig, BenchError, BenchModel, BenchReport, Distribution, Outcome, Provider,
     RunResult, Usage, BENCH_SYSTEM_PROMPT,
+};
+pub use check::{
+    badge_color, evaluate, CheckInput, Dimension, DimensionScore, Finding, Observations,
+    Percentiles, Report as CheckReport, Severity, RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};
 pub use error::{JigError, Result};
