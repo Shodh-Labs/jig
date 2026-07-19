@@ -713,13 +713,28 @@ fn score_context(
     let (score, provenance, band_label) = match percentiles {
         Some(p) if !p.context_cost_tokens.samples.is_empty() => {
             let pct = p.context_cost_tokens.percentile(x);
-            let score = clamp_score(100.0 - pct);
+            // Below the median costs nothing: a lighter-than-typical server is
+            // not a finding. Above it, the penalty ramps so the heavy tail
+            // (p90+) is graded hard. Tuned against the 2026-07 census
+            // (median 1,679 tok, p90 14,401).
+            let score = if pct <= 50.0 {
+                clamp_score(100.0 - pct * 0.2)
+            } else {
+                clamp_score(90.0 - (pct - 50.0) * 1.7)
+            };
             let pct_round = pct.round() as u32;
-            let label = format!(
-                "{}th percentile (heaviest {}%)",
-                pct_round,
-                (100 - pct_round.min(100))
-            );
+            let label = if pct >= 50.0 {
+                format!(
+                    "{}th percentile — heavier than {}% of measured servers",
+                    pct_round, pct_round
+                )
+            } else {
+                format!(
+                    "{}th percentile — lighter than {}% of measured servers",
+                    pct_round,
+                    (100 - pct_round.min(100))
+                )
+            };
             (
                 score,
                 ContextProvenance::Percentile {
@@ -1570,11 +1585,11 @@ mod tests {
             ContextProvenance::Percentile { n, .. } => assert_eq!(*n, 5),
             other => panic!("expected percentile provenance, got {other:?}"),
         }
-        // The tiny mock surface is lighter than 4 of 5 samples → ~20th pct →
-        // score ~80.
+        // The tiny mock surface is lighter than 4 of 5 samples → ~20th pct.
+        // Below the median costs little: score = 100 − 0.2·pct ≈ 96.
         let c = report.dimension(Dimension::ContextCost).unwrap();
         assert!(
-            c.score.unwrap() >= 79.0 && c.score.unwrap() <= 81.0,
+            c.score.unwrap() >= 95.0 && c.score.unwrap() <= 97.0,
             "got {:?}",
             c.score
         );

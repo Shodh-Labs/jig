@@ -1,8 +1,9 @@
 ---
 source: crates/jig-cli/tests/check_integration.rs
+assertion_line: 125
 expression: redact_latency(&report)
 ---
-jig check · jig-mock-server v0.1.0
+jig check · jig-mock-server v0.2.0
 protocol 2025-06-18 · rubric-v1
 
   ✓  94 / 100   grade A
