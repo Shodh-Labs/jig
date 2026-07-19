@@ -26,6 +26,42 @@ Jig makes that surface visible, measurable, and regression-safe:
 2. Local eval suites (`.jig/`) with honest, statistical scoring — selection rate across N runs, never single-run pass/fail
 3. CI: `jig run` in your pipeline, PR annotations, regression gates
 
+## Development
+
+Jig is a Rust workspace (`cargo` 1.80+). Milestone 1 ships the core engine and the `jig` CLI.
+
+```
+crates/
+  jig-core         # library: stdio JSON-RPC transport, MCP handshake + ops, protocol tap
+  jig-cli          # binary `jig`: inspect / call subcommands
+  jig-mock-server  # binary: a minimal MCP server used as a test fixture
+```
+
+Build and test the whole workspace:
+
+```sh
+cargo build
+cargo test          # unit + integration tests (spawns the mock server)
+cargo fmt --all
+cargo clippy --all-targets
+```
+
+Try the CLI against the bundled mock server:
+
+```sh
+cargo build
+# inspect what a server exposes (add --json for full machine output)
+./target/debug/jig inspect --stdio "./target/debug/jig-mock-server" --tap traffic.jsonl
+# invoke a single tool
+./target/debug/jig call --stdio "./target/debug/jig-mock-server" \
+    --tool echo --args '{"text":"hello"}'
+```
+
+`--stdio` takes the full server command (double-quote paths containing spaces).
+`--tap <file>` writes every raw JSON-RPC message, both directions, as JSONL —
+the protocol tap that makes a session inspectable and regression-safe. Exit
+codes: `0` success, `2` when a tool reports an error, non-zero otherwise.
+
 ## License
 
 TBD before first release. The suite format spec and CLI runner are intended to be open.
