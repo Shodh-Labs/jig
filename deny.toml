@@ -1,0 +1,49 @@
+# cargo-deny configuration for Jig.
+#
+# Validated against the actual dependency tree with cargo-deny 0.20.2
+# (`cargo deny check`). The authoritative advisory gate is cargo-audit in
+# .github/workflows/audit.yml; here cargo-deny focuses on license policy and
+# duplicate detection, with advisory noise kept at "warn" so it never blocks a
+# PR on ecosystem churn.
+
+[graph]
+# Check every target the tree could be built for (default). Keeping this broad
+# means Windows/macOS-only dependency licenses are still policed.
+all-features = true
+
+[licenses]
+# Permissive licenses actually present in our tree, verified via
+# `cargo metadata`. Copyleft (GPL/LGPL/MPL/AGPL) is intentionally absent: where
+# it appears only as an OR alternative (e.g. r-efi's `... OR LGPL-2.1-or-later`)
+# the permissive branch is selected and the copyleft branch is never allowed.
+allow = [
+    "Apache-2.0",       # our own crates; ring, rustls, sync_wrapper, ...
+    "MIT",              # tokio, hyper, serde, tiktoken-rs, ...
+    "ISC",              # rustls-webpki, untrusted, ring (Apache-2.0 AND ISC)
+    "BSD-2-Clause",     # family coverage (not currently in tree)
+    "BSD-3-Clause",     # subtle
+    "Unicode-3.0",      # icu_* crates, unicode-ident
+    "CDLA-Permissive-2.0", # webpki-roots (permissive data license, not copyleft)
+]
+# Fuzzy-match threshold for license-text detection; 0.8 is the cargo-deny default.
+confidence-threshold = 0.8
+exceptions = []
+
+[advisories]
+# RustSec advisory database. Vulnerabilities are always denied by cargo-deny;
+# the softer signals below are kept at "warn" so they surface without blocking.
+db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = []
+unmaintained = "workspace"
+yanked = "warn"
+
+[bans]
+# Duplicate-version detection: warn, don't fail. Multiple semver-incompatible
+# copies of a crate bloat the binary but are common and not worth blocking a PR.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+# Only crates.io and known registries are expected; flag anything else.
+unknown-registry = "warn"
+unknown-git = "warn"
