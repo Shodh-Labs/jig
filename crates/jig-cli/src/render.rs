@@ -36,10 +36,14 @@ pub fn inspect_report(
         s.push_str("  (none)\n");
     }
     for tool in tools {
-        let title = tool.title.as_deref().unwrap_or(&tool.name);
-        match &tool.description {
-            Some(d) => s.push_str(&format!("  - {}  —  {}\n", title, truncate(d, DESC_MAX))),
-            None => s.push_str(&format!("  - {}\n", title)),
+        // The callable `name` is always the primary identifier (copy it into
+        // `jig call --tool`); the human `title` is a secondary annotation.
+        match &tool.title {
+            Some(t) => s.push_str(&format!("  - {} — \"{}\"\n", tool.name, t)),
+            None => s.push_str(&format!("  - {}\n", tool.name)),
+        }
+        if let Some(d) = &tool.description {
+            s.push_str(&format!("      {}\n", truncate(d, DESC_MAX)));
         }
         s.push_str(&format!(
             "      input: {}\n",
@@ -103,8 +107,22 @@ pub fn call_result(tool: &str, result: &ToolCallResult) -> String {
     s
 }
 
+/// Server capability keys defined by the MCP spec revision Jig speaks
+/// (`2025-06-18`). Anything a server advertises outside this set is annotated,
+/// so a novel/experimental capability (e.g. `tasks` on server-everything) is
+/// surfaced honestly rather than passing silently.
+const KNOWN_SERVER_CAPABILITIES: &[&str] = &[
+    "logging",
+    "prompts",
+    "resources",
+    "tools",
+    "completions",
+    "experimental",
+];
+
 /// Summarize a capabilities object as a comma-separated list of advertised
-/// keys, annotating notable sub-flags (e.g. `tools(listChanged)`).
+/// keys, annotating notable sub-flags (e.g. `tools(listChanged)`) and flagging
+/// any capability not in the negotiated spec revision.
 fn summarize_capabilities(caps: &Value) -> String {
     let Some(map) = caps.as_object() else {
         return "(none)".to_string();
@@ -122,11 +140,15 @@ fn summarize_capabilities(caps: &Value) -> String {
                 }
             }
         }
-        if flags.is_empty() {
-            parts.push(key.clone());
+        let mut label = if flags.is_empty() {
+            key.clone()
         } else {
-            parts.push(format!("{}({})", key, flags.join(",")));
+            format!("{}({})", key, flags.join(","))
+        };
+        if !KNOWN_SERVER_CAPABILITIES.contains(&key.as_str()) {
+            label.push_str(" (not in negotiated spec revision)");
         }
+        parts.push(label);
     }
     parts.join(", ")
 }
@@ -270,6 +292,18 @@ mod tests {
         let out = summarize_capabilities(&caps);
         assert!(out.contains("tools(listChanged)"));
         assert!(out.contains("prompts"));
+    }
+
+    #[test]
+    fn capabilities_summary_flags_unknown_capability() {
+        let caps = json!({ "tools": {}, "tasks": {} });
+        let out = summarize_capabilities(&caps);
+        assert!(
+            out.contains("tasks (not in negotiated spec revision)"),
+            "got: {out}"
+        );
+        // A known capability is not annotated.
+        assert!(!out.contains("tools (not in"), "got: {out}");
     }
 
     #[test]
