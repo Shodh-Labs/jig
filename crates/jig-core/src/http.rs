@@ -63,6 +63,9 @@ pub struct HttpTransport {
     next_id: AtomicI64,
     /// Per-request timeout. `None` waits indefinitely.
     request_timeout: Option<Duration>,
+    /// Maximum size, in bytes, of a single inbound response body. `None`
+    /// disables the cap. A larger body fails with [`JigError::MessageTooLarge`].
+    max_message_bytes: Option<usize>,
 }
 
 impl HttpTransport {
@@ -77,6 +80,7 @@ impl HttpTransport {
         extra_headers: Vec<(String, String)>,
         tap: ProtocolTap,
         request_timeout: Option<Duration>,
+        max_message_bytes: Option<usize>,
     ) -> Result<Self> {
         let client = reqwest::Client::builder()
             .build()
@@ -90,6 +94,7 @@ impl HttpTransport {
             tap,
             next_id: AtomicI64::new(1),
             request_timeout,
+            max_message_bytes,
         })
     }
 
@@ -281,6 +286,7 @@ impl HttpTransport {
                 .text()
                 .await
                 .map_err(|e| self.map_send_error(e, method))?;
+            self.check_size(text.len())?;
             parse_sse(&text, method)
         } else {
             // Treat everything else (application/json, or a server that omits
@@ -289,6 +295,7 @@ impl HttpTransport {
                 .text()
                 .await
                 .map_err(|e| self.map_send_error(e, method))?;
+            self.check_size(text.len())?;
             if text.trim().is_empty() {
                 return Ok(Vec::new());
             }
@@ -300,6 +307,17 @@ impl HttpTransport {
             })?;
             Ok(vec![value])
         }
+    }
+
+    /// Enforce the inbound size cap against a response body length, mirroring
+    /// the stdio transport's per-message cap.
+    fn check_size(&self, len: usize) -> Result<()> {
+        if let Some(limit) = self.max_message_bytes {
+            if len > limit {
+                return Err(JigError::MessageTooLarge { limit });
+            }
+        }
+        Ok(())
     }
 
     /// Map a `reqwest` send error into jig's taxonomy with an actionable message.

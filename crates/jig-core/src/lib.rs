@@ -48,4 +48,6 @@ pub use tokens::{
     budget_local, canonical_tool_json, Exactness, ModelBudget, ModelCounter, TokenError,
     ToolBudget, CANONICAL_RENDERING_DOC,
 };
-pub use transport::{StdioTransport, Transport, DEFAULT_REQUEST_TIMEOUT};
+pub use transport::{
+    StdioTransport, Transport, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_REQUEST_TIMEOUT,
+};

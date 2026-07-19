@@ -15,6 +15,10 @@
 //! * [`JigError::Timeout`] — the server accepted a request but did not answer
 //!   within the allotted time. A hang is a first-class failure mode Jig must
 //!   surface (naming the method), never wait out forever.
+//! * [`JigError::MessageTooLarge`] — an inbound message exceeded the configured
+//!   size cap. A diagnostic tool must bound its own memory: rather than buffer
+//!   an unbounded (or deliberately hostile) payload, Jig stops and names the
+//!   cap that was hit.
 
 use std::time::Duration;
 
@@ -56,6 +60,21 @@ pub enum JigError {
         method: String,
         /// How long Jig waited before giving up.
         elapsed: Duration,
+    },
+
+    /// An inbound message exceeded the configured maximum size (see
+    /// `--max-message-bytes` / [`ClientOptions::max_message_bytes`]). Jig stops
+    /// reading rather than buffer an unbounded payload, and names the cap so the
+    /// operator can raise it deliberately if the traffic is legitimate.
+    ///
+    /// [`ClientOptions::max_message_bytes`]: crate::ClientOptions::max_message_bytes
+    #[error(
+        "inbound message exceeded the maximum size of {limit} bytes \
+         (raise the cap with --max-message-bytes, or 0 to disable it)"
+    )]
+    MessageTooLarge {
+        /// The configured byte cap that the inbound message overran.
+        limit: usize,
     },
 }
 

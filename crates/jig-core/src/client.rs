@@ -12,7 +12,9 @@ use crate::protocol::{
     LATEST_PROTOCOL_VERSION,
 };
 use crate::tap::ProtocolTap;
-use crate::transport::{StdioTransport, Transport, DEFAULT_REQUEST_TIMEOUT};
+use crate::transport::{
+    StdioTransport, Transport, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_REQUEST_TIMEOUT,
+};
 
 /// Jig's identity, advertised to servers as `clientInfo`.
 const CLIENT_NAME: &str = "jig";
@@ -30,12 +32,20 @@ pub struct ClientOptions {
     /// initialize handshake). `None` waits indefinitely. Defaults to
     /// [`DEFAULT_REQUEST_TIMEOUT`].
     pub request_timeout: Option<Duration>,
+    /// Maximum size, in bytes, of a single inbound message. A message larger
+    /// than this fails with [`JigError::MessageTooLarge`] instead of being
+    /// buffered without limit. `None` disables the cap. Defaults to
+    /// [`DEFAULT_MAX_MESSAGE_BYTES`].
+    ///
+    /// [`JigError::MessageTooLarge`]: crate::JigError::MessageTooLarge
+    pub max_message_bytes: Option<usize>,
 }
 
 impl Default for ClientOptions {
     fn default() -> Self {
         ClientOptions {
             request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
+            max_message_bytes: Some(DEFAULT_MAX_MESSAGE_BYTES),
         }
     }
 }
@@ -80,11 +90,12 @@ impl Client {
         tap: ProtocolTap,
         options: ClientOptions,
     ) -> Result<Self> {
-        let transport = Transport::Stdio(Box::new(StdioTransport::spawn_with_timeout(
+        let transport = Transport::Stdio(Box::new(StdioTransport::spawn_with_limits(
             program,
             args,
             tap,
             options.request_timeout,
+            options.max_message_bytes,
         )?));
         let init = Self::handshake(&transport).await?;
         Ok(Client { transport, init })
@@ -118,6 +129,7 @@ impl Client {
             headers,
             tap,
             options.request_timeout,
+            options.max_message_bytes,
         )?);
         let init = Self::handshake(&transport).await?;
         Ok(Client { transport, init })

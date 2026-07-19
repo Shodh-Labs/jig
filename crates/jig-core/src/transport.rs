@@ -10,7 +10,7 @@
 //! inbound line to the [`ProtocolTap`], and routes responses back to the
 //! request that is awaiting them via per-id oneshot channels.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,9 +28,31 @@ use crate::tap::{Direction, ProtocolTap};
 /// Map of in-flight request ids to the channel awaiting their response.
 type PendingMap = Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>;
 
+/// A fatal condition the background reader observed (e.g. an oversized message),
+/// shared so an awaiting request can report *why* the stream ended rather than a
+/// generic "connection closed".
+type ReadFault = Arc<Mutex<Option<JigError>>>;
+
+/// A bounded ring of the child's most recent stderr lines, kept so a spawn/
+/// handshake/request failure can quote the server's own diagnostics.
+type StderrTail = Arc<Mutex<VecDeque<String>>>;
+
 /// Default per-request timeout: a server that accepts a request and never
 /// answers must not hang Jig forever. Overridable at spawn (`None` disables it).
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default cap on a single inbound message, in bytes (64 MiB). Generous enough
+/// for any legitimate MCP payload, but bounded so a runaway or hostile server
+/// cannot make Jig buffer without limit. Override via
+/// [`ClientOptions::max_message_bytes`](crate::ClientOptions::max_message_bytes)
+/// / the `--max-message-bytes` flag; `None` disables the cap.
+pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+
+/// How many trailing stderr lines to retain for error context.
+const STDERR_TAIL_LINES: usize = 20;
+/// Max characters kept per retained stderr line (defends against a single
+/// pathologically long log line eating memory).
+const STDERR_LINE_MAX: usize = 1024;
 
 /// A live JSON-RPC-over-stdio connection to a spawned MCP server.
 pub struct StdioTransport {
@@ -41,13 +63,18 @@ pub struct StdioTransport {
     next_id: AtomicI64,
     /// Per-request timeout. `None` means wait indefinitely.
     request_timeout: Option<Duration>,
+    /// A fatal read-side condition (e.g. an oversized inbound message) recorded
+    /// by the reader so awaiting requests can report the real cause.
+    read_fault: ReadFault,
+    /// The child's most recent stderr lines, for enriching disconnect errors.
+    stderr_tail: StderrTail,
     reader: JoinHandle<()>,
     stderr_drain: JoinHandle<()>,
 }
 
 impl StdioTransport {
     /// Spawn `program` with `args` and wire up the stdio transport, using the
-    /// [`DEFAULT_REQUEST_TIMEOUT`] for every request.
+    /// [`DEFAULT_REQUEST_TIMEOUT`] and [`DEFAULT_MAX_MESSAGE_BYTES`].
     ///
     /// The child is launched with `kill_on_drop` so a dropped transport never
     /// leaks a server process.
@@ -55,13 +82,37 @@ impl StdioTransport {
         Self::spawn_with_timeout(program, args, tap, Some(DEFAULT_REQUEST_TIMEOUT))
     }
 
-    /// Like [`StdioTransport::spawn`] but with an explicit per-request timeout.
-    /// `None` disables the timeout (wait forever — use with care).
+    /// Like [`StdioTransport::spawn`] but with an explicit per-request timeout
+    /// (`None` waits forever). Uses [`DEFAULT_MAX_MESSAGE_BYTES`] for the inbound
+    /// size cap.
     pub fn spawn_with_timeout(
         program: &str,
         args: &[String],
         tap: ProtocolTap,
         request_timeout: Option<Duration>,
+    ) -> Result<Self> {
+        Self::spawn_with_limits(
+            program,
+            args,
+            tap,
+            request_timeout,
+            Some(DEFAULT_MAX_MESSAGE_BYTES),
+        )
+    }
+
+    /// Full-control constructor: explicit per-request timeout and inbound message
+    /// size cap.
+    ///
+    /// * `request_timeout` — `None` waits forever (use with care).
+    /// * `max_message_bytes` — `None` disables the size cap (unbounded buffering,
+    ///   also use with care); `Some(n)` fails a single inbound message that
+    ///   exceeds `n` bytes with [`JigError::MessageTooLarge`].
+    pub fn spawn_with_limits(
+        program: &str,
+        args: &[String],
+        tap: ProtocolTap,
+        request_timeout: Option<Duration>,
+        max_message_bytes: Option<usize>,
     ) -> Result<Self> {
         // On Windows, `npx`/`npm`/`yarn` etc. are `.cmd` shims, and
         // `Command::new("npx")` looks for a file named literally "npx" — which
@@ -95,9 +146,17 @@ impl StdioTransport {
             .ok_or_else(|| JigError::transport("child stderr was not captured"))?;
 
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let read_fault: ReadFault = Arc::new(Mutex::new(None));
+        let stderr_tail: StderrTail = Arc::new(Mutex::new(VecDeque::new()));
 
-        let reader = tokio::spawn(read_loop(stdout, Arc::clone(&pending), tap.clone()));
-        let stderr_drain = tokio::spawn(drain_stderr(stderr));
+        let reader = tokio::spawn(read_loop(
+            stdout,
+            Arc::clone(&pending),
+            tap.clone(),
+            max_message_bytes,
+            Arc::clone(&read_fault),
+        ));
+        let stderr_drain = tokio::spawn(drain_stderr(stderr, Arc::clone(&stderr_tail)));
 
         Ok(StdioTransport {
             child: Mutex::new(child),
@@ -106,6 +165,8 @@ impl StdioTransport {
             tap,
             next_id: AtomicI64::new(1),
             request_timeout,
+            read_fault,
+            stderr_tail,
             reader,
             stderr_drain,
         })
@@ -135,21 +196,28 @@ impl StdioTransport {
             guard.insert(id, tx);
         }
 
-        self.write_message(&message).await.inspect_err(|_| {
+        if let Err(write_err) = self.write_message(&message).await {
             // Clean up the pending slot if the write never made it out.
             lock(&self.pending).remove(&id);
-        })?;
+            // A broken pipe here usually means the child already died (e.g. it
+            // exited during the handshake). If so, prefer the richer diagnosis
+            // that names the exit status and the server's own stderr.
+            if self.child_exit_status().is_some() {
+                return Err(self.describe_disconnect(method, id));
+            }
+            return Err(write_err);
+        }
 
         // Await the correlated response, bounded by the request timeout. A
         // server that accepts the request but never answers must surface as a
         // named `Timeout`, not an indefinite hang.
-        let recv = async {
-            rx.await.map_err(|_| {
-                JigError::transport(format!(
-                    "connection closed before response to '{method}' (id {id})"
-                ))
-            })
-        };
+        //
+        // If the sender was dropped, the reader task ended: the connection
+        // closed (EOF), the stream faulted, or the child crashed. Rather than a
+        // bare "connection closed", report the specific cause — a recorded read
+        // fault (e.g. an oversized message) if there is one, otherwise the
+        // child's exit status and its last stderr lines.
+        let recv = async { rx.await.map_err(|_| self.describe_disconnect(method, id)) };
 
         let response = match self.request_timeout {
             Some(dur) => match tokio::time::timeout(dur, recv).await {
@@ -199,6 +267,51 @@ impl StdioTransport {
             .await
             .map_err(|e| JigError::transport(format!("failed to flush server stdin: {e}")))?;
         Ok(())
+    }
+
+    /// Build the error for a request whose response never arrived because the
+    /// reader task ended. Prefers, in order: a recorded fatal read fault (e.g.
+    /// an oversized message), the child's exit status (a crash/exit), then a
+    /// bare closed-connection message. The child's recent stderr is appended
+    /// whenever we have any, since that is usually where the *why* lives.
+    fn describe_disconnect(&self, method: &str, id: i64) -> JigError {
+        // A recorded fatal read fault is the most specific cause.
+        if let Some(fault) = lock(&self.read_fault).take() {
+            return fault;
+        }
+        let stderr = self.stderr_context();
+        match self.child_exit_status() {
+            Some(status) => JigError::transport(format!(
+                "server process {} before responding to '{method}' (id {id}){stderr}",
+                describe_status(status)
+            )),
+            None => JigError::transport(format!(
+                "connection closed before response to '{method}' (id {id}){stderr}"
+            )),
+        }
+    }
+
+    /// Non-blocking check of whether the child has already exited, returning its
+    /// status if so. Reaps the child as a side effect (harmless — shutdown
+    /// tolerates an already-reaped child).
+    fn child_exit_status(&self) -> Option<std::process::ExitStatus> {
+        let mut child = lock(&self.child);
+        child.try_wait().ok().flatten()
+    }
+
+    /// Format the retained stderr tail as a bounded, single-line suffix for an
+    /// error message, or the empty string if the server logged nothing.
+    fn stderr_context(&self) -> String {
+        let lines = lock(&self.stderr_tail);
+        if lines.is_empty() {
+            return String::new();
+        }
+        let joined = lines
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        format!(". Last server stderr: {joined}")
     }
 
     /// Gracefully shut the connection down: close stdin, then kill and reap
@@ -374,20 +487,93 @@ pub(crate) fn parse_response(response: Value) -> Result<Value> {
     }
 }
 
-/// The background reader: one line = one inbound JSON-RPC message.
-async fn read_loop(stdout: tokio::process::ChildStdout, pending: PendingMap, tap: ProtocolTap) {
-    let mut lines = BufReader::new(stdout).lines();
+/// Outcome of reading one newline-delimited frame from the child's stdout.
+enum Frame {
+    /// A complete line's raw bytes (newline stripped).
+    Line(Vec<u8>),
+    /// Clean end of stream (EOF) with nothing buffered.
+    Eof,
+    /// A single line overran the configured size cap.
+    TooLarge,
+    /// An I/O error on the pipe.
+    Io,
+}
+
+/// Read one newline-delimited frame with a byte cap.
+///
+/// Unlike [`AsyncBufReadExt::lines`], this (a) operates on raw bytes, so a
+/// non-UTF-8 server cannot abort the whole stream — the bytes are captured and
+/// lossily decoded for the tap — and (b) enforces `max_bytes` so a single
+/// gigantic (or hostile) line cannot make Jig buffer without limit. A final
+/// unterminated line before EOF is still returned (matching `lines`).
+async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max_bytes: Option<usize>,
+) -> Frame {
+    let mut buf: Vec<u8> = Vec::new();
     loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
+        let available = match reader.fill_buf().await {
+            Ok(a) => a,
+            Err(_) => return Frame::Io,
+        };
+        if available.is_empty() {
+            // EOF. A buffered but unterminated final line still counts.
+            return if buf.is_empty() {
+                Frame::Eof
+            } else {
+                Frame::Line(std::mem::take(&mut buf))
+            };
+        }
+        match available.iter().position(|&b| b == b'\n') {
+            Some(i) => {
+                buf.extend_from_slice(&available[..i]);
+                reader.consume(i + 1);
+                if let Some(max) = max_bytes {
+                    if buf.len() > max {
+                        return Frame::TooLarge;
+                    }
+                }
+                return Frame::Line(buf);
+            }
+            None => {
+                let n = available.len();
+                buf.extend_from_slice(available);
+                reader.consume(n);
+                // Enforce the cap while still accumulating, so an unterminated
+                // flood is stopped before it exhausts memory.
+                if let Some(max) = max_bytes {
+                    if buf.len() > max {
+                        return Frame::TooLarge;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The background reader: one line = one inbound JSON-RPC message.
+async fn read_loop(
+    stdout: tokio::process::ChildStdout,
+    pending: PendingMap,
+    tap: ProtocolTap,
+    max_bytes: Option<usize>,
+    read_fault: ReadFault,
+) {
+    let mut reader = BufReader::new(stdout);
+    loop {
+        match read_frame(&mut reader, max_bytes).await {
+            Frame::Line(bytes) => {
+                // Decode lossily: a non-UTF-8 server pollutes the stream but must
+                // not silently kill the reader. The lossy text still reaches the
+                // tap so the truth about what arrived is preserved.
+                let line = String::from_utf8_lossy(&bytes);
                 if line.trim().is_empty() {
                     continue;
                 }
-                // Record inbound traffic. If a line is not valid JSON (a
-                // misbehaving server), preserve it verbatim as a string so the
-                // tap still tells the truth about what arrived.
-                let value: Value =
-                    serde_json::from_str(&line).unwrap_or_else(|_| Value::String(line.clone()));
+                // If a line is not valid JSON (a misbehaving server), preserve it
+                // verbatim as a string so the tap still tells the truth.
+                let value: Value = serde_json::from_str(&line)
+                    .unwrap_or_else(|_| Value::String(line.into_owned()));
                 tap.record(Direction::Inbound, value.clone());
 
                 // Route responses (they carry an id and result/error) to the
@@ -401,22 +587,48 @@ async fn read_loop(stdout: tokio::process::ChildStdout, pending: PendingMap, tap
                     }
                 }
             }
-            Ok(None) => break, // EOF: server closed stdout.
-            Err(_) => break,   // I/O error on the pipe.
+            Frame::TooLarge => {
+                // Record why the stream is ending so an awaiting request reports
+                // the size cap rather than a bare "connection closed".
+                if let Some(limit) = max_bytes {
+                    *lock(&read_fault) = Some(JigError::MessageTooLarge { limit });
+                }
+                break;
+            }
+            Frame::Eof | Frame::Io => break,
         }
     }
     // On exit, drop every pending sender so awaiting requests observe the
-    // closed connection as a transport error rather than hanging forever.
+    // closed connection as an error rather than hanging forever.
     lock(&pending).clear();
 }
 
 /// Drain the child's stderr so its logging can never fill a pipe buffer and
-/// deadlock the protocol stream. Content is discarded (it is server logging,
-/// not MCP traffic).
-async fn drain_stderr(stderr: tokio::process::ChildStderr) {
+/// deadlock the protocol stream. The content is *not* protocol traffic, but the
+/// most recent [`STDERR_TAIL_LINES`] lines are retained so a crash/exit error
+/// can quote the server's own diagnostics — the difference between "connection
+/// closed" and "connection closed. Last server stderr: panicked at ...".
+async fn drain_stderr(stderr: tokio::process::ChildStderr, tail: StderrTail) {
     let mut lines = BufReader::new(stderr).lines();
-    while let Ok(Some(_)) = lines.next_line().await {
-        // Intentionally ignored.
+    while let Ok(Some(line)) = lines.next_line().await {
+        let mut line = line;
+        if line.chars().count() > STDERR_LINE_MAX {
+            line = line.chars().take(STDERR_LINE_MAX).collect::<String>() + "…";
+        }
+        let mut guard = lock(&tail);
+        if guard.len() == STDERR_TAIL_LINES {
+            guard.pop_front();
+        }
+        guard.push_back(line);
+    }
+}
+
+/// Human-readable description of how a child process ended.
+fn describe_status(status: std::process::ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("exited with code {code}"),
+        // No code → terminated by a signal (Unix) or otherwise abnormally.
+        None => format!("terminated abnormally ({status})"),
     }
 }
 
@@ -492,5 +704,81 @@ mod tests {
     #[test]
     fn resolve_program_is_identity_off_windows() {
         assert_eq!(resolve_program("npx"), std::path::PathBuf::from("npx"));
+    }
+
+    // ---- read_frame: the capped, byte-oriented line reader ------------------
+
+    async fn frames(input: &[u8], max: Option<usize>) -> Vec<Frame> {
+        let mut reader = BufReader::new(input);
+        let mut out = Vec::new();
+        loop {
+            let f = read_frame(&mut reader, max).await;
+            let stop = matches!(f, Frame::Eof | Frame::Io | Frame::TooLarge);
+            out.push(f);
+            if stop {
+                break;
+            }
+        }
+        out
+    }
+
+    fn as_line(f: &Frame) -> &[u8] {
+        match f {
+            Frame::Line(b) => b,
+            _ => panic!("expected a line frame"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_frame_splits_on_newlines_and_reports_eof() {
+        let fs = frames(b"one\ntwo\nthree\n", None).await;
+        // three lines then a clean EOF
+        assert_eq!(fs.len(), 4);
+        assert_eq!(as_line(&fs[0]), b"one");
+        assert_eq!(as_line(&fs[1]), b"two");
+        assert_eq!(as_line(&fs[2]), b"three");
+        assert!(matches!(fs[3], Frame::Eof));
+    }
+
+    #[tokio::test]
+    async fn read_frame_returns_unterminated_final_line() {
+        let fs = frames(b"complete\npartial", None).await;
+        assert_eq!(as_line(&fs[0]), b"complete");
+        // The trailing line with no newline is still delivered before EOF.
+        assert_eq!(as_line(&fs[1]), b"partial");
+        assert!(matches!(fs[2], Frame::Eof));
+    }
+
+    #[tokio::test]
+    async fn read_frame_preserves_non_utf8_bytes() {
+        // Invalid UTF-8 must not abort the reader; the raw bytes come through.
+        let fs = frames(&[0xFF, 0xFE, b'\n'], None).await;
+        assert_eq!(as_line(&fs[0]), &[0xFF, 0xFE]);
+    }
+
+    #[tokio::test]
+    async fn read_frame_enforces_the_size_cap() {
+        // A line longer than the cap yields TooLarge, not an unbounded buffer.
+        let big = vec![b'x'; 100];
+        let fs = frames(&big, Some(16)).await;
+        assert!(matches!(fs.last().unwrap(), Frame::TooLarge));
+    }
+
+    #[tokio::test]
+    async fn read_frame_allows_lines_up_to_the_cap() {
+        // Exactly at the cap is fine; the cap is a strict "greater than".
+        let line = vec![b'a'; 16];
+        let mut input = line.clone();
+        input.push(b'\n');
+        let fs = frames(&input, Some(16)).await;
+        assert_eq!(as_line(&fs[0]), line.as_slice());
+    }
+
+    #[test]
+    fn message_too_large_error_names_the_limit() {
+        let e = JigError::MessageTooLarge { limit: 64 };
+        let msg = e.to_string();
+        assert!(msg.contains("64"), "got: {msg}");
+        assert!(msg.contains("max-message-bytes"), "got: {msg}");
     }
 }
