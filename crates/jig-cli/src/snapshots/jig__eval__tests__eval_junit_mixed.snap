@@ -1,0 +1,26 @@
+---
+source: crates/jig-cli/src/eval.rs
+expression: render_junit(&mixed_report())
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="jig eval" tests="4" failures="1" errors="1">
+  <testsuite name="search-basics" tests="4" failures="1" errors="1">
+    <testcase name="find-rate-limits" classname="search-basics">
+    </testcase>
+    <testcase name="list-endpoints" classname="search-basics">
+      <system-out>FLAKY: 2/4 passed but flipped across runs
+run 2: selected `fetch_page` (expected `search_docs`)
+run 4: selected `fetch_page` (expected `search_docs`)</system-out>
+    </testcase>
+    <testcase name="book-table" classname="search-basics">
+      <failure message="rate 0/3 (0%) below min_rate 0.80">run 1: selected `search_docs` (expected `make_reservation`)
+run 2: no tool selected (expected `make_reservation`)
+run 3: selected `search_docs` (expected `make_reservation`)</failure>
+    </testcase>
+    <testcase name="flaky-provider" classname="search-basics">
+      <error message="3 of 3 runs were provider errors">run 1: provider error: HTTP 500: boom
+run 2: provider error: HTTP 500: boom
+run 3: provider error: HTTP 500: boom</error>
+    </testcase>
+  </testsuite>
+</testsuites>

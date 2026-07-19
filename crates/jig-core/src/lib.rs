@@ -34,6 +34,7 @@ pub mod client;
 pub mod discovery;
 pub mod ecosystem;
 pub mod error;
+pub mod eval;
 pub mod http;
 pub mod protocol;
 pub mod tap;
@@ -58,6 +59,10 @@ pub use ecosystem::{
     NPM_BASE, REGISTRY_BASE,
 };
 pub use error::{JigError, Result};
+pub use eval::{
+    load_suite_file, load_suite_str, run_eval, score_case, Case, CaseReport, CaseVerdict, Defaults,
+    EvalConfig, EvalError, Expect, Matcher, RunReport, Suite, SuiteReport,
+};
 pub use http::{HttpTransport, ListenSummary};
 pub use protocol::{
     ContentBlock, Implementation, InitializeResult, Prompt, PromptArgument, PromptGetResult,
