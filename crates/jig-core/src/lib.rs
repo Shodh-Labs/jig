@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod bench;
 pub mod client;
 pub mod error;
 pub mod http;
@@ -36,6 +37,10 @@ pub mod tap;
 pub mod tokens;
 pub mod transport;
 
+pub use bench::{
+    ArgCheck, BenchConfig, BenchError, BenchModel, BenchReport, Distribution, Outcome, Provider,
+    RunResult, Usage, BENCH_SYSTEM_PROMPT,
+};
 pub use client::{Client, ClientOptions};
 pub use error::{JigError, Result};
 pub use http::HttpTransport;

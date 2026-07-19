@@ -1,0 +1,180 @@
+---
+source: crates/jig-cli/src/bench.rs
+expression: "render_json(&server(), &[fixture_report()])"
+---
+{
+  "models": [
+    {
+      "apiModel": "gpt-4o",
+      "distribution": {
+        "consistent": false,
+        "hallucinated": [],
+        "noTool": 1,
+        "providerError": 0,
+        "selected": [
+          {
+            "count": 2,
+            "tool": "make_reservation"
+          },
+          {
+            "count": 1,
+            "tool": "echo"
+          }
+        ],
+        "total": 4
+      },
+      "maxTokens": 1024,
+      "model": "gpt-4o",
+      "provider": "openai",
+      "renderedRequest": {
+        "messages": [
+          {
+            "content": "You are connected to a set of tools. Read the user's task and, if one of the available tools is appropriate, call exactly one tool to accomplish it. If no tool fits, answer in plain text.",
+            "role": "system"
+          },
+          {
+            "content": "Book a table for two tonight",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-4o",
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "name": "echo",
+              "parameters": {
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          },
+          {
+            "function": {
+              "name": "make_reservation",
+              "parameters": {
+                "properties": {
+                  "date": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "date"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "results": [
+        {
+          "latencyMs": 512,
+          "modelVersion": "gpt-4o-2024-08-06",
+          "outcome": {
+            "argsCheck": {
+              "status": "valid"
+            },
+            "argsValid": true,
+            "arguments": {
+              "date": "tonight"
+            },
+            "tool": "make_reservation",
+            "type": "selected"
+          },
+          "rawResponse": {
+            "model": "gpt-4o-2024-08-06"
+          },
+          "run": 1,
+          "usage": {
+            "inputTokens": 42,
+            "outputTokens": 7,
+            "totalTokens": 49
+          }
+        },
+        {
+          "latencyMs": 488,
+          "modelVersion": "gpt-4o-2024-08-06",
+          "outcome": {
+            "argsCheck": {
+              "errors": [
+                "(root): missing required field 'date'"
+              ],
+              "status": "invalid"
+            },
+            "argsValid": false,
+            "arguments": {},
+            "tool": "make_reservation",
+            "type": "selected"
+          },
+          "rawResponse": null,
+          "run": 2,
+          "usage": {
+            "inputTokens": 42,
+            "outputTokens": 5,
+            "totalTokens": 47
+          }
+        },
+        {
+          "latencyMs": 501,
+          "modelVersion": "gpt-4o-2024-08-06",
+          "outcome": {
+            "argsCheck": {
+              "status": "valid"
+            },
+            "argsValid": true,
+            "arguments": {
+              "text": "table for two"
+            },
+            "tool": "echo",
+            "type": "selected"
+          },
+          "rawResponse": null,
+          "run": 3,
+          "usage": {
+            "inputTokens": 42,
+            "outputTokens": 8,
+            "totalTokens": 50
+          }
+        },
+        {
+          "latencyMs": 470,
+          "modelVersion": "gpt-4o-2024-08-06",
+          "outcome": {
+            "excerpt": "I need a bit more information to book that.",
+            "type": "no_tool"
+          },
+          "rawResponse": null,
+          "run": 4,
+          "usage": {
+            "inputTokens": 42,
+            "outputTokens": 11,
+            "totalTokens": 53
+          }
+        }
+      ],
+      "runs": 4,
+      "serverTools": [
+        "echo",
+        "make_reservation"
+      ],
+      "takeaway": "UNSTABLE: tool selection varied across runs (2 different tools) — see per-run detail",
+      "temperature": 1.0
+    }
+  ],
+  "serverInfo": {
+    "name": "jig-mock-server",
+    "version": "0.1.0"
+  },
+  "systemPrompt": "You are connected to a set of tools. Read the user's task and, if one of the available tools is appropriate, call exactly one tool to accomplish it. If no tool fits, answer in plain text."
+}

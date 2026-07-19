@@ -30,6 +30,7 @@ use std::io::{self, BufRead, Write};
 use serde_json::{json, Value};
 
 mod http;
+mod provider;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -90,6 +91,12 @@ impl Chaos {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    // Mock model-provider mode: `--provider <port>` (the `jig bench` test double).
+    if let Some(port) = flag_port(&args, "--provider") {
+        provider::serve(port);
+        return;
+    }
+
     // HTTP mode: `--http <port>`.
     if let Some(port) = http_port(&args) {
         let sse = args.iter().any(|a| a == "--sse");
@@ -113,7 +120,12 @@ fn main() {
 
 /// Parse `--http <port>` from the argument list, if present.
 fn http_port(args: &[String]) -> Option<u16> {
-    let idx = args.iter().position(|a| a == "--http")?;
+    flag_port(args, "--http")
+}
+
+/// Parse `<flag> <port>` from the argument list, if present.
+fn flag_port(args: &[String], flag: &str) -> Option<u16> {
+    let idx = args.iter().position(|a| a == flag)?;
     args.get(idx + 1).and_then(|s| s.parse::<u16>().ok())
 }
 

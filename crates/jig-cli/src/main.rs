@@ -5,6 +5,9 @@
 //! * `jig call --stdio "<cmd>" --tool <name> --args '<json>'` — invoke a tool.
 //! * `jig budget --stdio "<cmd>" [--model <id>...]` — price the tool surface in
 //!   context tokens, per tool and per model (see [`budget`]).
+//! * `jig bench --stdio "<cmd>" --task "<text>" [--model <id>...]` — put a real
+//!   model in the loop and measure which tool it selects across runs
+//!   (see [`mod@bench`]).
 //!
 //! All support `--json` for machine output and `--tap <file>` to dump the raw
 //! protocol traffic as JSONL. Every stdout write goes through [`emit`], which
@@ -19,6 +22,7 @@ use jig_cli::{parse_headers, split_command};
 use jig_core::{Client, ClientOptions, ProtocolTap, ToolCallResult};
 use serde_json::{json, Value};
 
+mod bench;
 mod budget;
 mod render;
 
@@ -154,6 +158,51 @@ enum Command {
         #[arg(long)]
         exact_anthropic: bool,
     },
+    /// Bench a live model against the server's tools: which tool does a real
+    /// model pick for a task, with what args, across repeated runs?
+    Bench {
+        /// The server command to run over stdio. Mutually exclusive with --http.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// A remote MCP endpoint URL to connect to over Streamable HTTP.
+        /// Mutually exclusive with --stdio.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Extra HTTP header for --http, "Name: Value" (repeatable).
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
+        /// The natural-language task to give the model (required).
+        #[arg(long, value_name = "TEXT")]
+        task: String,
+        /// Model id to bench against; repeat for one section per model.
+        /// Known: gpt-4o, gpt-4, claude-sonnet, claude-opus. Default:
+        /// claude-sonnet if ANTHROPIC_API_KEY is set, else gpt-4o.
+        #[arg(long = "model", value_name = "ID")]
+        models: Vec<String>,
+        /// Override the concrete API model string sent on the wire (hardcoded
+        /// mappings age). Applies only with a single --model.
+        #[arg(long, value_name = "STRING")]
+        api_model: Option<String>,
+        /// Number of times to send the request (default 3).
+        #[arg(long, value_name = "N", default_value_t = 3)]
+        runs: usize,
+        /// Sampling temperature, always recorded (default 1.0).
+        #[arg(long, value_name = "T", default_value_t = 1.0)]
+        temp: f64,
+        /// Emit full machine-readable JSON (incl. the rendered request, minus
+        /// auth, and every raw provider response).
+        #[arg(long)]
+        json: bool,
+        /// Write the raw protocol traffic to this file as JSONL.
+        #[arg(long, value_name = "FILE")]
+        tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
+        /// Maximum size in bytes of a single inbound message (0 = no cap).
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
+    },
     /// Invoke a single tool and print its result.
     Call {
         /// The server command to run over stdio. Mutually exclusive with --http.
@@ -237,6 +286,35 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 timeout,
                 max_message_bytes,
                 exact_anthropic,
+            )
+            .await
+        }
+        Command::Bench {
+            stdio,
+            http,
+            header,
+            task,
+            models,
+            api_model,
+            runs,
+            temp,
+            json,
+            tap,
+            timeout,
+            max_message_bytes,
+        } => {
+            let target = Target::resolve(stdio, http, header)?;
+            bench::run(
+                &target,
+                models,
+                api_model,
+                task,
+                runs,
+                temp,
+                json,
+                tap.as_deref(),
+                timeout,
+                max_message_bytes,
             )
             .await
         }
