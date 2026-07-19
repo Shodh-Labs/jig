@@ -1,0 +1,23 @@
+---
+source: crates/jig-cli/src/bench.rs
+expression: "render_human(&server(), &[fixture_report()])"
+---
+Server: jig-mock-server v0.1.0
+Task:   Book a table for two tonight
+
+Model:  gpt-4o (openai, api=gpt-4o) — reported version: gpt-4o-2024-08-06
+Params: temp=1 · runs=4 · max_tokens=1024
+
+Distribution:
+  make_reservation  2/4 (50%)
+  echo  1/4 (25%)
+  (no tool / text answer)  1/4 (25%)
+
+Per-run:
+  #  outcome   tool / detail                             args     latency  tokens
+  1  selected  make_reservation                          valid    512ms    42in/7out
+  2  selected  make_reservation                          INVALID  488ms    42in/5out
+  3  selected  echo                                      valid    501ms    42in/8out
+  4  no_tool   I need a bit more information to book t…  -        470ms    42in/11out
+
+Takeaway: UNSTABLE: tool selection varied across runs (2 different tools) — see per-run detail
