@@ -1,0 +1,25 @@
+---
+source: crates/jig-cli/src/check.rs
+expression: render_human(&report)
+---
+jig check · jig-mock-server v0.1.0
+protocol 2025-06-18 · rubric-v1
+
+  ✓  98 / 100   grade A
+
+  ✓  Protocol compliance  100   clean handshake, no stdout pollution, spec-valid capabilities
+  ✓  Context cost          99   183 tokens (no ecosystem data — absolute bands)
+  ✓  Schema hygiene        94   `make_reservation`: parameter `party` missing a description (+1 more)
+  ✓  Description quality   97   heuristic · 3 tool(s) have no human-facing title
+  ✓  Robustness           100   list 12ms, clean shutdown
+
+Top fixes
+  1. [schema_hygiene] `make_reservation`: parameter `party` missing a description
+     → describe each parameter of `make_reservation` so the model can fill it correctly
+  2. [schema_hygiene] 3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)
+     → add tool annotations so clients can reason about side effects
+  3. [description_quality] 3 tool(s) have no human-facing title
+     → add a `title` to each tool for nicer client display
+
+Description quality is heuristic (deterministic, no LLM).
+Context cost scored with absolute bands (no ecosystem dataset available).

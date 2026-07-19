@@ -1,0 +1,25 @@
+---
+source: crates/jig-cli/tests/check_integration.rs
+expression: redact_latency(&report)
+---
+jig check · jig-mock-server v0.1.0
+protocol 2025-06-18 · rubric-v1
+
+  ✓  94 / 100   grade A
+
+  ✓  Protocol compliance   85   1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing
+  ✓  Context cost          99   183 tokens (no ecosystem data — absolute bands)
+  ✓  Schema hygiene        94   `make_reservation`: parameter `party` missing a description (+1 more)
+  ✓  Description quality   97   heuristic · 3 tool(s) have no human-facing title
+  ✓  Robustness           100   list <ms>, clean shutdown
+
+Top fixes
+  1. [protocol] 1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing
+     → route all logging to stderr; stdout must carry only newline-delimited JSON-RPC
+  2. [schema_hygiene] `make_reservation`: parameter `party` missing a description
+     → describe each parameter of `make_reservation` so the model can fill it correctly
+  3. [schema_hygiene] 3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)
+     → add tool annotations so clients can reason about side effects
+
+Description quality is heuristic (deterministic, no LLM).
+Context cost scored with absolute bands (no ecosystem dataset available).

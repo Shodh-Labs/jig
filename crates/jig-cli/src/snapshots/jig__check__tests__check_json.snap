@@ -1,0 +1,126 @@
+---
+source: crates/jig-cli/src/check.rs
+expression: render_json(&report)
+---
+{
+  "composite": 98,
+  "compositeExact": 98.12,
+  "contextCost": {
+    "model": "gpt-4o",
+    "provenance": {
+      "type": "absolute_bands"
+    },
+    "totalTokens": 183
+  },
+  "dimensions": [
+    {
+      "applicable": true,
+      "dimension": "protocol",
+      "findings": [],
+      "heuristic": false,
+      "label": "Protocol compliance",
+      "score": 100,
+      "scoreExact": 100.0,
+      "summary": "clean handshake, no stdout pollution, spec-valid capabilities",
+      "weight": 25
+    },
+    {
+      "applicable": true,
+      "dimension": "context_cost",
+      "findings": [],
+      "heuristic": false,
+      "label": "Context cost",
+      "score": 99,
+      "scoreExact": 99.09,
+      "summary": "183 tokens (no ecosystem data — absolute bands)",
+      "weight": 25
+    },
+    {
+      "applicable": true,
+      "dimension": "schema_hygiene",
+      "findings": [
+        {
+          "dimension": "schema_hygiene",
+          "fix": "describe each parameter of `make_reservation` so the model can fill it correctly",
+          "message": "`make_reservation`: parameter `party` missing a description",
+          "points": 3.0,
+          "severity": "medium"
+        },
+        {
+          "dimension": "schema_hygiene",
+          "fix": "add tool annotations so clients can reason about side effects",
+          "message": "3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)",
+          "points": 3.0,
+          "severity": "low"
+        }
+      ],
+      "heuristic": false,
+      "label": "Schema hygiene",
+      "score": 94,
+      "scoreExact": 94.0,
+      "summary": "`make_reservation`: parameter `party` missing a description (+1 more)",
+      "weight": 20
+    },
+    {
+      "applicable": true,
+      "dimension": "description_quality",
+      "findings": [
+        {
+          "dimension": "description_quality",
+          "fix": "add a `title` to each tool for nicer client display",
+          "message": "3 tool(s) have no human-facing title",
+          "points": 3.0,
+          "severity": "low"
+        }
+      ],
+      "heuristic": true,
+      "label": "Description quality",
+      "score": 97,
+      "scoreExact": 97.0,
+      "summary": "heuristic · 3 tool(s) have no human-facing title",
+      "weight": 15
+    },
+    {
+      "applicable": true,
+      "dimension": "robustness",
+      "findings": [],
+      "heuristic": false,
+      "label": "Robustness",
+      "score": 100,
+      "scoreExact": 100.0,
+      "summary": "list 12ms, clean shutdown",
+      "weight": 15
+    }
+  ],
+  "grade": "A",
+  "protocolVersion": "2025-06-18",
+  "rubricVersion": "rubric-v1",
+  "server": {
+    "name": "jig-mock-server",
+    "version": "0.1.0"
+  },
+  "toolCount": 3,
+  "topFixes": [
+    {
+      "dimension": "schema_hygiene",
+      "fix": "describe each parameter of `make_reservation` so the model can fill it correctly",
+      "message": "`make_reservation`: parameter `party` missing a description",
+      "points": 3.0,
+      "severity": "medium"
+    },
+    {
+      "dimension": "schema_hygiene",
+      "fix": "add tool annotations so clients can reason about side effects",
+      "message": "3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)",
+      "points": 3.0,
+      "severity": "low"
+    },
+    {
+      "dimension": "description_quality",
+      "fix": "add a `title` to each tool for nicer client display",
+      "message": "3 tool(s) have no human-facing title",
+      "points": 3.0,
+      "severity": "low"
+    }
+  ]
+}

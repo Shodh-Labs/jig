@@ -1,6 +1,8 @@
 //! `jig` — the command-line workbench for MCP servers.
 //!
 //! Subcommands:
+//! * `jig check --stdio "<cmd>"` — the one-command report card: run everything
+//!   Jig knows in one session and render a scored verdict (see [`mod@check`]).
 //! * `jig inspect --stdio "<cmd>"` — connect, handshake, and list everything.
 //! * `jig call --stdio "<cmd>" --tool <name> --args '<json>'` — invoke a tool.
 //! * `jig budget --stdio "<cmd>" [--model <id>...]` — price the tool surface in
@@ -24,6 +26,7 @@ use serde_json::{json, Value};
 
 mod bench;
 mod budget;
+mod check;
 mod render;
 
 /// Write `s` to stdout, flushing, in a broken-pipe-safe way.
@@ -89,6 +92,46 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// The one-command report card: connect once, score protocol compliance,
+    /// context cost, schema hygiene, description quality and robustness, and
+    /// render a graded verdict with a ranked to-do list.
+    Check {
+        /// The server command to run over stdio, e.g. "npx -y my-server".
+        /// Mutually exclusive with --http.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// A remote MCP endpoint URL to check over Streamable HTTP. Mutually
+        /// exclusive with --stdio.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Extra HTTP header for --http, "Name: Value" (repeatable).
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
+        /// Emit the full report card as machine-readable JSON (all findings,
+        /// per-dimension scores, weights, rubric version, provenance).
+        #[arg(long)]
+        json: bool,
+        /// Emit shields.io endpoint JSON for the composite score (for a README
+        /// badge). Overrides the human report.
+        #[arg(long)]
+        badge: bool,
+        /// Exit nonzero if the composite score is below this floor (a CI gate).
+        #[arg(long, value_name = "N")]
+        min_score: Option<f64>,
+        /// Path to the ecosystem percentiles dataset used to score context cost.
+        /// Defaults to `data/percentiles.json` (absent → absolute bands).
+        #[arg(long, value_name = "FILE")]
+        percentiles: Option<PathBuf>,
+        /// Write the raw protocol traffic to this file as JSONL.
+        #[arg(long, value_name = "FILE")]
+        tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
+        /// Maximum size in bytes of a single inbound message (0 = no cap).
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
+    },
     /// Connect to an MCP server, handshake, and report what it exposes.
     Inspect {
         /// The server command to run over stdio, e.g. "my-server --flag".
@@ -252,6 +295,31 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<ExitCode, String> {
     match cli.command {
+        Command::Check {
+            stdio,
+            http,
+            header,
+            json,
+            badge,
+            min_score,
+            percentiles,
+            tap,
+            timeout,
+            max_message_bytes,
+        } => {
+            let target = Target::resolve(stdio, http, header)?;
+            check::run(
+                &target,
+                json,
+                badge,
+                min_score,
+                percentiles,
+                tap.as_deref(),
+                timeout,
+                max_message_bytes,
+            )
+            .await
+        }
         Command::Inspect {
             stdio,
             http,
