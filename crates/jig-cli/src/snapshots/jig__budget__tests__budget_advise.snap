@@ -1,0 +1,26 @@
+---
+source: crates/jig-cli/src/budget.rs
+expression: combined
+---
+Server: jig-mock-server v0.1.0
+
+Model:  gpt-4o (o200k_base, exact)
+
+Tool                gpt-4o  % of total
+--------------------------------------
+take_screenshot  231 exact       54.4%
+echo              29 exact        6.8%
+status            29 exact        6.8%
+flush             28 exact        6.6%
+ping              28 exact        6.6%
+reset             27 exact        6.4%
+version           27 exact        6.4%
+health            26 exact        6.1%
+--------------------------------------
+TOTAL            425 exact        100%
+
+Advisor (tool-set)
+  [medium] `take_screenshot` costs 231 tok — 8.2x your median tool; it dominates the surface's context bill
+    → trim `take_screenshot`'s description or flatten its input schema; a single tool this heavy is where the cheapest tokens are
+  [low] 3 of your 8 tools carry 68% of the tool-surface token cost
+    → consider splitting the heavy few into their own server (or trimming them) so the whole surface stops paying for definitions most calls never use

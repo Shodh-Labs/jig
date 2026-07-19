@@ -1,0 +1,35 @@
+---
+source: crates/jig-cli/src/check.rs
+expression: render_human(&report)
+---
+jig check · jig-mock-server v0.1.0
+protocol 2025-06-18 · rubric-v1
+
+  ✓  98 / 100   grade A
+
+  ✓  Protocol compliance  100   clean handshake, no stdout pollution, spec-valid capabilities
+  ✓  Context cost          94   1,268 tokens (no ecosystem data — absolute bands)
+  ✓  Schema hygiene       100   31 tools — descriptions, types and params all present
+  ✓  Description quality  100   heuristic · consistent names, well-sized descriptions
+  ✓  Robustness           100   list 12ms, clean shutdown
+
+Advisor (tool-set)
+  [high] `get_status` vs `fetch_status`: models cannot reliably distinguish these — same action, interchangeable words
+    → merge `get_status` and `fetch_status` into one tool, or rename one with a token that names the real difference (scope, resource, side effect)
+  [medium] 31 tools exposed — past ~30 a model's tool-selection accuracy degrades materially
+    → published measurements show selection accuracy falling off past a few dozen tools; split into focused servers or defer rarely-used tools. Server-side tool search (the MCP RC's Tool-Search direction) is the structural fix.
+  [medium] `get_user` vs `get_user_info`: names differ only by generic word(s) — the model has little basis to choose
+    → rename `get_user_info` to state what it adds over `get_user` (or drop one if they truly return the same thing)
+  [medium] `list_reports` and `list_summaries` descriptions overlap 80% — the model has no basis to choose
+    → sharpen one description to name the distinguishing case — when to reach for `list_reports` instead of `list_summaries`
+
+Top fixes
+  1. [tool_set] `get_status` vs `fetch_status`: models cannot reliably distinguish these — same action, interchangeable words
+     → merge `get_status` and `fetch_status` into one tool, or rename one with a token that names the real difference (scope, resource, side effect)
+  2. [tool_set] 31 tools exposed — past ~30 a model's tool-selection accuracy degrades materially
+     → published measurements show selection accuracy falling off past a few dozen tools; split into focused servers or defer rarely-used tools. Server-side tool search (the MCP RC's Tool-Search direction) is the structural fix.
+  3. [tool_set] `get_user` vs `get_user_info`: names differ only by generic word(s) — the model has little basis to choose
+     → rename `get_user_info` to state what it adds over `get_user` (or drop one if they truly return the same thing)
+
+Description quality is heuristic (deterministic, no LLM).
+Context cost scored with absolute bands (no ecosystem dataset available).

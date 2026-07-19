@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod advisor;
 pub mod bench;
 pub mod check;
 pub mod client;
@@ -42,6 +43,7 @@ pub mod tap;
 pub mod tokens;
 pub mod transport;
 
+pub use advisor::{advise as advise_tool_set, ToolTokenCost};
 pub use bench::{
     ArgCheck, BenchConfig, BenchError, BenchModel, BenchReport, Distribution, Outcome, Provider,
     RunResult, Usage, BENCH_SYSTEM_PROMPT,

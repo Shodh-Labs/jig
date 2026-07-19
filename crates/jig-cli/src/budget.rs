@@ -30,6 +30,7 @@ pub async fn run(
     timeout_secs: u64,
     max_message_bytes: u64,
     exact_anthropic: bool,
+    advise: bool,
 ) -> Result<ExitCode, String> {
     let models: Vec<String> = if models.is_empty() {
         DEFAULT_MODELS.iter().map(|s| s.to_string()).collect()
@@ -47,6 +48,7 @@ pub async fn run(
         timeout_secs,
         max_message_bytes,
         exact_anthropic,
+        advise,
     )
     .await;
 
@@ -65,6 +67,7 @@ async fn run_inner(
     timeout_secs: u64,
     max_message_bytes: u64,
     exact_anthropic: bool,
+    advise: bool,
 ) -> Result<ExitCode, String> {
     let client = target.connect(tap, timeout_secs, max_message_bytes).await?;
 
@@ -94,7 +97,34 @@ async fn run_inner(
     };
     emit(&out);
 
+    // The tool-set advisor reuses the same analysis as `jig check`, fed the
+    // per-tool token costs from the primary model's budget (no re-tokenizing).
+    // Rendered only for the human table — the machine/share artifacts stay
+    // clean.
+    if advise && !as_json && !as_markdown {
+        if let Some(section) = advisor_section(&tools, &budgets) {
+            emit("\n");
+            emit(&section);
+        }
+    }
+
     Ok(ExitCode::SUCCESS)
+}
+
+/// Build the advisor section for `budget --advise` from the primary model's
+/// per-tool token costs. Returns `None` when there is nothing to advise.
+fn advisor_section(tools: &[Tool], budgets: &[ModelBudget]) -> Option<String> {
+    let primary = budgets.first()?;
+    let costs: Vec<jig_core::ToolTokenCost> = primary
+        .tools
+        .iter()
+        .map(|t| jig_core::ToolTokenCost {
+            name: t.name.clone(),
+            tokens: t.tokens,
+        })
+        .collect();
+    let findings = jig_core::advise_tool_set(tools, &costs);
+    crate::advisor_view::render_section(&findings)
 }
 
 /// Attempt to upgrade an Anthropic model's grand total to an exact figure via
@@ -705,5 +735,73 @@ _Measured with Jig — github.com/Shodh-Labs/jig_
             "budget_json",
             render_json(&mock_server_info(), &mock_tools(), &mock_budgets_single())
         );
+    }
+
+    // ---- Advisor (`budget --advise`) ----------------------------------------
+
+    /// A surface with one tool whose definition dwarfs the rest — enough to fire
+    /// the cost-dominance advisory and the top-3 concentration advisory. Priced
+    /// with the exact OpenAI tokenizer, so the snapshot is deterministic.
+    fn dominant_tools() -> Vec<Tool> {
+        let big = "This tool renders a full page screenshot of the current browser viewport, \
+            optionally clipping to a bounding box, choosing an image format and quality, \
+            waiting for network idle, hiding scrollbars, emulating a device pixel ratio, and \
+            returning the encoded bytes together with the captured dimensions and a stable \
+            content hash for downstream diffing and caching across repeated capture runs. It \
+            accepts a large set of options: full page versus viewport only, an explicit \
+            clip rectangle with x, y, width and height, the output encoding as png, jpeg or \
+            webp, a quality integer for lossy formats, an optional background color for \
+            transparent pages, a timeout in milliseconds, a flag to disable animations, a \
+            flag to wait for fonts to load, a scale factor, and an optional selector to \
+            capture a single element rather than the whole page. Every one of these options \
+            is documented inline in the schema, which is exactly why this single definition \
+            costs far more context than the rest of the surface combined and dominates the \
+            token budget for the whole server before the user has typed a single word."
+            .to_string();
+        let mut tools = vec![serde_json::from_value(json!({
+            "name": "take_screenshot",
+            "description": big,
+            "inputSchema": { "type": "object", "properties": {} }
+        }))
+        .unwrap()];
+        // Distinct descriptions so the small tools draw no name/overlap
+        // advisories — the point of this fixture is the single dominant tool.
+        for (name, desc) in [
+            ("ping", "Probe liveness and measure round-trip latency."),
+            ("echo", "Return the supplied text verbatim to the caller."),
+            ("health", "Report readiness of every downstream dependency."),
+            ("version", "Emit the running build identifier and commit."),
+            ("reset", "Clear accumulated session state back to defaults."),
+            ("flush", "Force pending writes out to durable storage now."),
+            (
+                "status",
+                "Summarize queue depth and worker occupancy today.",
+            ),
+        ] {
+            tools.push(
+                serde_json::from_value(json!({
+                    "name": name,
+                    "description": desc,
+                    "inputSchema": { "type": "object", "properties": {} }
+                }))
+                .unwrap(),
+            );
+        }
+        tools
+    }
+
+    #[test]
+    fn budget_advise_snapshot() {
+        let tools = dominant_tools();
+        let budgets = vec![tokens::budget_local("gpt-4o", &tools, None).unwrap()];
+        let section = advisor_section(&tools, &budgets).expect("advisories fired");
+        assert!(section.contains("dominates"));
+        assert!(section.contains("carry"));
+        let combined = format!(
+            "{}\n{}",
+            render_table(&mock_server_info(), &budgets),
+            section
+        );
+        insta::assert_snapshot!("budget_advise", combined);
     }
 }

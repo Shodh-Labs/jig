@@ -46,6 +46,7 @@ use jig_core::discovery::{self, DiscoveredTransport};
 use jig_core::{Client, ClientOptions, ProtocolTap, SourceSelector, ToolCallResult};
 use serde_json::{json, Value};
 
+mod advisor_view;
 mod bench;
 mod budget;
 mod check;
@@ -251,6 +252,11 @@ enum Command {
         /// approximation on any error).
         #[arg(long)]
         exact_anthropic: bool,
+        /// After the table, print the tool-set advisor: naming collisions,
+        /// accuracy-cliff warnings, and cost-dominance advisories. Suppressed
+        /// by --json/--markdown (those are machine/share artifacts).
+        #[arg(long)]
+        advise: bool,
     },
     /// Render exactly what the model sees: the provider API request body
     /// `jig bench` would send (tools in the provider dialect + system prompt +
@@ -663,6 +669,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             timeout,
             max_message_bytes,
             exact_anthropic,
+            advise,
         } => {
             let target = Target::resolve(stdio, http, server, header)?;
             budget::run(
@@ -674,6 +681,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 timeout,
                 max_message_bytes,
                 exact_anthropic,
+                advise,
             )
             .await
         }
