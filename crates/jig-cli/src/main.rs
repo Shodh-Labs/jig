@@ -375,15 +375,15 @@ async fn inspect_inner(
     let prompts = client.list_prompts().await.map_err(|e| e.to_string())?;
 
     if as_json {
-        let doc = json!({
-            "serverInfo": client.server_info(),
-            "protocolVersion": client.protocol_version(),
-            "capabilities": client.capabilities(),
-            "instructions": client.instructions(),
-            "tools": tools,
-            "resources": resources,
-            "prompts": prompts,
-        });
+        let doc = render::inspect_json_doc(
+            client.server_info(),
+            client.protocol_version(),
+            client.capabilities(),
+            client.instructions(),
+            &tools,
+            &resources,
+            &prompts,
+        );
         emit_line(&serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?);
     } else {
         emit(&render::inspect_report(

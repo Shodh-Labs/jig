@@ -1,0 +1,25 @@
+---
+source: crates/jig-cli/src/render.rs
+expression: report
+---
+Server:       jig-mock-server v0.1.0
+Protocol:     2025-06-18
+Capabilities: tools
+Instructions: A toy MCP server for exercising Jig.
+
+Tools (3):
+  - echo
+      Echo the provided text straight back.
+      input: object { text: string }  required: [text]
+  - make_reservation
+      Book a table. Demonstrates a nested object argument and an enum.
+      input: object { date: string, party: object{seating,size} }  required: [party, date]
+  - always_fails
+      A tool that always reports an error, for testing error paths.
+      input: object {}
+
+Resources (0):
+  (none advertised)
+
+Prompts (0):
+  (none advertised)

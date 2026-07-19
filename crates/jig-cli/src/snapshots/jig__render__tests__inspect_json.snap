@@ -1,0 +1,80 @@
+---
+source: crates/jig-cli/src/render.rs
+expression: pretty
+---
+{
+  "capabilities": {
+    "tools": {}
+  },
+  "instructions": "A toy MCP server for exercising Jig.",
+  "prompts": [],
+  "protocolVersion": "2025-06-18",
+  "resources": [],
+  "serverInfo": {
+    "name": "jig-mock-server",
+    "version": "0.1.0"
+  },
+  "tools": [
+    {
+      "description": "Echo the provided text straight back.",
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "description": "Text to echo.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "echo"
+    },
+    {
+      "description": "Book a table. Demonstrates a nested object argument and an enum.",
+      "inputSchema": {
+        "properties": {
+          "date": {
+            "description": "ISO-8601 date.",
+            "type": "string"
+          },
+          "party": {
+            "properties": {
+              "seating": {
+                "enum": [
+                  "indoor",
+                  "outdoor",
+                  "bar"
+                ],
+                "type": "string"
+              },
+              "size": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "size"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "party",
+          "date"
+        ],
+        "type": "object"
+      },
+      "name": "make_reservation"
+    },
+    {
+      "description": "A tool that always reports an error, for testing error paths.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "always_fails"
+    }
+  ]
+}

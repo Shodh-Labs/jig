@@ -1,0 +1,18 @@
+---
+source: crates/jig-cli/src/budget.rs
+expression: "render_table(&mock_server_info(), &mock_budgets_multi())"
+---
+Server: jig-mock-server v0.1.0
+
+Model:  gpt-4o (o200k_base, exact)
+Model:  claude-sonnet (~approx via o200k_base)
+        note: counted with the o200k_base tokenizer as a proxy (Claude's tokenizer is not publicly available); use --exact-anthropic for the exact total
+
+Tool                      gpt-4o  claude-sonnet
+-----------------------------------------------
+make_reservation        99 exact     99 ~approx
+echo                    42 exact     42 ~approx
+always_fails            34 exact     34 ~approx
+(server instructions)    8 exact      8 ~approx
+-----------------------------------------------
+TOTAL                  183 exact    183 ~approx

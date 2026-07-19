@@ -1,0 +1,8 @@
+---
+source: crates/jig-cli/src/render.rs
+expression: "call_result(\"echo\", &result)"
+---
+Tool:   echo
+Status: ok
+Result:
+  echo: hello jig

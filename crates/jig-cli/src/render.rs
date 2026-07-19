@@ -1,31 +1,87 @@
 //! Human-readable rendering for `jig` terminal output.
 //!
-//! The `--json` paths bypass this module entirely and emit full, untruncated
-//! data; everything here is for the friendly report a person reads.
+//! The human report is what a person reads; the `--json` path emits full,
+//! untruncated data. Both are built here from plain data (not a live
+//! [`Client`]) so their exact output can be locked with snapshot tests.
 
-use jig_core::{Client, Prompt, Resource, Tool, ToolCallResult};
-use serde_json::Value;
+use jig_core::{Client, Implementation, Prompt, Resource, Tool, ToolCallResult};
+use serde_json::{json, Value};
+
+/// Build the machine-readable `jig inspect --json` document from plain data.
+///
+/// Kept a pure function of its inputs (rather than reaching into a [`Client`])
+/// so the exact JSON shape is snapshot-testable and stable across refactors.
+pub fn inspect_json_doc(
+    server_info: &Implementation,
+    protocol_version: &str,
+    capabilities: &Value,
+    instructions: Option<&str>,
+    tools: &[Tool],
+    resources: &[Resource],
+    prompts: &[Prompt],
+) -> Value {
+    json!({
+        "serverInfo": server_info,
+        "protocolVersion": protocol_version,
+        "capabilities": capabilities,
+        "instructions": instructions,
+        "tools": tools,
+        "resources": resources,
+        "prompts": prompts,
+    })
+}
 
 /// Max characters of a tool description shown in the human report.
 const DESC_MAX: usize = 100;
 
-/// Render the full `jig inspect` report.
+/// Render the full `jig inspect` report from a live client.
+///
+/// A thin adapter over [`inspect_report_from`]: it pulls the header fields off
+/// the [`Client`] so the rendering itself stays a pure function of plain data
+/// (and thus snapshot-testable without a live connection).
 pub fn inspect_report(
     client: &Client,
     tools: &[Tool],
     resources: &[Resource],
     prompts: &[Prompt],
 ) -> String {
-    let mut s = String::new();
     let info = client.server_info();
+    inspect_report_from(
+        &info.name,
+        &info.version,
+        client.protocol_version(),
+        client.capabilities(),
+        client.instructions(),
+        tools,
+        resources,
+        prompts,
+    )
+}
 
-    s.push_str(&format!("Server:       {} v{}\n", info.name, info.version));
-    s.push_str(&format!("Protocol:     {}\n", client.protocol_version()));
+/// Render the `jig inspect` report from plain data (no [`Client`]).
+#[allow(clippy::too_many_arguments)]
+fn inspect_report_from(
+    server_name: &str,
+    server_version: &str,
+    protocol_version: &str,
+    capabilities: &Value,
+    instructions: Option<&str>,
+    tools: &[Tool],
+    resources: &[Resource],
+    prompts: &[Prompt],
+) -> String {
+    let mut s = String::new();
+
+    s.push_str(&format!(
+        "Server:       {} v{}\n",
+        server_name, server_version
+    ));
+    s.push_str(&format!("Protocol:     {}\n", protocol_version));
     s.push_str(&format!(
         "Capabilities: {}\n",
-        summarize_capabilities(client.capabilities())
+        summarize_capabilities(capabilities)
     ));
-    if let Some(instr) = client.instructions() {
+    if let Some(instr) = instructions {
         s.push_str(&format!("Instructions: {}\n", truncate(instr, DESC_MAX)));
     }
     s.push('\n');
@@ -253,8 +309,8 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    // `json` comes in via `super::*` (used by the renderers themselves).
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn schema_summary_simple_object() {
@@ -324,5 +380,107 @@ mod tests {
         assert!(!out.contains('\n'), "must be single line: {out:?}");
         assert!(!out.contains('\t'), "must have no tabs: {out:?}");
         assert_eq!(out, "First paragraph. Second paragraph. indented tab");
+    }
+
+    // ---- Snapshot fixtures: the jig-mock-server tool surface ----------------
+
+    /// The three tools jig-mock-server exposes, as stable fixture data for the
+    /// snapshot tests. Kept in sync with `jig-mock-server`'s `handle_tools_list`
+    /// so the snapshots reflect a real server's output shape.
+    fn mock_tools() -> Vec<Tool> {
+        serde_json::from_value(json!([
+            {
+                "name": "echo",
+                "description": "Echo the provided text straight back.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "text": { "type": "string", "description": "Text to echo." } },
+                    "required": ["text"]
+                }
+            },
+            {
+                "name": "make_reservation",
+                "description": "Book a table. Demonstrates a nested object argument and an enum.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "party": {
+                            "type": "object",
+                            "properties": {
+                                "size": { "type": "integer", "minimum": 1 },
+                                "seating": { "type": "string", "enum": ["indoor", "outdoor", "bar"] }
+                            },
+                            "required": ["size"]
+                        },
+                        "date": { "type": "string", "description": "ISO-8601 date." }
+                    },
+                    "required": ["party", "date"]
+                }
+            },
+            {
+                "name": "always_fails",
+                "description": "A tool that always reports an error, for testing error paths.",
+                "inputSchema": { "type": "object", "properties": {} }
+            }
+        ]))
+        .unwrap()
+    }
+
+    #[test]
+    fn inspect_report_snapshot() {
+        // Mirrors the mock server: only `tools` advertised (resources/prompts
+        // absent), a fixed instructions string.
+        let caps = json!({ "tools": {} });
+        let report = inspect_report_from(
+            "jig-mock-server",
+            "0.1.0",
+            "2025-06-18",
+            &caps,
+            Some("A toy MCP server for exercising Jig."),
+            &mock_tools(),
+            &[],
+            &[],
+        );
+        insta::assert_snapshot!("inspect_report", report);
+    }
+
+    #[test]
+    fn inspect_json_snapshot() {
+        let caps = json!({ "tools": {} });
+        let doc = inspect_json_doc(
+            &Implementation {
+                name: "jig-mock-server".to_string(),
+                version: "0.1.0".to_string(),
+                title: None,
+            },
+            "2025-06-18",
+            &caps,
+            Some("A toy MCP server for exercising Jig."),
+            &mock_tools(),
+            &[],
+            &[],
+        );
+        let pretty = serde_json::to_string_pretty(&doc).unwrap();
+        insta::assert_snapshot!("inspect_json", pretty);
+    }
+
+    #[test]
+    fn call_result_ok_snapshot() {
+        let result: ToolCallResult = serde_json::from_value(json!({
+            "content": [ { "type": "text", "text": "echo: hello jig" } ],
+            "isError": false
+        }))
+        .unwrap();
+        insta::assert_snapshot!("call_result_ok", call_result("echo", &result));
+    }
+
+    #[test]
+    fn call_result_error_snapshot() {
+        let result: ToolCallResult = serde_json::from_value(json!({
+            "content": [ { "type": "text", "text": "This tool always fails, by design." } ],
+            "isError": true
+        }))
+        .unwrap();
+        insta::assert_snapshot!("call_result_error", call_result("always_fails", &result));
     }
 }

@@ -607,4 +607,103 @@ _Measured with Jig — github.com/Shodh-Labs/jig_
         assert_eq!(v["models"][0]["totalExactness"]["exact"], json!(true));
         assert!(v["models"][0]["tools"][0]["canonical"].is_string());
     }
+
+    // ---- Snapshots over real mock-server fixture data -----------------------
+
+    /// The jig-mock-server tool surface as fixture data, kept in sync with the
+    /// mock's `handle_tools_list`. Priced with the exact OpenAI tokenizer, the
+    /// resulting tables/cards are fully deterministic and safe to snapshot.
+    fn mock_tools() -> Vec<Tool> {
+        serde_json::from_value(json!([
+            {
+                "name": "echo",
+                "description": "Echo the provided text straight back.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "text": { "type": "string", "description": "Text to echo." } },
+                    "required": ["text"]
+                }
+            },
+            {
+                "name": "make_reservation",
+                "description": "Book a table. Demonstrates a nested object argument and an enum.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "party": {
+                            "type": "object",
+                            "properties": {
+                                "size": { "type": "integer", "minimum": 1 },
+                                "seating": { "type": "string", "enum": ["indoor", "outdoor", "bar"] }
+                            },
+                            "required": ["size"]
+                        },
+                        "date": { "type": "string", "description": "ISO-8601 date." }
+                    },
+                    "required": ["party", "date"]
+                }
+            },
+            {
+                "name": "always_fails",
+                "description": "A tool that always reports an error, for testing error paths.",
+                "inputSchema": { "type": "object", "properties": {} }
+            }
+        ]))
+        .unwrap()
+    }
+
+    const MOCK_INSTRUCTIONS: &str = "A toy MCP server for exercising Jig.";
+
+    fn mock_server_info() -> Implementation {
+        Implementation {
+            name: "jig-mock-server".to_string(),
+            version: "0.1.0".to_string(),
+            title: None,
+        }
+    }
+
+    /// Budgets over the mock tools for one exact (gpt-4o) column.
+    fn mock_budgets_single() -> Vec<ModelBudget> {
+        vec![tokens::budget_local("gpt-4o", &mock_tools(), Some(MOCK_INSTRUCTIONS)).unwrap()]
+    }
+
+    /// Budgets over the mock tools for an exact + labelled-approximate pair.
+    fn mock_budgets_multi() -> Vec<ModelBudget> {
+        vec![
+            tokens::budget_local("gpt-4o", &mock_tools(), Some(MOCK_INSTRUCTIONS)).unwrap(),
+            tokens::budget_local("claude-sonnet", &mock_tools(), Some(MOCK_INSTRUCTIONS)).unwrap(),
+        ]
+    }
+
+    #[test]
+    fn budget_table_snapshot() {
+        insta::assert_snapshot!(
+            "budget_table",
+            render_table(&mock_server_info(), &mock_budgets_single())
+        );
+    }
+
+    #[test]
+    fn budget_table_multimodel_snapshot() {
+        insta::assert_snapshot!(
+            "budget_table_multimodel",
+            render_table(&mock_server_info(), &mock_budgets_multi())
+        );
+    }
+
+    #[test]
+    fn budget_markdown_snapshot() {
+        insta::assert_snapshot!(
+            "budget_markdown",
+            render_markdown(&mock_server_info(), &mock_budgets_single())
+        );
+    }
+
+    #[test]
+    fn budget_json_snapshot() {
+        insta::assert_snapshot!(
+            "budget_json",
+            render_json(&mock_server_info(), &mock_tools(), &mock_budgets_single())
+        );
+    }
 }

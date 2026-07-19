@@ -1,0 +1,17 @@
+---
+source: crates/jig-cli/src/budget.rs
+expression: "render_markdown(&mock_server_info(), &mock_budgets_single())"
+---
+## 🧰 MCP token budget — jig-mock-server v0.1.0
+
+**183** tokens on `gpt-4o` (exact) across **3** tools.
+
+| Tool | gpt-4o | % |
+|:-----|-----:|---:|
+| `make_reservation` | 99 | 54.1% |
+| `echo` | 42 | 23.0% |
+| `always_fails` | 34 | 18.6% |
+| _server instructions_ | 8 | 4.4% |
+| **Total** | **183** | **100%** |
+
+_Measured with Jig — github.com/Shodh-Labs/jig_

@@ -1,0 +1,16 @@
+---
+source: crates/jig-cli/src/budget.rs
+expression: "render_table(&mock_server_info(), &mock_budgets_single())"
+---
+Server: jig-mock-server v0.1.0
+
+Model:  gpt-4o (o200k_base, exact)
+
+Tool                      gpt-4o  % of total
+--------------------------------------------
+make_reservation        99 exact       54.1%
+echo                    42 exact       23.0%
+always_fails            34 exact       18.6%
+(server instructions)    8 exact        4.4%
+--------------------------------------------
+TOTAL                  183 exact        100%

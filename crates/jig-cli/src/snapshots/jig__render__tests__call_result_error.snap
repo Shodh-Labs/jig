@@ -1,0 +1,8 @@
+---
+source: crates/jig-cli/src/render.rs
+expression: "call_result(\"always_fails\", &result)"
+---
+Tool:   always_fails
+Status: ERROR
+Result:
+  This tool always fails, by design.

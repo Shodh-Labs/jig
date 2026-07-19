@@ -1,0 +1,46 @@
+---
+source: crates/jig-cli/src/budget.rs
+expression: "render_json(&mock_server_info(), &mock_tools(), &mock_budgets_single())"
+---
+{
+  "canonicalRendering": "V1 canonical rendering: for each tool, a compact (no insignificant whitespace) JSON object with keys {name, description, input_schema} — description is omitted when the tool declares none — serialized with lexicographically sorted keys for determinism. A tool's token count is the token count of that JSON string. The server's `instructions` string, if present, is counted verbatim. The grand total is the sum of every per-tool count plus the instructions count.",
+  "models": [
+    {
+      "header": "gpt-4o (o200k_base, exact)",
+      "instructionsTokens": 8,
+      "model": "gpt-4o",
+      "perToolExactness": {
+        "exact": true
+      },
+      "tools": [
+        {
+          "canonical": "{\"description\":\"Book a table. Demonstrates a nested object argument and an enum.\",\"input_schema\":{\"properties\":{\"date\":{\"description\":\"ISO-8601 date.\",\"type\":\"string\"},\"party\":{\"properties\":{\"seating\":{\"enum\":[\"indoor\",\"outdoor\",\"bar\"],\"type\":\"string\"},\"size\":{\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"size\"],\"type\":\"object\"}},\"required\":[\"party\",\"date\"],\"type\":\"object\"},\"name\":\"make_reservation\"}",
+          "name": "make_reservation",
+          "title": null,
+          "tokens": 99
+        },
+        {
+          "canonical": "{\"description\":\"Echo the provided text straight back.\",\"input_schema\":{\"properties\":{\"text\":{\"description\":\"Text to echo.\",\"type\":\"string\"}},\"required\":[\"text\"],\"type\":\"object\"},\"name\":\"echo\"}",
+          "name": "echo",
+          "title": null,
+          "tokens": 42
+        },
+        {
+          "canonical": "{\"description\":\"A tool that always reports an error, for testing error paths.\",\"input_schema\":{\"properties\":{},\"type\":\"object\"},\"name\":\"always_fails\"}",
+          "name": "always_fails",
+          "title": null,
+          "tokens": 34
+        }
+      ],
+      "total": 183,
+      "totalExactness": {
+        "exact": true
+      }
+    }
+  ],
+  "serverInfo": {
+    "name": "jig-mock-server",
+    "version": "0.1.0"
+  },
+  "toolCount": 3
+}
