@@ -1,0 +1,55 @@
+name: MCP Server Census
+
+# The weekly ecosystem census: run jig against the curated list of popular,
+# npx-runnable MCP servers (data/census-servers.json) and regenerate the
+# baseline data that `jig check` grades against — percentiles.json — plus the
+# full per-server raw results. Servers are fetched unpinned (npx latest) on
+# purpose so the baseline tracks the ecosystem as it actually ships.
+#
+# This workflow deliberately does NOT commit the refreshed data. Percentiles are
+# the yardstick every `jig check` score is measured against, so a human reviews
+# the diff (did a heavy new server move p90? did half the list start failing
+# because of an npx outage?) and commits data/percentiles.json + census-raw.json
+# by hand. The run uploads both files as artifacts and writes a summary to the
+# job summary for that review.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # weekly, Mondays 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    name: Run the census
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Select stable toolchain
+        run: rustup default stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Build jig
+        run: cargo build -p jig-cli
+      - name: Run the census
+        run: node scripts/census/run-census.js
+      - name: Write job summary
+        if: always()
+        run: node scripts/census/summarize.js >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload census artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcp-census
+          path: |
+            data/census-raw.json
+            data/percentiles.json
+          if-no-files-found: warn
+          retention-days: 90
+      # NOTE: intentionally no commit step. A maintainer reviews the uploaded
+      # artifacts and commits data/percentiles.json + data/census-raw.json by
+      # hand — see the header comment for why the baseline is human-gated.
