@@ -33,7 +33,7 @@ Jig is a Rust workspace (`cargo` 1.80+). Milestone 1 ships the core engine and t
 ```
 crates/
   jig-core         # library: stdio JSON-RPC transport, MCP handshake + ops, protocol tap
-  jig-cli          # binary `jig`: inspect / call subcommands
+  jig-cli          # binary `jig`: inspect / call / budget subcommands
   jig-mock-server  # binary: a minimal MCP server used as a test fixture
 ```
 
@@ -55,7 +55,44 @@ cargo build
 # invoke a single tool
 ./target/debug/jig call --stdio "./target/debug/jig-mock-server" \
     --tool echo --args '{"text":"hello"}'
+# what does this server cost in context tokens, per tool, per model?
+./target/debug/jig budget --stdio "./target/debug/jig-mock-server"
 ```
+
+### `jig budget` — the token-budget engine
+
+`jig budget` answers a question no model client shows you: **what does an MCP
+server cost in context tokens, before you type a word?** It prices the *tools
+array as sent to the API* — for each tool the compact JSON `{name, description,
+input_schema}` — plus the server's `instructions` field, per tool and totalled.
+
+```sh
+jig budget --stdio "npx -y @playwright/mcp@latest"          # default table
+jig budget --stdio "<cmd>" --model gpt-4o --model gpt-4     # a column per model
+jig budget --stdio "<cmd>" --markdown                       # shareable card for a PR/tweet
+jig budget --stdio "<cmd>" --json                           # machine output + exactness metadata
+jig budget --stdio "<cmd>" --model claude-sonnet --exact-anthropic  # exact Claude total via the API
+```
+
+**Accuracy honesty is a hard rule.** Numbers are exact where we can be exact and
+*clearly labelled* where we cannot:
+
+- **OpenAI is exact.** `gpt-4o` (`o200k_base`) and `gpt-4` (`cl100k_base`) use
+  the real `tiktoken` tokenizers — labelled `exact`.
+- **Anthropic is a labelled approximation by default.** Claude 3+ has no public
+  local tokenizer, so Jig counts with `o200k_base` as a proxy and labels every
+  such number `~approx`. With `--exact-anthropic` and `ANTHROPIC_API_KEY` set,
+  Jig calls Anthropic's official `count_tokens` endpoint for an exact *total*
+  (the endpoint reports a request-level total, not a per-tool breakdown, so the
+  per-tool rows stay `~approx` while the total becomes `exact`). Network errors
+  degrade back to the approximation with a warning — never a crash, and the key
+  is never logged.
+
+Known models: `gpt-4o`, `gpt-4`, `claude-sonnet`, `claude-opus` (adding one is a
+single registry entry in `jig-core`'s `tokens` module). Output is deterministic
+(stable sort, ties by name) so it can be diffed in CI. See
+[`docs/token-budget.md`](docs/token-budget.md) for the exact **canonical
+rendering** definition — what bytes get counted.
 
 `--stdio` takes the full server command (double-quote paths containing spaces).
 On Windows, `npx`/`npm` shims resolve automatically, so

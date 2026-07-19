@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use jig_core::tokens;
 use jig_core::{Client, Direction, JigError, ProtocolTap, StdioTransport};
 use serde_json::json;
 
@@ -134,6 +135,55 @@ async fn tap_serializes_to_jsonl() {
     }
 
     client.shutdown().await.expect("shutdown");
+}
+
+/// `jig budget` end-to-end at the library level: connect to the mock server,
+/// price its tool surface, and assert the budget is well-formed and stable —
+/// per-tool counts are deterministic and the grand total equals the sum of the
+/// per-tool counts plus the server instructions.
+#[tokio::test]
+async fn budget_over_mock_server_totals_are_stable_and_add_up() {
+    let client = Client::connect(&mock_server(), &[])
+        .await
+        .expect("handshake");
+    let tools = client.list_tools().await.expect("tools/list");
+    let instructions = client.instructions().map(|s| s.to_string());
+    client.shutdown().await.expect("shutdown");
+
+    assert_eq!(tools.len(), 3, "mock server exposes three tools");
+    assert!(
+        instructions.is_some(),
+        "mock server advertises instructions"
+    );
+
+    // Exact model (OpenAI). Total must equal the sum of per-tool + instructions.
+    let a = tokens::budget_local("gpt-4o", &tools, instructions.as_deref()).expect("budget");
+    let sum: usize = a.tools.iter().map(|t| t.tokens).sum();
+    assert_eq!(a.total, sum + a.instructions_tokens.unwrap());
+    assert!(a.per_tool_exactness.is_exact());
+    assert!(a.tools.iter().all(|t| t.tokens > 0));
+
+    // Determinism: a second run produces byte-identical per-tool counts.
+    let b = tokens::budget_local("gpt-4o", &tools, instructions.as_deref()).expect("budget");
+    let names_a: Vec<(&str, usize)> = a
+        .tools
+        .iter()
+        .map(|t| (t.name.as_str(), t.tokens))
+        .collect();
+    let names_b: Vec<(&str, usize)> = b
+        .tools
+        .iter()
+        .map(|t| (t.name.as_str(), t.tokens))
+        .collect();
+    assert_eq!(names_a, names_b);
+    assert_eq!(a.total, b.total);
+
+    // Anthropic default is a labelled approximation; the total still adds up.
+    let c = tokens::budget_local("claude-sonnet", &tools, instructions.as_deref()).expect("budget");
+    let csum: usize = c.tools.iter().map(|t| t.tokens).sum();
+    assert_eq!(c.total, csum + c.instructions_tokens.unwrap());
+    assert!(!c.per_tool_exactness.is_exact());
+    assert_eq!(c.per_tool_exactness.tag(), "~approx");
 }
 
 /// A server that accepts a request but never answers it must surface as a
