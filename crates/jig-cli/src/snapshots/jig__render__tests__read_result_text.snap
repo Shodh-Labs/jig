@@ -1,0 +1,9 @@
+---
+source: crates/jig-cli/src/render.rs
+expression: "resource_read_result(\"mock://text/hello\", &result)"
+---
+Resource: mock://text/hello
+Contents (1):
+  - mock://text/hello [text/plain]
+      Hello from a jig mock text resource.
+      Second line.

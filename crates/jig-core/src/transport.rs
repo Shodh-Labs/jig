@@ -445,6 +445,19 @@ impl Transport {
         }
     }
 
+    /// Open the standalone server→client stream and process pushed traffic for
+    /// `duration`, returning a summary. Only the Streamable HTTP transport has
+    /// such a stream (a GET SSE stream); stdio has no equivalent, so it reports
+    /// a clear error rather than pretending.
+    pub async fn listen(&self, duration: Duration) -> Result<crate::http::ListenSummary> {
+        match self {
+            Transport::Http(t) => t.listen(duration).await,
+            Transport::Stdio(_) => Err(JigError::transport(
+                "listening for server-initiated messages is only supported on the HTTP transport",
+            )),
+        }
+    }
+
     /// Cleanly terminate the connection (kill the child, or end the HTTP session).
     pub async fn shutdown(self) -> Result<()> {
         match self {

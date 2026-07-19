@@ -62,6 +62,10 @@ const DEFAULT_TIMEOUT_SECS: u64 = 30;
 /// [`jig_core::DEFAULT_MAX_MESSAGE_BYTES`] so it can be a clap default.
 const DEFAULT_MAX_MESSAGE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Default seconds to hold the standalone GET stream open under `inspect
+/// --listen`.
+const DEFAULT_LISTEN_SECS: u64 = 10;
+
 /// Translate the CLI `--timeout <seconds>` and `--max-message-bytes <n>` values
 /// into [`ClientOptions`]. A timeout of `0` disables the timeout (wait forever);
 /// a cap of `0` disables the inbound size cap (unbounded buffering).
@@ -69,6 +73,8 @@ pub(crate) fn client_options(timeout_secs: u64, max_message_bytes: u64) -> Clien
     ClientOptions {
         request_timeout: (timeout_secs != 0).then(|| Duration::from_secs(timeout_secs)),
         max_message_bytes: (max_message_bytes != 0).then_some(max_message_bytes as usize),
+        // Listening is opt-in and set by the caller (only `inspect --listen`).
+        listen: false,
     }
 }
 
@@ -160,6 +166,15 @@ enum Command {
         /// buffered without limit.
         #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
         max_message_bytes: u64,
+        /// (--http only) After listing, open the standalone server→client GET
+        /// SSE stream and report any pushed messages. Off by default — a
+        /// diagnostic tool opens that stream only when asked.
+        #[arg(long)]
+        listen: bool,
+        /// (with --listen) How many seconds to keep the GET stream open after
+        /// listing before reporting.
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_LISTEN_SECS)]
+        duration: u64,
     },
     /// Estimate the context-token cost of a server's tool surface, per model.
     Budget {
@@ -279,6 +294,65 @@ enum Command {
         #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
         max_message_bytes: u64,
     },
+    /// Read a resource by URI (`resources/read`) and print its contents.
+    Read {
+        /// The server command to run over stdio. Mutually exclusive with --http.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// A remote MCP endpoint URL to connect to over Streamable HTTP.
+        /// Mutually exclusive with --stdio.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Extra HTTP header for --http, "Name: Value" (repeatable).
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
+        /// The URI of the resource to read.
+        #[arg(long, value_name = "URI")]
+        uri: String,
+        /// Emit the full result as machine-readable JSON (blob base64 in full).
+        #[arg(long)]
+        json: bool,
+        /// Write the raw protocol traffic to this file as JSONL.
+        #[arg(long, value_name = "FILE")]
+        tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
+        /// Maximum size in bytes of a single inbound message (0 = no cap).
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
+    },
+    /// Fetch a prompt by name (`prompts/get`) and print its messages.
+    Prompt {
+        /// The server command to run over stdio. Mutually exclusive with --http.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// A remote MCP endpoint URL to connect to over Streamable HTTP.
+        /// Mutually exclusive with --stdio.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Extra HTTP header for --http, "Name: Value" (repeatable).
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
+        /// Name of the prompt to fetch.
+        #[arg(long, value_name = "NAME")]
+        name: String,
+        /// Prompt arguments as a JSON object string (default: {}).
+        #[arg(long, value_name = "JSON")]
+        args: Option<String>,
+        /// Emit the full result as machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+        /// Write the raw protocol traffic to this file as JSONL.
+        #[arg(long, value_name = "FILE")]
+        tap: Option<PathBuf>,
+        /// Per-request timeout in seconds (0 = wait forever).
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
+        /// Maximum size in bytes of a single inbound message (0 = no cap).
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
+    },
 }
 
 #[tokio::main]
@@ -328,9 +402,23 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             tap,
             timeout,
             max_message_bytes,
+            listen,
+            duration,
         } => {
             let target = Target::resolve(stdio, http, header)?;
-            inspect(&target, json, tap.as_deref(), timeout, max_message_bytes).await
+            if listen && !matches!(target, Target::Http { .. }) {
+                return Err("--listen requires --http (stdio has no server→client stream)".into());
+            }
+            inspect(
+                &target,
+                json,
+                tap.as_deref(),
+                timeout,
+                max_message_bytes,
+                listen,
+                duration,
+            )
+            .await
         }
         Command::Budget {
             stdio,
@@ -409,6 +497,50 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             )
             .await
         }
+        Command::Read {
+            stdio,
+            http,
+            header,
+            uri,
+            json,
+            tap,
+            timeout,
+            max_message_bytes,
+        } => {
+            let target = Target::resolve(stdio, http, header)?;
+            read(
+                &target,
+                &uri,
+                json,
+                tap.as_deref(),
+                timeout,
+                max_message_bytes,
+            )
+            .await
+        }
+        Command::Prompt {
+            stdio,
+            http,
+            header,
+            name,
+            args,
+            json,
+            tap,
+            timeout,
+            max_message_bytes,
+        } => {
+            let target = Target::resolve(stdio, http, header)?;
+            prompt(
+                &target,
+                &name,
+                args.as_deref(),
+                json,
+                tap.as_deref(),
+                timeout,
+                max_message_bytes,
+            )
+            .await
+        }
     }
 }
 
@@ -470,7 +602,23 @@ impl Target {
         timeout_secs: u64,
         max_message_bytes: u64,
     ) -> Result<Client, String> {
-        let opts = client_options(timeout_secs, max_message_bytes);
+        self.connect_with_listen(tap, timeout_secs, max_message_bytes, false)
+            .await
+    }
+
+    /// Like [`Target::connect`], but with an explicit `listen` opt-in that
+    /// enables the HTTP transport's standalone GET SSE stream (see
+    /// [`Client::listen`](jig_core::Client::listen)). Only `jig inspect
+    /// --listen` sets it; every other verb uses [`Target::connect`].
+    pub(crate) async fn connect_with_listen(
+        &self,
+        tap: ProtocolTap,
+        timeout_secs: u64,
+        max_message_bytes: u64,
+        listen: bool,
+    ) -> Result<Client, String> {
+        let mut opts = client_options(timeout_secs, max_message_bytes);
+        opts.listen = listen;
         let client = match self {
             Target::Stdio { program, args } => {
                 Client::connect_with_options(program, args, tap, opts).await
@@ -484,12 +632,15 @@ impl Target {
 }
 
 /// Run `jig inspect`.
+#[allow(clippy::too_many_arguments)]
 async fn inspect(
     target: &Target,
     as_json: bool,
     tap_path: Option<&std::path::Path>,
     timeout_secs: u64,
     max_message_bytes: u64,
+    listen: bool,
+    duration_secs: u64,
 ) -> Result<ExitCode, String> {
     // Own the tap so we can flush it even if a later step fails.
     let tap = ProtocolTap::new();
@@ -499,6 +650,8 @@ async fn inspect(
         as_json,
         timeout_secs,
         max_message_bytes,
+        listen,
+        duration_secs,
     )
     .await;
 
@@ -507,14 +660,19 @@ async fn inspect(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn inspect_inner(
     target: &Target,
     tap: ProtocolTap,
     as_json: bool,
     timeout_secs: u64,
     max_message_bytes: u64,
+    listen: bool,
+    duration_secs: u64,
 ) -> Result<ExitCode, String> {
-    let client = target.connect(tap, timeout_secs, max_message_bytes).await?;
+    let client = target
+        .connect_with_listen(tap, timeout_secs, max_message_bytes, listen)
+        .await?;
 
     let tools = client.list_tools().await.map_err(|e| e.to_string())?;
     let resources = client.list_resources().await.map_err(|e| e.to_string())?;
@@ -535,6 +693,28 @@ async fn inspect_inner(
         emit(&render::inspect_report(
             &client, &tools, &resources, &prompts,
         ));
+    }
+
+    // Optionally hold the standalone GET stream open and report pushed traffic.
+    if listen {
+        let summary = client
+            .listen(Duration::from_secs(duration_secs))
+            .await
+            .map_err(|e| format!("listen failed: {e}"))?;
+        if as_json {
+            let doc = json!({
+                "opened": summary.opened,
+                "status": summary.status,
+                "notifications": summary.notifications,
+                "pings": summary.pings,
+                "otherRequests": summary.other_requests,
+                "durationSecs": summary.duration.as_secs_f64(),
+            });
+            emit_line(&serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?);
+        } else {
+            emit("\n");
+            emit(&render::listen_summary(&summary));
+        }
     }
 
     client.shutdown().await.map_err(|e| e.to_string())?;
@@ -604,6 +784,113 @@ async fn call_inner(
     } else {
         Ok(ExitCode::SUCCESS)
     }
+}
+
+/// Run `jig read` (`resources/read`).
+async fn read(
+    target: &Target,
+    uri: &str,
+    as_json: bool,
+    tap_path: Option<&std::path::Path>,
+    timeout_secs: u64,
+    max_message_bytes: u64,
+) -> Result<ExitCode, String> {
+    let tap = ProtocolTap::new();
+    let result = read_inner(
+        target,
+        tap.clone(),
+        uri,
+        as_json,
+        timeout_secs,
+        max_message_bytes,
+    )
+    .await;
+    warn_non_protocol_output(&tap);
+    write_tap_if_requested(&tap, tap_path);
+    result
+}
+
+async fn read_inner(
+    target: &Target,
+    tap: ProtocolTap,
+    uri: &str,
+    as_json: bool,
+    timeout_secs: u64,
+    max_message_bytes: u64,
+) -> Result<ExitCode, String> {
+    let client = target.connect(tap, timeout_secs, max_message_bytes).await?;
+
+    let result = client
+        .read_resource(uri)
+        .await
+        .map_err(|e| format!("resources/read failed: {e}"))?;
+
+    if as_json {
+        emit_line(&serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);
+    } else {
+        emit(&render::resource_read_result(uri, &result));
+    }
+
+    client.shutdown().await.map_err(|e| e.to_string())?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Run `jig prompt` (`prompts/get`).
+async fn prompt(
+    target: &Target,
+    name: &str,
+    args_json: Option<&str>,
+    as_json: bool,
+    tap_path: Option<&std::path::Path>,
+    timeout_secs: u64,
+    max_message_bytes: u64,
+) -> Result<ExitCode, String> {
+    let arguments: Value = match args_json {
+        Some(s) => serde_json::from_str(s).map_err(|e| format!("--args is not valid JSON: {e}"))?,
+        None => json!({}),
+    };
+
+    let tap = ProtocolTap::new();
+    let result = prompt_inner(
+        target,
+        tap.clone(),
+        name,
+        arguments,
+        as_json,
+        timeout_secs,
+        max_message_bytes,
+    )
+    .await;
+    warn_non_protocol_output(&tap);
+    write_tap_if_requested(&tap, tap_path);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prompt_inner(
+    target: &Target,
+    tap: ProtocolTap,
+    name: &str,
+    arguments: Value,
+    as_json: bool,
+    timeout_secs: u64,
+    max_message_bytes: u64,
+) -> Result<ExitCode, String> {
+    let client = target.connect(tap, timeout_secs, max_message_bytes).await?;
+
+    let result = client
+        .get_prompt(name, arguments)
+        .await
+        .map_err(|e| format!("prompts/get failed: {e}"))?;
+
+    if as_json {
+        emit_line(&serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);
+    } else {
+        emit(&render::prompt_get_result(name, &result));
+    }
+
+    client.shutdown().await.map_err(|e| e.to_string())?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Warn (on stderr) if the server wrote anything to stdout that is not a valid

@@ -30,7 +30,7 @@
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use reqwest::StatusCode;
@@ -46,8 +46,35 @@ const PROTOCOL_HEADER: &str = "MCP-Protocol-Version";
 /// The `Accept` value every POST must send per spec: the client must support
 /// both a single JSON reply and an SSE stream.
 const ACCEPT_VALUE: &str = "application/json, text/event-stream";
+/// The `Accept` value for the standalone GET stream (spec: the client MUST list
+/// `text/event-stream`).
+const ACCEPT_SSE: &str = "text/event-stream";
 /// Bytes of an error response body to include in a diagnostic message.
 const BODY_SNIPPET_LEN: usize = 512;
+
+/// Summary of a standalone GET-stream listening session (see
+/// [`HttpTransport::listen`]). Every pushed message and every reply Jig sent is
+/// also recorded in the [`ProtocolTap`]; this struct is the at-a-glance tally
+/// the CLI reports.
+#[derive(Debug, Clone, Default)]
+pub struct ListenSummary {
+    /// Whether the server opened an SSE stream (`true`) or declined with HTTP
+    /// 405 (`false`, spec-permitted — the server offers no standalone stream).
+    pub opened: bool,
+    /// The HTTP status the server returned to the GET request.
+    pub status: u16,
+    /// Count of server→client notifications observed on the stream.
+    pub notifications: usize,
+    /// Count of server→client `ping` requests, each answered with an empty
+    /// result per spec.
+    pub pings: usize,
+    /// Count of other server→client requests (e.g. `sampling/createMessage`,
+    /// `roots/list`), each answered with a JSON-RPC `-32601 method not found`
+    /// because Jig advertises no client capabilities.
+    pub other_requests: usize,
+    /// How long the stream was kept open.
+    pub duration: Duration,
+}
 
 /// A live JSON-RPC-over-Streamable-HTTP connection to a remote MCP server.
 pub struct HttpTransport {
@@ -66,6 +93,10 @@ pub struct HttpTransport {
     /// Maximum size, in bytes, of a single inbound response body. `None`
     /// disables the cap. A larger body fails with [`JigError::MessageTooLarge`].
     max_message_bytes: Option<usize>,
+    /// Whether [`HttpTransport::listen`] is permitted (the `--listen` opt-in).
+    /// Default OFF: a diagnostic tool opens the standalone server stream only
+    /// when explicitly asked.
+    listen_enabled: bool,
 }
 
 impl HttpTransport {
@@ -81,6 +112,7 @@ impl HttpTransport {
         tap: ProtocolTap,
         request_timeout: Option<Duration>,
         max_message_bytes: Option<usize>,
+        listen_enabled: bool,
     ) -> Result<Self> {
         let client = reqwest::Client::builder()
             .build()
@@ -95,6 +127,7 @@ impl HttpTransport {
             next_id: AtomicI64::new(1),
             request_timeout,
             max_message_bytes,
+            listen_enabled,
         })
     }
 
@@ -274,31 +307,57 @@ impl HttpTransport {
     }
 
     /// Read a *successful* response body into the JSON-RPC messages it carries,
-    /// dispatching on content type.
+    /// dispatching on content type. The body is **streamed** (via
+    /// [`reqwest::Response::chunk`]) rather than buffered whole, so the size cap
+    /// aborts the moment it is exceeded instead of after a hostile server has
+    /// already made Jig hold the entire payload: per-body for JSON, per-event
+    /// for SSE.
     async fn read_body(
         &self,
-        resp: reqwest::Response,
+        mut resp: reqwest::Response,
         content_type: &str,
         method: &str,
     ) -> Result<Vec<Value>> {
         if content_type.contains("text/event-stream") {
-            let text = resp
-                .text()
+            let mut reader = SseByteReader::new(self.max_message_bytes);
+            let mut out = Vec::new();
+            while let Some(chunk) = resp
+                .chunk()
                 .await
-                .map_err(|e| self.map_send_error(e, method))?;
-            self.check_size(text.len())?;
-            parse_sse(&text, method)
+                .map_err(|e| self.map_send_error(e, method))?
+            {
+                reader.feed(&chunk, &mut out)?;
+            }
+            reader.finish(&mut out);
+            // A body that declared itself an event-stream but carried no
+            // parseable events is malformed framing (mirrors the batch parser).
+            if out.is_empty() && reader.saw_nonspace {
+                return Err(JigError::protocol(format!(
+                    "invalid SSE framing in response to '{method}': body was declared \
+                     text/event-stream but carried no parseable events"
+                )));
+            }
+            Ok(out)
         } else {
             // Treat everything else (application/json, or a server that omits
-            // the header) as a single JSON object.
-            let text = resp
-                .text()
+            // the header) as a single JSON object, accumulated under the cap.
+            let mut buf: Vec<u8> = Vec::new();
+            while let Some(chunk) = resp
+                .chunk()
                 .await
-                .map_err(|e| self.map_send_error(e, method))?;
-            self.check_size(text.len())?;
-            if text.trim().is_empty() {
+                .map_err(|e| self.map_send_error(e, method))?
+            {
+                if let Some(limit) = self.max_message_bytes {
+                    if buf.len() + chunk.len() > limit {
+                        return Err(JigError::MessageTooLarge { limit });
+                    }
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            if buf.iter().all(u8::is_ascii_whitespace) {
                 return Ok(Vec::new());
             }
+            let text = String::from_utf8_lossy(&buf);
             let value: Value = serde_json::from_str(&text).map_err(|e| {
                 JigError::protocol(format!(
                     "response to '{method}' was not valid JSON ({e}): {}",
@@ -309,14 +368,140 @@ impl HttpTransport {
         }
     }
 
-    /// Enforce the inbound size cap against a response body length, mirroring
-    /// the stdio transport's per-message cap.
-    fn check_size(&self, len: usize) -> Result<()> {
-        if let Some(limit) = self.max_message_bytes {
-            if len > limit {
-                return Err(JigError::MessageTooLarge { limit });
+    /// Open the standalone **GET** SSE stream and process server-initiated
+    /// traffic for `duration`, then return a [`ListenSummary`]. Everything —
+    /// pushed notifications, server→client requests, and Jig's replies to
+    /// them — is recorded in the tap.
+    ///
+    /// Spec (`2025-06-18`, "Listening for Messages from the Server"): the client
+    /// MAY issue a GET with `Accept: text/event-stream`; the server MUST answer
+    /// with `text/event-stream` or HTTP 405. A 405 is not an error — it just
+    /// means the server offers no standalone stream — so it is reported in the
+    /// summary, never surfaced as a failure.
+    ///
+    /// Reply policy for server→client **requests** (v1): Jig advertises no
+    /// client capabilities, so it honestly answers every such request with
+    /// JSON-RPC `-32601 method not found` — **except** `ping`, which the spec
+    /// says any receiver answers with an empty result.
+    pub async fn listen(&self, duration: Duration) -> Result<ListenSummary> {
+        if !self.listen_enabled {
+            return Err(JigError::transport(
+                "GET-stream listening was not enabled (set ClientOptions.listen / pass --listen)",
+            ));
+        }
+        let start = Instant::now();
+
+        let mut rb = self.client.get(&self.endpoint).header(ACCEPT, ACCEPT_SSE);
+        if let Some(session) = lock(&self.session_id).clone() {
+            rb = rb.header(SESSION_HEADER, session);
+        }
+        if let Some(pv) = lock(&self.protocol_version).clone() {
+            rb = rb.header(PROTOCOL_HEADER, pv);
+        }
+        for (k, v) in &self.extra_headers {
+            rb = rb.header(k.as_str(), v.as_str());
+        }
+        // No per-request timeout on the stream body: it is long-lived by design
+        // and bounded instead by `duration` below.
+        let resp = rb.send().await.map_err(|e| self.map_send_error(e, "GET"))?;
+        let status = resp.status();
+
+        // 405 Method Not Allowed: spec-permitted "no standalone stream offered".
+        if status == StatusCode::METHOD_NOT_ALLOWED {
+            return Ok(ListenSummary {
+                opened: false,
+                status: status.as_u16(),
+                duration: start.elapsed(),
+                ..Default::default()
+            });
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(non_2xx_error(status, &body, "GET"));
+        }
+
+        let mut summary = ListenSummary {
+            opened: true,
+            status: status.as_u16(),
+            ..Default::default()
+        };
+        let mut reader = SseByteReader::new(self.max_message_bytes);
+        let mut resp = resp;
+        let deadline = tokio::time::Instant::now() + duration;
+
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let remaining = deadline - now;
+            match tokio::time::timeout(remaining, resp.chunk()).await {
+                // Duration elapsed: stop listening (the normal exit).
+                Err(_elapsed) => break,
+                // Server closed the stream (it MAY at any time).
+                Ok(Ok(None)) => break,
+                Ok(Ok(Some(chunk))) => {
+                    let mut events = Vec::new();
+                    reader.feed(&chunk, &mut events)?;
+                    for msg in events {
+                        self.handle_pushed(msg, &mut summary).await;
+                    }
+                }
+                Ok(Err(e)) => return Err(self.map_send_error(e, "GET")),
             }
         }
+
+        summary.duration = start.elapsed();
+        Ok(summary)
+    }
+
+    /// Handle one message pushed on the GET stream: record it inbound, and — if
+    /// it is a server→client request — send the policy reply (empty result for
+    /// `ping`, else `-32601`) and record that outbound too.
+    async fn handle_pushed(&self, msg: Value, summary: &mut ListenSummary) {
+        self.tap.record(Direction::Inbound, msg.clone());
+
+        let method = msg.get("method").and_then(Value::as_str);
+        let id = msg.get("id");
+        match (method, id) {
+            // A server→client request: it has both a method and a non-null id.
+            (Some(m), Some(id)) if !id.is_null() => {
+                let reply = if m == "ping" {
+                    summary.pings += 1;
+                    json!({ "jsonrpc": "2.0", "id": id, "result": {} })
+                } else {
+                    summary.other_requests += 1;
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32601,
+                            "message": format!(
+                                "method not found: '{m}' — jig advertises no client \
+                                 capabilities and does not implement server-initiated requests"
+                            )
+                        }
+                    })
+                };
+                self.tap.record(Direction::Outbound, reply.clone());
+                // Best-effort: a failure to deliver the reply must not abort the
+                // whole listen session; it is already recorded in the tap.
+                let _ = self.post_reply(&reply).await;
+            }
+            // A notification (method, no id).
+            (Some(_), None) => summary.notifications += 1,
+            (Some(_), Some(id)) if id.is_null() => summary.notifications += 1,
+            // A stray response or a non-message: recorded, not acted on.
+            _ => {}
+        }
+    }
+
+    /// POST a JSON-RPC *response* (Jig's reply to a server→client request) back
+    /// to the MCP endpoint. Per spec the server answers `202 Accepted`; the body
+    /// is drained and ignored.
+    async fn post_reply(&self, message: &Value) -> Result<()> {
+        let resp = self.post(message, "server-request-reply").await?;
+        self.capture_session_id(&resp);
         Ok(())
     }
 
@@ -386,58 +571,47 @@ fn is_response_to(msg: &Value, id: i64) -> bool {
         && (msg.get("result").is_some() || msg.get("error").is_some())
 }
 
-/// Parse an SSE body into the JSON-RPC messages carried by its `data:` fields.
+/// Convert one dispatched SSE event's data payload into a JSON-RPC [`Value`].
 ///
-/// SSE framing (WHATWG): events are separated by blank lines; a `data:` field
-/// contributes a line to the event's data buffer (multiple `data:` lines are
-/// joined with `\n`); lines beginning with `:` are comments; other fields
-/// (`event:`, `id:`, `retry:`) are ignored for our purposes. Each dispatched
-/// event's data buffer is one JSON-RPC message.
-///
-/// A data payload that is not valid JSON is preserved verbatim as a JSON string
+/// A payload that is not valid JSON is preserved verbatim as a JSON string
 /// (mirroring the stdio reader's truth-telling about malformed input) so it
-/// still lands in the tap. If the stream claims to be an event-stream but yields
-/// no events at all from a non-empty body, that is flagged as invalid framing.
+/// still lands in the tap rather than being silently dropped.
+fn sse_payload_to_value(payload: String) -> Value {
+    match serde_json::from_str::<Value>(&payload) {
+        Ok(v) => v,
+        Err(_) => Value::String(payload),
+    }
+}
+
+/// Incremental SSE **event framer** (WHATWG framing), fed one logical line at a
+/// time. This is the single source of truth for SSE framing, shared by the
+/// batch [`parse_sse`] entrypoint and by the streaming [`SseByteReader`] used
+/// for capped response bodies and the standalone GET stream.
 ///
-/// Total over arbitrary input: any string yields either a `Vec` of messages or a
-/// typed [`JigError::Protocol`] — never a panic — which the property and fuzz
-/// harnesses rely on.
-pub fn parse_sse(text: &str, method: &str) -> Result<Vec<Value>> {
-    let mut messages = Vec::new();
-    let mut data = String::new();
-    let mut have_data = false;
-    let mut saw_event = false;
+/// Framing rules: events are separated by blank lines; a `data:` field appends
+/// to the event's data buffer (multiple `data:` lines join with `\n`); lines
+/// beginning with `:` are comments; other fields (`event:`, `id:`, `retry:`)
+/// are ignored. Each dispatched event's buffer is one JSON-RPC message.
+#[derive(Default)]
+struct SseFramer {
+    data: String,
+    have_data: bool,
+}
 
-    let flush = |data: &mut String, have_data: &mut bool, messages: &mut Vec<Value>| {
-        if *have_data {
-            let payload = data.clone();
-            // A payload that is not valid JSON is preserved verbatim (as stdio
-            // does with malformed lines) so it still reaches the tap.
-            let value = match serde_json::from_str::<Value>(&payload) {
-                Ok(v) => v,
-                Err(_) => Value::String(payload),
-            };
-            messages.push(value);
-        }
-        data.clear();
-        *have_data = false;
-    };
-
-    for raw_line in text.split('\n') {
-        // Tolerate CRLF line endings.
-        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-
+impl SseFramer {
+    /// Feed one logical line (its trailing `\n` and any `\r` already stripped).
+    /// Returns `Some(payload)` when a blank line dispatches a pending event.
+    fn push_line(&mut self, line: &str) -> Option<String> {
         if line.is_empty() {
-            // Blank line dispatches the pending event.
-            if have_data {
-                saw_event = true;
-                flush(&mut data, &mut have_data, &mut messages);
+            // Blank line dispatches the pending event, if any.
+            if self.have_data {
+                self.have_data = false;
+                return Some(std::mem::take(&mut self.data));
             }
-            continue;
+            return None;
         }
         if line.starts_with(':') {
-            // Comment line — ignore.
-            continue;
+            return None; // Comment line — ignore.
         }
         let (field, value) = match line.split_once(':') {
             Some((f, v)) => (f, v.strip_prefix(' ').unwrap_or(v)),
@@ -445,18 +619,58 @@ pub fn parse_sse(text: &str, method: &str) -> Result<Vec<Value>> {
             None => (line, ""),
         };
         if field == "data" {
-            if have_data {
-                data.push('\n');
+            if self.have_data {
+                self.data.push('\n');
             }
-            data.push_str(value);
-            have_data = true;
+            self.data.push_str(value);
+            self.have_data = true;
         }
         // Other fields (event/id/retry) are not needed by jig.
+        None
     }
-    // A trailing event not terminated by a blank line still counts.
-    if have_data {
+
+    /// Flush a trailing event not terminated by a blank line (at EOF).
+    fn finish(&mut self) -> Option<String> {
+        if self.have_data {
+            self.have_data = false;
+            Some(std::mem::take(&mut self.data))
+        } else {
+            None
+        }
+    }
+
+    /// Bytes currently buffered for the in-progress event (for the size cap).
+    fn buffered_len(&self) -> usize {
+        self.data.len()
+    }
+}
+
+/// Parse an SSE body into the JSON-RPC messages carried by its `data:` fields.
+///
+/// The batch entrypoint (used for a fully-buffered body, and by the property /
+/// fuzz harnesses). Framing is delegated to the shared `SseFramer`; a payload
+/// that is not valid JSON is preserved verbatim. If the stream claims to be an
+/// event-stream but yields no events from a non-empty body, that is flagged as
+/// invalid framing.
+///
+/// Total over arbitrary input: any string yields either a `Vec` of messages or a
+/// typed [`JigError::Protocol`] — never a panic.
+pub fn parse_sse(text: &str, method: &str) -> Result<Vec<Value>> {
+    let mut framer = SseFramer::default();
+    let mut messages = Vec::new();
+    let mut saw_event = false;
+
+    for raw_line in text.split('\n') {
+        // Tolerate CRLF line endings.
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if let Some(payload) = framer.push_line(line) {
+            saw_event = true;
+            messages.push(sse_payload_to_value(payload));
+        }
+    }
+    if let Some(payload) = framer.finish() {
         saw_event = true;
-        flush(&mut data, &mut have_data, &mut messages);
+        messages.push(sse_payload_to_value(payload));
     }
 
     if !saw_event && !text.trim().is_empty() {
@@ -468,6 +682,84 @@ pub fn parse_sse(text: &str, method: &str) -> Result<Vec<Value>> {
     }
 
     Ok(messages)
+}
+
+/// Streaming SSE reader over a chunked HTTP body: bytes in, JSON-RPC messages
+/// out, with an incremental per-event size cap.
+///
+/// Bytes arrive in arbitrary chunks (they do not respect line or event
+/// boundaries), so this buffers a partial line, splits on `\n`, and feeds each
+/// completed line to an [`SseFramer`]. The size cap is enforced against the
+/// in-progress event (buffered data plus the current partial line), so a single
+/// hostile giant event aborts with [`JigError::MessageTooLarge`] the moment it
+/// crosses the cap — without buffering the whole body first.
+struct SseByteReader {
+    line: Vec<u8>,
+    framer: SseFramer,
+    max_bytes: Option<usize>,
+    /// Whether any non-whitespace byte was seen (drives the framing-error check
+    /// on a POST response body; irrelevant to the keep-alive-only GET stream).
+    saw_nonspace: bool,
+}
+
+impl SseByteReader {
+    fn new(max_bytes: Option<usize>) -> Self {
+        SseByteReader {
+            line: Vec::new(),
+            framer: SseFramer::default(),
+            max_bytes,
+            saw_nonspace: false,
+        }
+    }
+
+    /// Feed a chunk of body bytes, pushing any completed messages onto `out`.
+    fn feed(&mut self, bytes: &[u8], out: &mut Vec<Value>) -> Result<()> {
+        for &b in bytes {
+            if !b.is_ascii_whitespace() {
+                self.saw_nonspace = true;
+            }
+            if b == b'\n' {
+                self.dispatch_line(out);
+            } else {
+                self.line.push(b);
+            }
+            self.check_cap()?;
+        }
+        Ok(())
+    }
+
+    /// Take the buffered partial line, strip a trailing `\r`, decode lossily,
+    /// and feed it to the framer.
+    fn dispatch_line(&mut self, out: &mut Vec<Value>) {
+        let mut raw = std::mem::take(&mut self.line);
+        if raw.last() == Some(&b'\r') {
+            raw.pop();
+        }
+        let line = String::from_utf8_lossy(&raw);
+        if let Some(payload) = self.framer.push_line(&line) {
+            out.push(sse_payload_to_value(payload));
+        }
+    }
+
+    /// Enforce the per-event byte cap against the in-progress event.
+    fn check_cap(&self) -> Result<()> {
+        if let Some(limit) = self.max_bytes {
+            if self.framer.buffered_len() + self.line.len() > limit {
+                return Err(JigError::MessageTooLarge { limit });
+            }
+        }
+        Ok(())
+    }
+
+    /// Flush any trailing partial line and unterminated event at EOF.
+    fn finish(&mut self, out: &mut Vec<Value>) {
+        if !self.line.is_empty() {
+            self.dispatch_line(out);
+        }
+        if let Some(payload) = self.framer.finish() {
+            out.push(sse_payload_to_value(payload));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -537,5 +829,61 @@ mod tests {
         let body = ": this is a keep-alive comment\ndata: {\"id\":1,\"result\":{}}\n\n";
         let msgs = parse_sse(body, "x").unwrap();
         assert_eq!(msgs.len(), 1);
+    }
+
+    // ---- SseByteReader: the streaming, capped, incremental reader -----------
+
+    /// Feed a body one byte at a time — the worst-case chunking — and prove the
+    /// streaming reader reassembles exactly the same events as the batch parser.
+    #[test]
+    fn stream_reader_reassembles_events_across_arbitrary_chunks() {
+        let body = "event: message\n\
+                    data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{}}\n\n\
+                    data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n";
+        let mut reader = SseByteReader::new(None);
+        let mut out = Vec::new();
+        for b in body.as_bytes() {
+            reader.feed(&[*b], &mut out).unwrap();
+        }
+        reader.finish(&mut out);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["method"], "notifications/message");
+        assert!(is_response_to(&out[1], 7));
+    }
+
+    #[test]
+    fn stream_reader_matches_batch_parser_on_one_chunk() {
+        let body = "data: {\"a\":1}\n\ndata: not json\n\n";
+        let batch = parse_sse(body, "x").unwrap();
+        let mut reader = SseByteReader::new(None);
+        let mut out = Vec::new();
+        reader.feed(body.as_bytes(), &mut out).unwrap();
+        reader.finish(&mut out);
+        assert_eq!(out, batch);
+        // The malformed payload is preserved verbatim, not dropped.
+        assert_eq!(out[1], Value::String("not json".to_string()));
+    }
+
+    #[test]
+    fn stream_reader_aborts_a_giant_event_at_the_cap() {
+        // A single data line far larger than the cap must abort mid-stream with
+        // MessageTooLarge — not buffer the whole thing first.
+        let mut reader = SseByteReader::new(Some(16));
+        let mut out = Vec::new();
+        let big = format!("data: {}\n\n", "x".repeat(100));
+        let err = reader.feed(big.as_bytes(), &mut out).unwrap_err();
+        assert!(matches!(err, JigError::MessageTooLarge { limit: 16 }));
+    }
+
+    #[test]
+    fn stream_reader_allows_events_up_to_the_cap() {
+        // Small events under the cap flow through fine.
+        let mut reader = SseByteReader::new(Some(64));
+        let mut out = Vec::new();
+        reader
+            .feed(b"data: {\"id\":1,\"result\":{}}\n\n", &mut out)
+            .unwrap();
+        reader.finish(&mut out);
+        assert_eq!(out.len(), 1);
     }
 }

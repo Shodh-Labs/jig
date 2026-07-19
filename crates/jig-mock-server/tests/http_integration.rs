@@ -10,8 +10,8 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command};
 use std::time::Duration;
 
-use jig_core::{Client, Direction, JigError};
-use serde_json::json;
+use jig_core::{Client, ClientOptions, Direction, JigError, ProtocolTap, TapEntry};
+use serde_json::{json, Value};
 
 /// Path to the freshly built mock-server binary for this test run.
 fn mock_server() -> String {
@@ -254,4 +254,221 @@ async fn http_connection_refused_is_actionable() {
         }
         other => panic!("expected a transport error, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Standalone GET SSE stream (server→client messages).
+// ---------------------------------------------------------------------------
+
+/// Options with the standalone GET stream enabled.
+fn listen_opts() -> ClientOptions {
+    ClientOptions {
+        listen: true,
+        ..ClientOptions::default()
+    }
+}
+
+/// Find the inbound message carrying `method` (a server→client request/notif).
+fn inbound_method<'a>(entries: &'a [TapEntry], method: &str) -> Option<&'a TapEntry> {
+    entries
+        .iter()
+        .find(|e| e.direction == Direction::Inbound && e.method() == Some(method))
+}
+
+/// The GET stream carries server-pushed notifications *and* server→client
+/// requests; every one lands in the tap, `ping` is answered with an empty
+/// result, and an unimplemented request (`sampling/createMessage`) is answered
+/// with `-32601`. Every exchange is tapped in both directions.
+#[tokio::test]
+async fn http_get_stream_captures_pushes_and_answers_requests() {
+    let (_server, url) = spawn_http(&[
+        "--push-notifications",
+        "2",
+        "--server-ping",
+        "--server-sampling",
+    ])
+    .await;
+
+    let client = Client::connect_http_with_options(&url, vec![], ProtocolTap::new(), listen_opts())
+        .await
+        .expect("handshake");
+
+    let summary = client
+        .listen(Duration::from_secs(3))
+        .await
+        .expect("listen on the GET stream");
+
+    assert!(summary.opened, "the server opened the SSE stream");
+    assert_eq!(summary.status, 200);
+    assert_eq!(summary.notifications, 2, "two pushed notifications");
+    assert_eq!(summary.pings, 1, "one server ping, answered");
+    assert_eq!(summary.other_requests, 1, "one sampling request, -32601'd");
+
+    let entries = client.tap().entries();
+
+    // The ping request was captured, and Jig's empty-result reply is in the tap.
+    let ping = inbound_method(&entries, "ping").expect("ping in tap");
+    let ping_id = ping.message.get("id").cloned().expect("ping has an id");
+    let ping_reply = entries.iter().find(|e| {
+        e.direction == Direction::Outbound
+            && e.message.get("id") == Some(&ping_id)
+            && e.message.get("result").is_some()
+    });
+    assert!(
+        ping_reply.is_some(),
+        "ping answered with a result in the tap"
+    );
+
+    // The sampling request was captured, and Jig's -32601 reply is in the tap.
+    let sampling = inbound_method(&entries, "sampling/createMessage").expect("sampling in tap");
+    let sampling_id = sampling.message.get("id").cloned().expect("sampling id");
+    let sampling_reply = entries.iter().find(|e| {
+        e.direction == Direction::Outbound
+            && e.message.get("id") == Some(&sampling_id)
+            && e.message.get("error").and_then(|err| err.get("code")) == Some(&json!(-32601))
+    });
+    assert!(
+        sampling_reply.is_some(),
+        "sampling answered with -32601 in the tap"
+    );
+
+    client.shutdown().await.expect("clean shutdown");
+}
+
+/// A server that offers no standalone stream answers the GET with HTTP 405.
+/// That is spec-permitted, not an error: the summary records it and `listen`
+/// returns `Ok` with `opened == false`.
+#[tokio::test]
+async fn http_get_stream_405_is_tolerated() {
+    // No push flags -> the mock's GET handler returns 405.
+    let (_server, url) = spawn_http(&[]).await;
+
+    let client = Client::connect_http_with_options(&url, vec![], ProtocolTap::new(), listen_opts())
+        .await
+        .expect("handshake");
+
+    let summary = client
+        .listen(Duration::from_secs(1))
+        .await
+        .expect("405 must not be an error");
+    assert!(!summary.opened, "the server declined the stream");
+    assert_eq!(summary.status, 405);
+    assert_eq!(summary.notifications, 0);
+
+    client.shutdown().await.expect("clean shutdown");
+}
+
+// ---------------------------------------------------------------------------
+// Streaming size-cap enforcement on HTTP response bodies.
+// ---------------------------------------------------------------------------
+
+/// Options with a low inbound size cap and the default timeout.
+fn low_cap_opts(cap: usize) -> ClientOptions {
+    ClientOptions {
+        max_message_bytes: Some(cap),
+        ..ClientOptions::default()
+    }
+}
+
+/// A multi-megabyte single JSON response body must abort with MessageTooLarge —
+/// enforced *while streaming* (the cap is far below the body size, so it fires
+/// long before the whole body could be buffered).
+#[tokio::test]
+async fn http_streaming_cap_aborts_giant_json_body() {
+    let (_server, url) = spawn_http(&["--giant-json"]).await;
+
+    let client = Client::connect_http_with_options(
+        &url,
+        vec![],
+        ProtocolTap::new(),
+        low_cap_opts(64 * 1024),
+    )
+    .await
+    .expect("handshake (initialize is small)");
+
+    let err = client
+        .list_tools()
+        .await
+        .expect_err("a giant JSON body must exceed the cap");
+    assert!(
+        matches!(err, JigError::MessageTooLarge { limit } if limit == 64 * 1024),
+        "expected MessageTooLarge, got: {err:?}"
+    );
+
+    client.shutdown().await.expect("clean shutdown");
+}
+
+/// A single multi-megabyte SSE event must likewise abort with MessageTooLarge:
+/// the per-event cap fires as the event accumulates, not after the whole body.
+#[tokio::test]
+async fn http_streaming_cap_aborts_giant_sse_event() {
+    let (_server, url) = spawn_http(&["--sse", "--giant-sse"]).await;
+
+    let client = Client::connect_http_with_options(
+        &url,
+        vec![],
+        ProtocolTap::new(),
+        low_cap_opts(64 * 1024),
+    )
+    .await
+    .expect("handshake");
+
+    let err = client
+        .list_tools()
+        .await
+        .expect_err("a giant SSE event must exceed the cap");
+    assert!(
+        matches!(err, JigError::MessageTooLarge { limit } if limit == 64 * 1024),
+        "expected MessageTooLarge, got: {err:?}"
+    );
+
+    client.shutdown().await.expect("clean shutdown");
+}
+
+// ---------------------------------------------------------------------------
+// resources/read + prompts/get over HTTP.
+// ---------------------------------------------------------------------------
+
+/// The invocation verbs work over HTTP: a text resource renders as text, a blob
+/// resource preserves its base64, and a prompt expands with its argument.
+#[tokio::test]
+async fn http_resources_read_and_prompts_get() {
+    let (_server, url) = spawn_http(&["--resources-prompts"]).await;
+
+    let client = Client::connect_http(&url).await.expect("handshake");
+    assert!(client.has_capability("resources"));
+    assert!(client.has_capability("prompts"));
+
+    let text = client
+        .read_resource("mock://text/hello")
+        .await
+        .expect("read text resource");
+    assert_eq!(text.contents.len(), 1);
+    assert!(text.contents[0].render().contains("Hello from a jig mock"));
+
+    let blob = client
+        .read_resource("mock://blob/logo")
+        .await
+        .expect("read blob resource");
+    // A blob is summarized, never dumped; the base64 survives round-trip.
+    assert_eq!(blob.contents[0].mime_type(), Some("image/png"));
+    assert!(blob.contents[0].render().starts_with("[blob image/png"));
+
+    let prompt = client
+        .get_prompt("greet", json!({ "name": "Ada" }))
+        .await
+        .expect("get prompt");
+    assert_eq!(prompt.messages.len(), 1);
+    assert_eq!(prompt.messages[0].role, "user");
+    assert!(prompt.messages[0].content.render().contains("Ada"));
+
+    // An unknown resource URI surfaces the server's error, not an empty result.
+    let missing: Value = match client.read_resource("mock://nope").await {
+        Ok(_) => panic!("unknown URI must error"),
+        Err(JigError::Server { code, .. }) => json!(code),
+        Err(other) => panic!("expected a server error, got {other:?}"),
+    };
+    assert_eq!(missing, json!(-32002));
+
+    client.shutdown().await.expect("clean shutdown");
 }

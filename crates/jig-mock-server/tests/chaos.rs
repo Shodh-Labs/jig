@@ -197,6 +197,7 @@ async fn giant_message_rejected_over_low_cap() {
         request_timeout: Some(OP_TIMEOUT),
         // 1 MiB: the small handshake fits, the 20 MiB list does not.
         max_message_bytes: Some(1024 * 1024),
+        ..ClientOptions::default()
     };
     let client = connect_chaos("giant-message", options)
         .await

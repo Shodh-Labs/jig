@@ -48,10 +48,11 @@ pub use check::{
 };
 pub use client::{Client, ClientOptions};
 pub use error::{JigError, Result};
-pub use http::HttpTransport;
+pub use http::{HttpTransport, ListenSummary};
 pub use protocol::{
-    ContentBlock, Implementation, InitializeResult, Prompt, PromptArgument, Resource, Tool,
-    ToolCallResult, LATEST_PROTOCOL_VERSION,
+    ContentBlock, Implementation, InitializeResult, Prompt, PromptArgument, PromptGetResult,
+    PromptMessage, Resource, ResourceContents, ResourceReadResult, Tool, ToolCallResult,
+    LATEST_PROTOCOL_VERSION,
 };
 pub use tap::{Direction, ProtocolTap, TapEntry};
 pub use tokens::{

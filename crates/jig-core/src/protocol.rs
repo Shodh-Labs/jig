@@ -196,6 +196,109 @@ impl ContentBlock {
     }
 }
 
+/// The result of a `resources/read` request.
+///
+/// A single URI may yield more than one content item (e.g. a directory-like
+/// resource), though most yield exactly one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceReadResult {
+    /// The content items returned for the requested URI.
+    #[serde(default)]
+    pub contents: Vec<ResourceContents>,
+}
+
+/// One content item inside a [`ResourceReadResult`]: either UTF-8 `text` or a
+/// base64-encoded `blob`, per the MCP resource-contents shape (`2025-06-18`).
+///
+/// Deserialized untagged: an item carrying a `text` field is [`Text`], one
+/// carrying a `blob` field is [`Blob`]. Binary contents are never decoded here
+/// — the base64 is preserved verbatim so a terminal is never flooded with raw
+/// bytes; renderers decide how to present it.
+///
+/// [`Text`]: ResourceContents::Text
+/// [`Blob`]: ResourceContents::Blob
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ResourceContents {
+    /// Textual contents.
+    Text {
+        /// The resource URI these contents belong to.
+        uri: String,
+        /// Optional MIME type.
+        #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
+        mime_type: Option<String>,
+        /// The UTF-8 text payload.
+        text: String,
+    },
+    /// Binary contents, base64-encoded.
+    Blob {
+        /// The resource URI these contents belong to.
+        uri: String,
+        /// Optional MIME type.
+        #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
+        mime_type: Option<String>,
+        /// The base64-encoded binary payload.
+        blob: String,
+    },
+}
+
+impl ResourceContents {
+    /// The URI these contents belong to.
+    pub fn uri(&self) -> &str {
+        match self {
+            ResourceContents::Text { uri, .. } | ResourceContents::Blob { uri, .. } => uri,
+        }
+    }
+
+    /// The declared MIME type, if any.
+    pub fn mime_type(&self) -> Option<&str> {
+        match self {
+            ResourceContents::Text { mime_type, .. } | ResourceContents::Blob { mime_type, .. } => {
+                mime_type.as_deref()
+            }
+        }
+    }
+
+    /// Render this content item for a person. Text is shown verbatim; a blob is
+    /// summarized as its MIME type and base64 length — never dumped as raw bytes
+    /// to a terminal.
+    pub fn render(&self) -> String {
+        match self {
+            ResourceContents::Text { text, .. } => text.clone(),
+            ResourceContents::Blob {
+                mime_type, blob, ..
+            } => {
+                format!(
+                    "[blob {} ({} base64 chars)]",
+                    mime_type.as_deref().unwrap_or("application/octet-stream"),
+                    blob.len()
+                )
+            }
+        }
+    }
+}
+
+/// The result of a `prompts/get` request: an optional description and the
+/// rendered prompt messages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptGetResult {
+    /// Optional human-readable description of the prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The messages the prompt expands to.
+    #[serde(default)]
+    pub messages: Vec<PromptMessage>,
+}
+
+/// One message inside a [`PromptGetResult`]: a role plus one content block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptMessage {
+    /// The speaker: `"user"` or `"assistant"`.
+    pub role: String,
+    /// The message content (text/image/audio/embedded-resource).
+    pub content: ContentBlock,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +341,43 @@ mod tests {
         assert_eq!(init.server_info.name, "legacy-server");
         assert!(init.capabilities.is_null());
         assert!(init.instructions.is_none());
+    }
+
+    #[test]
+    fn resource_contents_text_and_blob_parse_untagged() {
+        let text: ResourceContents = serde_json::from_value(json!({
+            "uri": "mock://text", "mimeType": "text/plain", "text": "hello"
+        }))
+        .unwrap();
+        assert!(matches!(text, ResourceContents::Text { .. }));
+        assert_eq!(text.render(), "hello");
+        assert_eq!(text.uri(), "mock://text");
+
+        let blob: ResourceContents = serde_json::from_value(json!({
+            "uri": "mock://blob", "mimeType": "application/octet-stream", "blob": "QUJD"
+        }))
+        .unwrap();
+        assert!(matches!(blob, ResourceContents::Blob { .. }));
+        // A blob is summarized (mime + base64 length), never dumped verbatim.
+        assert_eq!(
+            blob.render(),
+            "[blob application/octet-stream (4 base64 chars)]"
+        );
+    }
+
+    #[test]
+    fn prompt_get_result_parses_role_and_content() {
+        let res: PromptGetResult = serde_json::from_value(json!({
+            "description": "greet someone",
+            "messages": [
+                { "role": "user", "content": { "type": "text", "text": "Hi Ada" } }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(res.description.as_deref(), Some("greet someone"));
+        assert_eq!(res.messages.len(), 1);
+        assert_eq!(res.messages[0].role, "user");
+        assert_eq!(res.messages[0].content.render(), "Hi Ada");
     }
 
     #[test]

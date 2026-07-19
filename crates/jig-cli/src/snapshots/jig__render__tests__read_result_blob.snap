@@ -1,0 +1,8 @@
+---
+source: crates/jig-cli/src/render.rs
+expression: "resource_read_result(\"mock://blob/logo\", &result)"
+---
+Resource: mock://blob/logo
+Contents (1):
+  - mock://blob/logo [image/png]
+      [blob image/png (92 base64 chars)]

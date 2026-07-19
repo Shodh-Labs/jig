@@ -1,0 +1,5 @@
+---
+source: crates/jig-cli/src/render.rs
+expression: listen_summary(&summary)
+---
+GET stream: opened (HTTP 200). Observed 2 notification(s), 1 server ping(s), 1 other server request(s) in 10.0s. (See the tap for full detail.)

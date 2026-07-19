@@ -19,6 +19,15 @@
 //! * `--expire-after-initialize` — (HTTP mode) issue a session on `initialize`
 //!   but then return HTTP 404 for every post-handshake request, to exercise a
 //!   client's session-expiry path.
+//! * `--resources-prompts` — (both modes) additionally advertise and serve the
+//!   `resources` and `prompts` features (one text resource, one blob resource,
+//!   one prompt with an argument) so `resources/read` and `prompts/get` can be
+//!   exercised at parity.
+//! * `--push-notifications <n>` / `--server-ping` / `--server-sampling` — (HTTP
+//!   mode) make the standalone GET stream real: push `n` notifications and/or a
+//!   server→client `ping`/`sampling/createMessage` request.
+//! * `--giant-json` / `--giant-sse` — (HTTP mode) answer `tools/list` with a
+//!   multi-megabyte body to exercise the client's streaming size-cap.
 //! * `--pollute-stdout` / `--paginate` — (stdio mode) test fixtures, see below.
 //! * `--chaos <mode[,mode...]>` — (stdio mode) the **hostile-server chaos
 //!   catalog**: deliberately misbehave in one specific way so Jig's degradation
@@ -99,9 +108,17 @@ fn main() {
 
     // HTTP mode: `--http <port>`.
     if let Some(port) = http_port(&args) {
-        let sse = args.iter().any(|a| a == "--sse");
-        let expire = args.iter().any(|a| a == "--expire-after-initialize");
-        http::serve(port, sse, expire);
+        let cfg = http::HttpConfig {
+            sse: args.iter().any(|a| a == "--sse"),
+            expire: args.iter().any(|a| a == "--expire-after-initialize"),
+            resources_prompts: args.iter().any(|a| a == "--resources-prompts"),
+            push_notifications: flag_usize(&args, "--push-notifications").unwrap_or(0),
+            server_ping: args.iter().any(|a| a == "--server-ping"),
+            server_sampling: args.iter().any(|a| a == "--server-sampling"),
+            giant_json: args.iter().any(|a| a == "--giant-json"),
+            giant_sse: args.iter().any(|a| a == "--giant-sse"),
+        };
+        http::serve(port, cfg);
         return;
     }
 
@@ -127,6 +144,12 @@ fn http_port(args: &[String]) -> Option<u16> {
 fn flag_port(args: &[String], flag: &str) -> Option<u16> {
     let idx = args.iter().position(|a| a == flag)?;
     args.get(idx + 1).and_then(|s| s.parse::<u16>().ok())
+}
+
+/// Parse `<flag> <n>` (a usize) from the argument list, if present.
+fn flag_usize(args: &[String], flag: &str) -> Option<usize> {
+    let idx = args.iter().position(|a| a == flag)?;
+    args.get(idx + 1).and_then(|s| s.parse::<usize>().ok())
 }
 
 /// The original stdio server loop: read one JSON-RPC message per line from
@@ -163,6 +186,12 @@ fn run_stdio(chaos: Chaos) {
     // page and a `nextCursor` until the list is exhausted, so a client's cursor
     // following can be exercised. Off by default so the simple path stays simple.
     let paginate = std::env::args().any(|a| a == "--paginate");
+
+    // Test fixture: with `--resources-prompts`, advertise and serve the
+    // `resources` and `prompts` features so `resources/read` and `prompts/get`
+    // can be exercised over stdio at parity with HTTP. Off by default so the
+    // "only tools advertised" fixture behaviour is preserved.
+    let resources_prompts = std::env::args().any(|a| a == "--resources-prompts");
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -214,10 +243,16 @@ fn run_stdio(chaos: Chaos) {
         }
 
         let response = match method {
-            "initialize" => handle_initialize(id),
+            "initialize" => handle_initialize(id, resources_prompts),
             "tools/list" if paginate => handle_tools_list_paginated(id, request.get("params")),
             "tools/list" => handle_tools_list(id),
             "tools/call" => handle_tools_call(id, request.get("params")),
+            "resources/list" if resources_prompts => handle_resources_list(id),
+            "resources/read" if resources_prompts => {
+                handle_resources_read(id, request.get("params"))
+            }
+            "prompts/list" if resources_prompts => handle_prompts_list(id),
+            "prompts/get" if resources_prompts => handle_prompts_get(id, request.get("params")),
             other => error_response(id, -32601, &format!("Method not found: {other}")),
         };
 
@@ -340,18 +375,142 @@ fn error_response(id: Value, code: i64, message: &str) -> Value {
     })
 }
 
-fn handle_initialize(id: Value) -> Value {
+/// Build the `initialize` result. By default advertises only `tools` (so a
+/// client's graceful handling of unsupported `resources`/`prompts` can be
+/// observed); with `resources_prompts` it additionally advertises and serves
+/// `resources` and `prompts`, for parity testing of `resources/read` and
+/// `prompts/get`.
+fn handle_initialize(id: Value, resources_prompts: bool) -> Value {
+    let capabilities = if resources_prompts {
+        json!({ "tools": {}, "resources": {}, "prompts": {} })
+    } else {
+        // Only tools are advertised — resources/prompts are intentionally absent.
+        json!({ "tools": {} })
+    };
     success_response(
         id,
         json!({
             "protocolVersion": PROTOCOL_VERSION,
-            // Only tools are advertised — resources/prompts are intentionally absent.
-            "capabilities": { "tools": {} },
+            "capabilities": capabilities,
             "serverInfo": {
                 "name": "jig-mock-server",
                 "version": env!("CARGO_PKG_VERSION"),
             },
             "instructions": "A toy MCP server for exercising Jig."
+        }),
+    )
+}
+
+/// The single text resource this server serves under `--resources-prompts`.
+const TEXT_RESOURCE_URI: &str = "mock://text/hello";
+/// The single blob resource this server serves under `--resources-prompts`.
+const BLOB_RESOURCE_URI: &str = "mock://blob/logo";
+/// A tiny valid 1×1 PNG, base64-encoded — a realistic `blob` payload.
+const BLOB_RESOURCE_B64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGP4DwABBAEAHnGpJQAAAABJRU5ErkJggg==";
+
+/// `resources/list`: one text resource and one blob resource.
+fn handle_resources_list(id: Value) -> Value {
+    success_response(
+        id,
+        json!({
+            "resources": [
+                {
+                    "uri": TEXT_RESOURCE_URI,
+                    "name": "hello",
+                    "description": "A plain-text greeting resource.",
+                    "mimeType": "text/plain"
+                },
+                {
+                    "uri": BLOB_RESOURCE_URI,
+                    "name": "logo",
+                    "description": "A tiny binary (PNG) resource.",
+                    "mimeType": "image/png"
+                }
+            ]
+        }),
+    )
+}
+
+/// `resources/read`: return the contents of the requested URI (text or blob),
+/// or a `-32002 resource not found` error for an unknown URI.
+fn handle_resources_read(id: Value, params: Option<&Value>) -> Value {
+    let uri = params
+        .and_then(|p| p.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    match uri {
+        TEXT_RESOURCE_URI => success_response(
+            id,
+            json!({
+                "contents": [
+                    {
+                        "uri": TEXT_RESOURCE_URI,
+                        "mimeType": "text/plain",
+                        "text": "Hello from a jig mock text resource.\nSecond line."
+                    }
+                ]
+            }),
+        ),
+        BLOB_RESOURCE_URI => success_response(
+            id,
+            json!({
+                "contents": [
+                    {
+                        "uri": BLOB_RESOURCE_URI,
+                        "mimeType": "image/png",
+                        "blob": BLOB_RESOURCE_B64
+                    }
+                ]
+            }),
+        ),
+        other => error_response(id, -32002, &format!("Resource not found: {other}")),
+    }
+}
+
+/// `prompts/list`: one prompt (`greet`) taking a required `name` argument.
+fn handle_prompts_list(id: Value) -> Value {
+    success_response(
+        id,
+        json!({
+            "prompts": [
+                {
+                    "name": "greet",
+                    "description": "Greet someone by name.",
+                    "arguments": [
+                        { "name": "name", "description": "Who to greet.", "required": true }
+                    ]
+                }
+            ]
+        }),
+    )
+}
+
+/// `prompts/get`: expand the `greet` prompt with the supplied `name` argument,
+/// or a `-32602 invalid params` error for an unknown prompt name.
+fn handle_prompts_get(id: Value, params: Option<&Value>) -> Value {
+    let name = params
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if name != "greet" {
+        return error_response(id, -32602, &format!("Unknown prompt: {name}"));
+    }
+    let who = params
+        .and_then(|p| p.get("arguments"))
+        .and_then(|a| a.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("friend");
+    success_response(
+        id,
+        json!({
+            "description": "A friendly greeting.",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": { "type": "text", "text": format!("Please greet {who} warmly.") }
+                }
+            ]
         }),
     )
 }
