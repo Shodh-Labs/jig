@@ -385,13 +385,12 @@ fn parse_one(source: Source, path: &Path, name: &str, spec: &Value) -> Option<Se
             command: command.to_string(),
             args,
         }
-    } else if let Some(url) = spec.get("url").and_then(Value::as_str) {
-        DiscoveredTransport::Http {
-            url: url.to_string(),
-        }
     } else {
-        // Neither a command nor a url: not connectable, skip.
-        return None;
+        // No command: it must carry a url to be connectable — otherwise skip
+        // (the `?` returns None).
+        DiscoveredTransport::Http {
+            url: spec.get("url").and_then(Value::as_str)?.to_string(),
+        }
     };
 
     Some(ServerEntry {
