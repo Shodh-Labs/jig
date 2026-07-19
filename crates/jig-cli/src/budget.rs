@@ -9,12 +9,10 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use jig_core::tokens::{self, Exactness, ModelBudget};
-use jig_core::{Client, Implementation, ProtocolTap, Tool};
+use jig_core::{Implementation, ProtocolTap, Tool};
 use serde_json::{json, Value};
 
-use crate::{
-    client_options, emit, split_command, warn_non_protocol_output, write_tap_if_requested,
-};
+use crate::{emit, warn_non_protocol_output, write_tap_if_requested, Target};
 
 /// Default models when the user passes no `--model`: one exact (OpenAI) column
 /// and one labelled-approximate (Anthropic) column — the headline "what does
@@ -24,7 +22,7 @@ const DEFAULT_MODELS: &[&str] = &["gpt-4o", "claude-sonnet"];
 /// Run `jig budget`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
-    stdio: &str,
+    target: &Target,
     models: Vec<String>,
     as_json: bool,
     as_markdown: bool,
@@ -32,7 +30,6 @@ pub async fn run(
     timeout_secs: u64,
     exact_anthropic: bool,
 ) -> Result<ExitCode, String> {
-    let (program, args) = split_command(stdio)?;
     let models: Vec<String> = if models.is_empty() {
         DEFAULT_MODELS.iter().map(|s| s.to_string()).collect()
     } else {
@@ -41,8 +38,7 @@ pub async fn run(
 
     let tap = ProtocolTap::new();
     let result = run_inner(
-        &program,
-        &args,
+        target,
         tap.clone(),
         &models,
         as_json,
@@ -57,10 +53,8 @@ pub async fn run(
     result
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_inner(
-    program: &str,
-    args: &[String],
+    target: &Target,
     tap: ProtocolTap,
     models: &[String],
     as_json: bool,
@@ -68,9 +62,7 @@ async fn run_inner(
     timeout_secs: u64,
     exact_anthropic: bool,
 ) -> Result<ExitCode, String> {
-    let client = Client::connect_with_options(program, args, tap, client_options(timeout_secs))
-        .await
-        .map_err(|e| format!("failed to connect: {e}"))?;
+    let client = target.connect(tap, timeout_secs).await?;
 
     let tools = client.list_tools().await.map_err(|e| e.to_string())?;
     let instructions = client.instructions().map(|s| s.to_string());

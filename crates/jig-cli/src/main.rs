@@ -81,8 +81,17 @@ enum Command {
     /// Connect to an MCP server, handshake, and report what it exposes.
     Inspect {
         /// The server command to run over stdio, e.g. "my-server --flag".
-        #[arg(long, value_name = "COMMAND")]
-        stdio: String,
+        /// Mutually exclusive with --http.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// A remote MCP endpoint URL to connect to over Streamable HTTP, e.g.
+        /// "https://example.com/mcp". Mutually exclusive with --stdio.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Extra HTTP header for --http, "Name: Value" (repeatable). Typically
+        /// "Authorization: Bearer <token>" for remote servers.
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
         /// Emit full, untruncated machine-readable JSON instead of a report.
         #[arg(long)]
         json: bool,
@@ -96,8 +105,16 @@ enum Command {
     /// Estimate the context-token cost of a server's tool surface, per model.
     Budget {
         /// The server command to run over stdio, e.g. "npx -y my-server".
-        #[arg(long, value_name = "COMMAND")]
-        stdio: String,
+        /// Mutually exclusive with --http.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// A remote MCP endpoint URL to price over Streamable HTTP. Mutually
+        /// exclusive with --stdio.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Extra HTTP header for --http, "Name: Value" (repeatable).
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
         /// Model id to price against; repeat for one column per model.
         /// Known: gpt-4o, gpt-4, claude-sonnet, claude-opus.
         #[arg(long = "model", value_name = "ID")]
@@ -122,9 +139,16 @@ enum Command {
     },
     /// Invoke a single tool and print its result.
     Call {
-        /// The server command to run over stdio.
-        #[arg(long, value_name = "COMMAND")]
-        stdio: String,
+        /// The server command to run over stdio. Mutually exclusive with --http.
+        #[arg(long, value_name = "COMMAND", conflicts_with = "http")]
+        stdio: Option<String>,
+        /// A remote MCP endpoint URL to connect to over Streamable HTTP.
+        /// Mutually exclusive with --stdio.
+        #[arg(long, value_name = "URL", conflicts_with = "stdio")]
+        http: Option<String>,
+        /// Extra HTTP header for --http, "Name: Value" (repeatable).
+        #[arg(long = "header", value_name = "NAME: VALUE")]
+        header: Vec<String>,
         /// Name of the tool to call.
         #[arg(long, value_name = "NAME")]
         tool: String,
@@ -159,12 +183,19 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
     match cli.command {
         Command::Inspect {
             stdio,
+            http,
+            header,
             json,
             tap,
             timeout,
-        } => inspect(&stdio, json, tap.as_deref(), timeout).await,
+        } => {
+            let target = Target::resolve(stdio, http, header)?;
+            inspect(&target, json, tap.as_deref(), timeout).await
+        }
         Command::Budget {
             stdio,
+            http,
+            header,
             models,
             json,
             markdown,
@@ -172,8 +203,9 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             timeout,
             exact_anthropic,
         } => {
+            let target = Target::resolve(stdio, http, header)?;
             budget::run(
-                &stdio,
+                &target,
                 models,
                 json,
                 markdown,
@@ -185,14 +217,17 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Call {
             stdio,
+            http,
+            header,
             tool,
             args,
             json,
             tap,
             timeout,
         } => {
+            let target = Target::resolve(stdio, http, header)?;
             call(
-                &stdio,
+                &target,
                 &tool,
                 args.as_deref(),
                 json,
@@ -204,18 +239,105 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
     }
 }
 
+/// A resolved connection target: either a stdio subprocess or a remote HTTP
+/// endpoint. Built once from the CLI flags, then shared by every command so the
+/// stdio/HTTP branch lives in exactly one place.
+pub(crate) enum Target {
+    /// A local server launched over stdio.
+    Stdio {
+        /// The resolved program name.
+        program: String,
+        /// Its arguments.
+        args: Vec<String>,
+    },
+    /// A remote server reached over Streamable HTTP.
+    Http {
+        /// The MCP endpoint URL.
+        url: String,
+        /// Extra headers (auth, etc.) sent on every request.
+        headers: Vec<(String, String)>,
+    },
+}
+
+impl Target {
+    /// Resolve the mutually-exclusive `--stdio` / `--http` flags (plus
+    /// `--header`) into a single target, rejecting nonsensical combinations
+    /// with a clear message. clap already enforces the `conflicts_with`, so the
+    /// both-present case is defensive.
+    pub(crate) fn resolve(
+        stdio: Option<String>,
+        http: Option<String>,
+        header: Vec<String>,
+    ) -> Result<Target, String> {
+        match (stdio, http) {
+            (Some(_), Some(_)) => Err("--stdio and --http are mutually exclusive".to_string()),
+            (None, None) => Err("one of --stdio <command> or --http <url> is required".to_string()),
+            (Some(cmd), None) => {
+                if !header.is_empty() {
+                    return Err(
+                        "--header applies only to --http (stdio servers take no HTTP headers)"
+                            .to_string(),
+                    );
+                }
+                let (program, args) = split_command(&cmd)?;
+                Ok(Target::Stdio { program, args })
+            }
+            (None, Some(url)) => Ok(Target::Http {
+                url,
+                headers: parse_headers(&header)?,
+            }),
+        }
+    }
+
+    /// Connect and complete the MCP handshake against this target, recording
+    /// into `tap`.
+    pub(crate) async fn connect(
+        &self,
+        tap: ProtocolTap,
+        timeout_secs: u64,
+    ) -> Result<Client, String> {
+        let opts = client_options(timeout_secs);
+        let client = match self {
+            Target::Stdio { program, args } => {
+                Client::connect_with_options(program, args, tap, opts).await
+            }
+            Target::Http { url, headers } => {
+                Client::connect_http_with_options(url, headers.clone(), tap, opts).await
+            }
+        };
+        client.map_err(|e| format!("failed to connect: {e}"))
+    }
+}
+
+/// Parse repeated `--header "Name: Value"` strings into (name, value) pairs.
+/// The value may itself contain colons (e.g. a URL), so only the first colon
+/// splits. Surrounding whitespace on the value is trimmed.
+pub(crate) fn parse_headers(raw: &[String]) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::with_capacity(raw.len());
+    for h in raw {
+        let (name, value) = h
+            .split_once(':')
+            .ok_or_else(|| format!("invalid --header '{h}': expected \"Name: Value\""))?;
+        let name = name.trim();
+        let value = value.trim();
+        if name.is_empty() {
+            return Err(format!("invalid --header '{h}': empty header name"));
+        }
+        out.push((name.to_string(), value.to_string()));
+    }
+    Ok(out)
+}
+
 /// Run `jig inspect`.
 async fn inspect(
-    stdio: &str,
+    target: &Target,
     as_json: bool,
     tap_path: Option<&std::path::Path>,
     timeout_secs: u64,
 ) -> Result<ExitCode, String> {
-    let (program, args) = split_command(stdio)?;
-
     // Own the tap so we can flush it even if a later step fails.
     let tap = ProtocolTap::new();
-    let result = inspect_inner(&program, &args, tap.clone(), as_json, timeout_secs).await;
+    let result = inspect_inner(target, tap.clone(), as_json, timeout_secs).await;
 
     warn_non_protocol_output(&tap);
     write_tap_if_requested(&tap, tap_path);
@@ -223,15 +345,12 @@ async fn inspect(
 }
 
 async fn inspect_inner(
-    program: &str,
-    args: &[String],
+    target: &Target,
     tap: ProtocolTap,
     as_json: bool,
     timeout_secs: u64,
 ) -> Result<ExitCode, String> {
-    let client = Client::connect_with_options(program, args, tap, client_options(timeout_secs))
-        .await
-        .map_err(|e| format!("failed to connect: {e}"))?;
+    let client = target.connect(tap, timeout_secs).await?;
 
     let tools = client.list_tools().await.map_err(|e| e.to_string())?;
     let resources = client.list_resources().await.map_err(|e| e.to_string())?;
@@ -260,50 +379,35 @@ async fn inspect_inner(
 
 /// Run `jig call`.
 async fn call(
-    stdio: &str,
+    target: &Target,
     tool: &str,
     args_json: Option<&str>,
     as_json: bool,
     tap_path: Option<&std::path::Path>,
     timeout_secs: u64,
 ) -> Result<ExitCode, String> {
-    let (program, args) = split_command(stdio)?;
-
     let arguments: Value = match args_json {
         Some(s) => serde_json::from_str(s).map_err(|e| format!("--args is not valid JSON: {e}"))?,
         None => json!({}),
     };
 
     let tap = ProtocolTap::new();
-    let result = call_inner(
-        &program,
-        &args,
-        tap.clone(),
-        tool,
-        arguments,
-        as_json,
-        timeout_secs,
-    )
-    .await;
+    let result = call_inner(target, tap.clone(), tool, arguments, as_json, timeout_secs).await;
 
     warn_non_protocol_output(&tap);
     write_tap_if_requested(&tap, tap_path);
     result
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn call_inner(
-    program: &str,
-    args: &[String],
+    target: &Target,
     tap: ProtocolTap,
     tool: &str,
     arguments: Value,
     as_json: bool,
     timeout_secs: u64,
 ) -> Result<ExitCode, String> {
-    let client = Client::connect_with_options(program, args, tap, client_options(timeout_secs))
-        .await
-        .map_err(|e| format!("failed to connect: {e}"))?;
+    let client = target.connect(tap, timeout_secs).await?;
 
     let result: ToolCallResult = client
         .call_tool(tool, arguments)
