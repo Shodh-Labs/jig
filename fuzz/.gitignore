@@ -1,0 +1,6 @@
+# cargo-fuzz build output and run products. Seed corpora under corpus/ ARE
+# tracked; everything cargo-fuzz generates at runtime is not.
+/target/
+/artifacts/
+/coverage/
+/Cargo.lock

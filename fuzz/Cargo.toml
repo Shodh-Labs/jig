@@ -1,0 +1,53 @@
+[package]
+name = "jig-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# A standalone workspace: the fuzz crate needs nightly + libFuzzer and must not
+# be pulled into the stable workspace build (`cargo test --workspace`) at the
+# repo root. cargo-fuzz builds it explicitly via `cargo fuzz`.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+jig-core = { path = "../crates/jig-core" }
+jig-cli = { path = "../crates/jig-cli" }
+
+[profile.release]
+# Keep line-level debug info so any crash report points at a real location.
+debug = 1
+
+# Each target is its own libFuzzer binary. `test`/`doc`/`bench` are disabled:
+# these are fuzz harnesses, not ordinary Rust tests.
+[[bin]]
+name = "fuzz_sse_parser"
+path = "fuzz_targets/fuzz_sse_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_line_parser"
+path = "fuzz_targets/fuzz_line_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_command_splitter"
+path = "fuzz_targets/fuzz_command_splitter.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_tap_jsonl_roundtrip"
+path = "fuzz_targets/fuzz_tap_jsonl_roundtrip.rs"
+test = false
+doc = false
+bench = false

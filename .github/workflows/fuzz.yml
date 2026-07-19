@@ -1,0 +1,54 @@
+name: Fuzz
+
+# Bounded, scheduled fuzzing of the parsers that face hostile input. Runs each
+# libFuzzer target for a fixed budget on a nightly toolchain (cargo-fuzz needs
+# nightly + libFuzzer and does not run on Windows, so this is Linux-only and is
+# never part of the per-PR gate). A crash fails the job and its reproducer is
+# uploaded as an artifact.
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # daily, 05:00 UTC
+  workflow_dispatch:
+
+# Least privilege: reading the repo is all fuzzing needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: fuzz / ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      # One target per matrix leg so a crash in one does not mask the others.
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_sse_parser
+          - fuzz_line_parser
+          - fuzz_command_splitter
+          - fuzz_tap_jsonl_roundtrip
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly toolchain
+        run: rustup toolchain install nightly --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: "fuzz -> target"
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+      - name: Fuzz ${{ matrix.target }} (120s)
+        # -max_total_time bounds the run; a crash makes libFuzzer exit non-zero,
+        # failing the job. Seed corpora under fuzz/corpus are used automatically.
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=120
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
