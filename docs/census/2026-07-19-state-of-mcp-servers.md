@@ -30,7 +30,7 @@ The failures were not random. They fall into clean buckets:
 | Failure mode | Count | Examples |
 | --- | ---: | --- |
 | Exits immediately demanding a credential | 14 | `@stripe/mcp`, `@sentry/mcp-server`, `@brave/brave-search-mcp-server`, `tavily`-style keys |
-| Broke its own framing by writing to stdout | 2 | `@azure/mcp`, `@launchdarkly/mcp-server` |
+| Printed CLI usage to stdout when invoked bare (see correction 2026-07-20) | 2 | `@azure/mcp`, `@launchdarkly/mcp-server` |
 | Needs a live backend (database / cluster) | 2 | `@benborla29/mcp-server-mysql`, `kubernetes-mcp-server` |
 | Wrong entrypoint / platform | 1 | `xcodebuildmcp` (needs an `mcp` subcommand; macOS-only) |
 | Hung indefinitely without ever responding | 2 | `@mapbox/mcp-server`, `@heroku/mcp-server` |
@@ -77,7 +77,7 @@ Tool *count* tracks cost loosely but not perfectly: `@shopify/dev-mcp` spends 5,
 
 MCP's stdio transport requires stdout to carry *only* newline-delimited JSON-RPC. Anything else — a startup banner, a stray `console.log`, a logger misconfigured to stdout — corrupts the framing. Jig watches for exactly this, and it found it:
 
-- **4 of 50 servers wrote non-protocol lines to stdout.** For two of them it was fatal: **`@azure/mcp` emitted 288 non-protocol lines** and **`@launchdarkly/mcp-server` emitted 10**, and in both cases the pollution broke the handshake outright — they appear in our failure column not because they lack a feature, but because they talk over their own protocol channel.
+- **4 of 50 servers wrote non-protocol lines to stdout.** Two of those — `@azure/mcp` (288 lines) and `@launchdarkly/mcp-server` (10) — are **corrected below**: the lines were CLI usage/help text triggered by our bare invocation (both require a `start`/`server start` subcommand). Invoked correctly, `@azure/mcp` completes a clean handshake (verified 2026-07-20: protocol compliance 100/100). The residual, real finding is smaller: both CLIs print usage/error text to **stdout** rather than stderr, so a *misconfigured* MCP client sees corrupted framing instead of a clean failure.
 - Two more polluted stdout but survived: **`@agentdeskai/browser-tools-mcp` (36 lines)** and **`mcp-server-code-runner` (1 line)** completed the handshake anyway, but a stricter client could reject them.
 
 This is the single most common way an MCP server breaks in practice, and 8% of a popular sample doing it — 4% *fatally* — says it is still an unsolved footgun.
@@ -112,7 +112,7 @@ Among reachable servers, **27 of 29 already speak the current `2025-06-18` proto
 
 1. **The heaviest server costs 42,288 tokens before you say anything.** `dataforseo-mcp-server` ships **89 tools** and **21 prompts**; its tool surface alone is 25× the median server and a meaningful fraction of a mid-size context window — paid on every turn, whether or not the user needs SEO data.
 
-2. **Two popular servers break their own handshake by talking over stdout.** `@azure/mcp` (288 stray lines) and `@launchdarkly/mcp-server` (10) fail to connect not for lack of a feature but because they pollute the one channel MCP reserves for protocol. This is the footgun `jig inspect` was built to name out loud.
+2. **CORRECTED 2026-07-20 — originally: "two popular servers break their own handshake."** Re-verification with each vendor's documented invocation showed the stdout lines from `@azure/mcp` and `@launchdarkly/mcp-server` were *CLI usage text from our bare invocation*, not runtime pollution: both require a subcommand (`server start` / `start`), and `@azure/mcp` invoked correctly handshakes cleanly (protocol 100/100, overall grade B — its real finding is a 16,072-token context cost). The smaller, true issue — usage/error text on stdout rather than stderr — was reported upstream to both vendors. We keep the original claim visible here because corrections should be as public as the findings they fix.
 
 3. **"Installable" hides a 42% startup-failure rate.** Twenty-one of fifty npm packages that install cleanly never complete a handshake — overwhelmingly because they demand a credential the instant they boot. Discovery tools that list these servers as "available" are describing a package, not a working server.
 
