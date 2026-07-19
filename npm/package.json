@@ -1,0 +1,37 @@
+{
+  "name": "@shodh/jig",
+  "version": "0.1.0",
+  "description": "A testing workbench for MCP (Model Context Protocol) servers — inspect, call, budget, and bench MCP servers from the command line.",
+  "bin": {
+    "jig": "bin/jig.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/install.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "lib/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "testing",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Shodh-Labs/jig.git"
+  },
+  "homepage": "https://github.com/Shodh-Labs/jig#readme",
+  "bugs": {
+    "url": "https://github.com/Shodh-Labs/jig/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "Shodh Labs"
+}

@@ -1,0 +1,81 @@
+name: npm publish
+
+# Publish @shodh/jig to npm when a GitHub Release is published (the same event
+# release.yml's assets attach to), or on demand via workflow_dispatch.
+#
+# Prerequisites (one-time, owned by the repo/org admin):
+#   * The `shodh` npm org exists and @shodh/jig is publishable under it.
+#   * Repo secret NPM_TOKEN is set to an npm *automation* token for that org
+#     (Access Tokens → Generate New Token → Automation). An automation token
+#     bypasses 2FA, which is required for unattended CI publishes.
+# Until a release exists there is nothing to publish; a manual run against a
+# nonexistent version simply fails the guard — that is intended.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.1.0 or v0.1.0). Must match the workspace Cargo.toml version."
+        required: true
+        type: string
+
+# Least privilege. `id-token: write` is required for npm provenance (OIDC);
+# `contents: read` to check out the source.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish @shodh/jig
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Resolve + guard version (tag == Cargo.toml == package.json)
+        id: version
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Version source: the release tag on `release`, or the manual input.
+          if [ "${{ github.event_name }}" = "release" ]; then
+            raw="${{ github.event.release.tag_name }}"
+          else
+            raw="${{ inputs.version }}"
+          fi
+          ver="${raw#v}"  # strip a leading "v"
+
+          # Guard against the workspace version — same source-of-truth
+          # philosophy as release.yml's tag guard.
+          crate="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ "$ver" != "$crate" ]; then
+            echo "::error::version to publish ($ver) does not match workspace Cargo.toml version ($crate) — refusing to publish"
+            exit 1
+          fi
+
+          # The package.json in the repo must already be synced to that version.
+          pkg="$(node -p "require('./npm/package.json').version")"
+          if [ "$pkg" != "$crate" ]; then
+            echo "::error::npm/package.json version ($pkg) does not match Cargo.toml ($crate) — sync it before releasing"
+            exit 1
+          fi
+
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Publishing @shodh/jig@$ver"
+
+      - name: Run unit tests (zero deps — no install step)
+        working-directory: npm
+        run: node --test "test/**/*.test.js"
+
+      - name: Publish to npm (public, with provenance)
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
