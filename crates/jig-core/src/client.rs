@@ -6,12 +6,13 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::error::{JigError, Result};
+use crate::http::HttpTransport;
 use crate::protocol::{
     Implementation, InitializeResult, Prompt, Resource, Tool, ToolCallResult,
     LATEST_PROTOCOL_VERSION,
 };
 use crate::tap::ProtocolTap;
-use crate::transport::{StdioTransport, DEFAULT_REQUEST_TIMEOUT};
+use crate::transport::{StdioTransport, Transport, DEFAULT_REQUEST_TIMEOUT};
 
 /// Jig's identity, advertised to servers as `clientInfo`.
 const CLIENT_NAME: &str = "jig";
@@ -39,12 +40,15 @@ impl Default for ClientOptions {
     }
 }
 
-/// A connected, initialized MCP client over a stdio transport.
+/// A connected, initialized MCP client, transport-agnostic.
 ///
-/// Construct via [`Client::connect`], which spawns the server and completes
-/// the `initialize` / `notifications/initialized` handshake before returning.
+/// Construct via [`Client::connect`] (stdio — spawns a subprocess) or
+/// [`Client::connect_http`] (remote Streamable HTTP). Either way the
+/// constructor completes the `initialize` / `notifications/initialized`
+/// handshake before returning, and every subsequent operation is identical
+/// regardless of the underlying [`Transport`].
 pub struct Client {
-    transport: StdioTransport,
+    transport: Transport,
     init: InitializeResult,
 }
 
@@ -76,8 +80,45 @@ impl Client {
         tap: ProtocolTap,
         options: ClientOptions,
     ) -> Result<Self> {
-        let transport =
-            StdioTransport::spawn_with_timeout(program, args, tap, options.request_timeout)?;
+        let transport = Transport::Stdio(Box::new(StdioTransport::spawn_with_timeout(
+            program,
+            args,
+            tap,
+            options.request_timeout,
+        )?));
+        let init = Self::handshake(&transport).await?;
+        Ok(Client { transport, init })
+    }
+
+    /// Connect to a remote MCP server over the **Streamable HTTP** transport at
+    /// `url` (the single MCP endpoint), performing the full handshake. Uses
+    /// [`ClientOptions::default`] and no extra headers.
+    pub async fn connect_http(url: &str) -> Result<Self> {
+        Self::connect_http_with_options(
+            url,
+            Vec::new(),
+            ProtocolTap::new(),
+            ClientOptions::default(),
+        )
+        .await
+    }
+
+    /// Full-control HTTP constructor: the MCP endpoint `url`, `headers` attached
+    /// to every request (e.g. `("Authorization", "Bearer …")` for remote SaaS
+    /// servers), a caller-supplied `tap`, and [`ClientOptions`] (per-request
+    /// timeout). Completes the handshake before returning.
+    pub async fn connect_http_with_options(
+        url: &str,
+        headers: Vec<(String, String)>,
+        tap: ProtocolTap,
+        options: ClientOptions,
+    ) -> Result<Self> {
+        let transport = Transport::Http(HttpTransport::connect(
+            url,
+            headers,
+            tap,
+            options.request_timeout,
+        )?);
         let init = Self::handshake(&transport).await?;
         Ok(Client { transport, init })
     }
@@ -85,7 +126,7 @@ impl Client {
     /// Run the MCP lifecycle handshake: `initialize` request, then the
     /// `notifications/initialized` notification. Returns the negotiated
     /// [`InitializeResult`].
-    async fn handshake(transport: &StdioTransport) -> Result<InitializeResult> {
+    async fn handshake(transport: &Transport) -> Result<InitializeResult> {
         let params = json!({
             "protocolVersion": LATEST_PROTOCOL_VERSION,
             "capabilities": {},

@@ -229,6 +229,62 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// A transport-agnostic connection to an MCP server.
+///
+/// [`Client`](crate::Client) speaks to this enum, not to a concrete transport,
+/// so the handshake and every operation work identically whether the server is
+/// a local subprocess ([`StdioTransport`]) or a remote Streamable-HTTP endpoint
+/// ([`HttpTransport`](crate::http::HttpTransport)).
+///
+/// An enum was chosen over a `dyn`/`async_trait` object deliberately: the two
+/// transports have different construction, no shared runtime state, and Rust's
+/// native `async fn` in inherent impls dispatches here without the allocation,
+/// object-safety, or macro friction of async trait objects. The two variants
+/// present the identical surface — `request`, `notify`, `tap`, `shutdown` — so
+/// callers never match on the variant.
+pub enum Transport {
+    /// Newline-delimited JSON-RPC over a child process's stdio. Boxed: the
+    /// stdio transport (child handle, join handles, several mutexes) is far
+    /// larger than the HTTP one, and boxing keeps the enum small.
+    Stdio(Box<StdioTransport>),
+    /// JSON-RPC over the MCP Streamable HTTP transport.
+    Http(crate::http::HttpTransport),
+}
+
+impl Transport {
+    /// Send a JSON-RPC request and await its correlated response `result`.
+    pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
+        match self {
+            Transport::Stdio(t) => t.request(method, params).await,
+            Transport::Http(t) => t.request(method, params).await,
+        }
+    }
+
+    /// Send a JSON-RPC notification (no id, no response expected).
+    pub async fn notify(&self, method: &str, params: Value) -> Result<()> {
+        match self {
+            Transport::Stdio(t) => t.notify(method, params).await,
+            Transport::Http(t) => t.notify(method, params).await,
+        }
+    }
+
+    /// The protocol tap capturing this connection's traffic.
+    pub fn tap(&self) -> &ProtocolTap {
+        match self {
+            Transport::Stdio(t) => t.tap(),
+            Transport::Http(t) => t.tap(),
+        }
+    }
+
+    /// Cleanly terminate the connection (kill the child, or end the HTTP session).
+    pub async fn shutdown(self) -> Result<()> {
+        match self {
+            Transport::Stdio(t) => t.shutdown().await,
+            Transport::Http(t) => t.shutdown().await,
+        }
+    }
+}
+
 /// Resolve a program name to a concrete path the OS can spawn.
 ///
 /// On non-Windows platforms this is the identity: the kernel's `execvp`-style
@@ -292,7 +348,10 @@ fn resolve_program(program: &str) -> std::path::PathBuf {
 }
 
 /// Parse a raw JSON-RPC response value into either its `result` or an error.
-fn parse_response(response: Value) -> Result<Value> {
+///
+/// Shared by both transports: the JSON-RPC response envelope is identical over
+/// stdio and HTTP.
+pub(crate) fn parse_response(response: Value) -> Result<Value> {
     if let Some(err) = response.get("error") {
         let code = err.get("code").and_then(Value::as_i64).unwrap_or(0);
         let message = err

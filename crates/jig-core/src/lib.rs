@@ -30,6 +30,7 @@
 
 pub mod client;
 pub mod error;
+pub mod http;
 pub mod protocol;
 pub mod tap;
 pub mod tokens;
@@ -37,6 +38,7 @@ pub mod transport;
 
 pub use client::{Client, ClientOptions};
 pub use error::{JigError, Result};
+pub use http::HttpTransport;
 pub use protocol::{
     ContentBlock, Implementation, InitializeResult, Prompt, PromptArgument, Resource, Tool,
     ToolCallResult, LATEST_PROTOCOL_VERSION,
@@ -46,4 +48,4 @@ pub use tokens::{
     budget_local, canonical_tool_json, Exactness, ModelBudget, ModelCounter, TokenError,
     ToolBudget, CANONICAL_RENDERING_DOC,
 };
-pub use transport::{StdioTransport, DEFAULT_REQUEST_TIMEOUT};
+pub use transport::{StdioTransport, Transport, DEFAULT_REQUEST_TIMEOUT};

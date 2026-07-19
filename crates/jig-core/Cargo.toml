@@ -12,14 +12,16 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tiktoken-rs.workspace = true
-reqwest = { workspace = true, optional = true }
+# `reqwest` is now a core dependency: it powers the Streamable HTTP transport
+# (`HttpTransport`), which is first-class functionality, not an optional add-on.
+reqwest = { workspace = true }
 
 [features]
 default = []
-# Enables `jig budget --exact-anthropic`: an HTTP client used to call
-# Anthropic's `count_tokens` endpoint. Feature-gated so library consumers that
-# only need local tokenization don't pull in reqwest + rustls.
-exact-anthropic = ["dep:reqwest"]
+# Gates `jig budget --exact-anthropic`: the code that calls Anthropic's
+# `count_tokens` endpoint. `reqwest` itself is always present now (see above),
+# so this feature only toggles the Anthropic-specific request path.
+exact-anthropic = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
