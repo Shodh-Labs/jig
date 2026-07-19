@@ -13,11 +13,14 @@
 
 use std::collections::HashSet;
 
+use std::time::Duration;
+
 use jig_core::bench::{classify_anthropic, classify_openai, validate_args};
+use jig_core::check::{MetricSamples, Percentiles};
 use jig_core::http::parse_sse;
 use jig_core::tokens::canonical_tool_json;
 use jig_core::transport::{classify_inbound, parse_response};
-use jig_core::{Direction, ProtocolTap, TapEntry, Tool};
+use jig_core::{evaluate, CheckInput, Direction, Observations, ProtocolTap, TapEntry, Tool};
 
 use proptest::prelude::*;
 use serde_json::{json, Map, Value};
@@ -209,4 +212,90 @@ proptest! {
         prop_assert_eq!(&a, &b, "rendering depends on input key order");
         prop_assert_eq!(&a, &a2, "rendering is not idempotent");
     }
+
+    // ---- Report card: scoring is total and bounded ------------------------
+
+    /// The `jig check` scorer never panics over an arbitrary tool list and
+    /// arbitrary observations, and every score it produces — the composite and
+    /// every applicable dimension — stays within `0..=100`. This is the core
+    /// safety contract of the report card: no input can make it crash or emit a
+    /// nonsensical grade.
+    #[test]
+    fn evaluate_is_total_and_bounded(
+        tools in arb_tools(),
+        pollution in 0usize..500,
+        list_timed_out in any::<bool>(),
+        latency_ms in proptest::option::of(0u64..10_000),
+        clean_shutdown in any::<bool>(),
+        instructions in proptest::option::of(".{0,64}"),
+        samples in prop::collection::vec(0f64..200_000.0, 0..40),
+    ) {
+        let input = CheckInput {
+            server_name: "prop-server".to_string(),
+            server_version: "0.0.0".to_string(),
+            protocol_version: "2025-06-18".to_string(),
+            capabilities: json!({ "tools": {} }),
+            instructions,
+            tools,
+            observations: Observations {
+                pollution_lines: pollution,
+                list_timed_out,
+                list_latency: latency_ms.map(Duration::from_millis),
+                clean_shutdown,
+                stderr_noise_bytes: None,
+            },
+        };
+
+        // With and without an ecosystem dataset — both scoring paths are total.
+        let percentiles = if samples.is_empty() {
+            None
+        } else {
+            Some(Percentiles {
+                context_cost_tokens: MetricSamples { samples },
+                collected: None,
+            })
+        };
+
+        for pct in [None, percentiles.as_ref()] {
+            let report = evaluate(&input, pct);
+            prop_assert!(
+                (0.0..=100.0).contains(&report.composite),
+                "composite out of range: {}",
+                report.composite
+            );
+            for d in &report.dimensions {
+                if let Some(s) = d.score {
+                    prop_assert!(
+                        (0.0..=100.0).contains(&s),
+                        "dimension {} score out of range: {}",
+                        d.dimension.label(),
+                        s
+                    );
+                }
+            }
+            // Ranking is total too, and honors the requested cap.
+            prop_assert!(report.top_fixes(3).len() <= 3);
+        }
+    }
+}
+
+/// A strategy for an arbitrary tool list: names may contain spaces and mixed
+/// separators (exercising the naming heuristics), descriptions may be absent,
+/// and input schemas are arbitrary JSON.
+fn arb_tools() -> impl Strategy<Value = Vec<Tool>> {
+    let one = (
+        "[a-zA-Z0-9_ -]{0,20}",
+        proptest::option::of(".{0,80}"),
+        arb_json(),
+    )
+        .prop_map(|(name, desc, schema)| {
+            let mut m = Map::new();
+            m.insert("name".to_string(), json!(name));
+            if let Some(d) = desc {
+                m.insert("description".to_string(), json!(d));
+            }
+            m.insert("inputSchema".to_string(), schema);
+            serde_json::from_value::<Tool>(Value::Object(m)).expect("tool with a name parses")
+        });
+    prop::collection::vec(one, 0..10)
 }

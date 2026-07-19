@@ -39,7 +39,7 @@ Jig is a Rust workspace (`cargo` 1.80+). Milestone 1 ships the core engine and t
 ```
 crates/
   jig-core         # library: stdio + Streamable HTTP transports, MCP handshake + ops, protocol tap
-  jig-cli          # binary `jig`: inspect / call / budget subcommands
+  jig-cli          # binary `jig`: check / inspect / call / budget / bench subcommands
   jig-mock-server  # binary: a minimal MCP server (stdio + HTTP) used as a test fixture
 ```
 
@@ -56,6 +56,8 @@ Try the CLI against the bundled mock server:
 
 ```sh
 cargo build
+# the one-command report card: score everything in one session
+./target/debug/jig check --stdio "./target/debug/jig-mock-server"
 # inspect what a server exposes (add --json for full machine output)
 ./target/debug/jig inspect --stdio "./target/debug/jig-mock-server" --tap traffic.jsonl
 # invoke a single tool
@@ -67,6 +69,68 @@ cargo build
 ./target/debug/jig bench --stdio "./target/debug/jig-mock-server" \
     --task "Book a table for two tonight" --model gpt-4o --runs 5
 ```
+
+### `jig check` — the one-command report card
+
+`jig check` is the front door: one command connects once and runs everything Jig
+knows, then renders a **scored verdict with a to-do list** — Lighthouse for MCP
+servers. Instruments require interpretation; a grade plus ranked fixes converts.
+
+```sh
+jig check --stdio "npx -y @playwright/mcp@latest"     # human report card
+jig check --stdio "<cmd>" --json                       # full findings + per-dimension scores
+jig check --stdio "<cmd>" --badge                      # shields.io endpoint JSON for a README badge
+jig check --stdio "<cmd>" --min-score 80               # CI gate: exit nonzero below the floor
+jig check --http "https://example.com/mcp" --header "Authorization: Bearer $TOKEN"
+```
+
+One session, one grade over five weighted dimensions (`rubric-v1`):
+
+| Dimension | Weight | What it scores |
+|:----------|-------:|:---------------|
+| Protocol compliance | 25 | handshake, stdout framing/pollution, spec-valid capabilities, timeouts |
+| Context cost | 25 | gpt-4o exact total tokens (percentile vs the ecosystem, or absolute bands) |
+| Schema hygiene | 20 | per tool: descriptions, param types & descriptions, annotations |
+| Description quality | 15 | *heuristic* — description length, name consistency, titles (no LLM) |
+| Robustness | 15 | *observed only* — list latency, clean shutdown |
+
+Every deduction is a typed finding carrying the fix, and the three highest-impact
+fixes are surfaced up top:
+
+```
+jig check · jig-mock-server v0.1.0
+protocol 2025-06-18 · rubric-v1
+
+  ✓  98 / 100   grade A
+
+  ✓  Protocol compliance  100   clean handshake, no stdout pollution, spec-valid capabilities
+  ✓  Context cost          99   183 tokens (no ecosystem data — absolute bands)
+  ✓  Schema hygiene        94   `make_reservation`: parameter `party` missing a description (+1 more)
+  ✓  Description quality   97   heuristic · 3 tool(s) have no human-facing title
+  ✓  Robustness           100   list 3ms, clean shutdown
+
+Top fixes
+  1. [schema_hygiene] `make_reservation`: parameter `party` missing a description
+     → describe each parameter of `make_reservation` so the model can fill it correctly
+  2. [schema_hygiene] 3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)
+     → add tool annotations so clients can reason about side effects
+  3. [description_quality] 3 tool(s) have no human-facing title
+     → add a `title` to each tool for nicer client display
+
+Description quality is heuristic (deterministic, no LLM).
+Context cost scored with absolute bands (no ecosystem dataset available).
+```
+
+**Honest scoring.** Context cost is graded against an ecosystem percentile
+dataset when `data/percentiles.json` is present (the report then says e.g.
+`94th percentile (heaviest 6%)`); absent, it uses documented absolute bands and
+says so. Description quality is deterministic heuristics — labelled "heuristic",
+never an LLM verdict — and robustness scores only what was actually observed in
+the session, never assumed. `--min-score <n>` is the CI gate: wire
+`jig check --stdio "<cmd>" --min-score 80` into a pipeline and a regression that
+drops the grade fails the build. See
+[`docs/percentiles-schema.md`](docs/percentiles-schema.md) for the dataset
+format.
 
 ### Transports: stdio and Streamable HTTP
 
