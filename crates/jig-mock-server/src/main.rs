@@ -21,6 +21,23 @@ fn main() {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
+    // Test fixture: with `--pollute-stdout`, emit a plain-text line to stdout
+    // *before* any protocol traffic — exactly what a misconfigured logger or a
+    // stray `console.log` does, corrupting the newline-delimited framing. A
+    // robust client must still complete the handshake and flag the noise.
+    if std::env::args().any(|a| a == "--pollute-stdout") {
+        let _ = writeln!(
+            out,
+            "[startup] mock server listening (this line is NOT JSON-RPC)"
+        );
+        let _ = out.flush();
+    }
+
+    // Test fixture: with `--paginate`, `tools/list` returns exactly one tool per
+    // page and a `nextCursor` until the list is exhausted, so a client's cursor
+    // following can be exercised. Off by default so the simple path stays simple.
+    let paginate = std::env::args().any(|a| a == "--paginate");
+
     for line in stdin.lock().lines() {
         let line = match line {
             Ok(l) => l,
@@ -63,6 +80,7 @@ fn main() {
 
         let response = match method {
             "initialize" => handle_initialize(id),
+            "tools/list" if paginate => handle_tools_list_paginated(id, request.get("params")),
             "tools/list" => handle_tools_list(id),
             "tools/call" => handle_tools_call(id, request.get("params")),
             other => error_response(id, -32601, &format!("Method not found: {other}")),
@@ -161,6 +179,33 @@ fn handle_tools_list(id: Value) -> Value {
             ]
         }),
     )
+}
+
+/// Paginated variant of `tools/list` (enabled by `--paginate`): one tool per
+/// page, walking an opaque cursor. Exercises a client's `nextCursor` following.
+fn handle_tools_list_paginated(id: Value, params: Option<&Value>) -> Value {
+    // Reuse the canonical tool set, then hand it out one entry at a time.
+    let all = handle_tools_list(Value::Null);
+    let tools = all["result"]["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let cursor = params
+        .and_then(|p| p.get("cursor"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    // The cursor is simply the next index, encoded as "page-<n>"; absent = 0.
+    let index: usize = cursor
+        .strip_prefix("page-")
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+
+    let mut result = json!({ "tools": tools.get(index).cloned().into_iter().collect::<Vec<_>>() });
+    if index + 1 < tools.len() {
+        result["nextCursor"] = json!(format!("page-{}", index + 1));
+    }
+    success_response(id, result)
 }
 
 fn handle_tools_call(id: Value, params: Option<&Value>) -> Value {

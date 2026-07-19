@@ -141,6 +141,7 @@ async fn inspect(
     let tap = ProtocolTap::new();
     let result = inspect_inner(&program, &args, tap.clone(), as_json, timeout_secs).await;
 
+    warn_non_protocol_output(&tap);
     write_tap_if_requested(&tap, tap_path);
     result
 }
@@ -213,6 +214,7 @@ async fn call(
     )
     .await;
 
+    warn_non_protocol_output(&tap);
     write_tap_if_requested(&tap, tap_path);
     result
 }
@@ -251,6 +253,35 @@ async fn call_inner(
         Ok(ExitCode::from(EXIT_TOOL_ERROR))
     } else {
         Ok(ExitCode::SUCCESS)
+    }
+}
+
+/// Warn (on stderr) if the server wrote anything to stdout that is not a valid
+/// JSON-RPC message. This is the single most common way an MCP server breaks in
+/// practice — a stray `console.log`, a startup banner, or a logger misconfigured
+/// to stdout — and it silently corrupts the newline-delimited framing. Jig is a
+/// diagnostic tool, so it must name the problem loudly instead of hiding it.
+const MAX_POLLUTION_LINES_SHOWN: usize = 5;
+
+fn warn_non_protocol_output(tap: &ProtocolTap) {
+    let bad = tap.non_protocol_inbound();
+    if bad.is_empty() {
+        return;
+    }
+    eprintln!(
+        "jig: warning: server wrote {} non-protocol line(s) to stdout — this breaks MCP framing \
+         (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)",
+        bad.len()
+    );
+    for (seq, raw) in bad.iter().take(MAX_POLLUTION_LINES_SHOWN) {
+        let preview: String = raw.chars().take(120).collect();
+        eprintln!("jig:   [tap seq {seq}] {preview}");
+    }
+    if bad.len() > MAX_POLLUTION_LINES_SHOWN {
+        eprintln!(
+            "jig:   ... and {} more (see the tap for all of them)",
+            bad.len() - MAX_POLLUTION_LINES_SHOWN
+        );
     }
 }
 

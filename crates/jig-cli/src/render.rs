@@ -207,14 +207,24 @@ fn compact_value(v: &Value) -> String {
     }
 }
 
+/// Collapse every run of whitespace (including newlines and tabs) into a single
+/// space and trim the ends. The human report lays out descriptions and
+/// instructions as single-line cells; real servers embed newlines in those
+/// fields (e.g. server-memory's multi-paragraph tool descriptions), which would
+/// otherwise smear across lines and destroy the report's alignment.
+fn collapse_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Truncate `s` to at most `max` characters (on a char boundary), appending an
-/// ellipsis when truncated.
+/// ellipsis when truncated. Internal whitespace is collapsed first so the
+/// result is always a single tidy line regardless of what the server sent.
 fn truncate(s: &str, max: usize) -> String {
-    let trimmed = s.trim();
-    if trimmed.chars().count() <= max {
-        return trimmed.to_string();
+    let flat = collapse_whitespace(s);
+    if flat.chars().count() <= max {
+        return flat;
     }
-    let mut out: String = trimmed.chars().take(max.saturating_sub(1)).collect();
+    let mut out: String = flat.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
     out
 }
@@ -268,5 +278,17 @@ mod tests {
         let out = truncate(&long, 100);
         assert_eq!(out.chars().count(), 100);
         assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_collapses_embedded_newlines_to_single_line() {
+        // Real servers (e.g. server-memory, server-everything) put newlines and
+        // blank lines inside descriptions/instructions. The report cell must
+        // stay a single line so the layout survives.
+        let multiline = "First paragraph.\n\nSecond paragraph.\n  indented\ttab";
+        let out = truncate(multiline, 100);
+        assert!(!out.contains('\n'), "must be single line: {out:?}");
+        assert!(!out.contains('\t'), "must have no tabs: {out:?}");
+        assert_eq!(out, "First paragraph. Second paragraph. indented tab");
     }
 }

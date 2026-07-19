@@ -195,3 +195,54 @@ async fn no_timeout_still_completes_normal_requests() {
 
     transport.shutdown().await.expect("shutdown");
 }
+
+/// A server that writes non-JSON noise to stdout corrupts the MCP framing, but
+/// jig must still complete the handshake *and* expose the offending line so the
+/// user can be warned. This is the single most common real-world MCP failure.
+#[tokio::test]
+async fn stdout_pollution_is_captured_but_does_not_break_handshake() {
+    let client = Client::connect(&mock_server(), &["--pollute-stdout".to_string()])
+        .await
+        .expect("handshake must survive a polluted stdout");
+
+    // The handshake still worked despite the noise.
+    assert_eq!(client.server_info().name, "jig-mock-server");
+    let tools = client.list_tools().await.expect("tools/list");
+    assert_eq!(tools.len(), 3);
+
+    // ...and the noise is surfaced, not silently dropped.
+    let bad = client.tap().non_protocol_inbound();
+    assert_eq!(bad.len(), 1, "expected exactly one polluting line: {bad:?}");
+    assert!(
+        bad[0].1.contains("NOT JSON-RPC"),
+        "unexpected polluting line: {:?}",
+        bad[0].1
+    );
+
+    client.shutdown().await.expect("shutdown");
+}
+
+/// When the server paginates `tools/list` with `nextCursor`, jig must follow the
+/// cursor and return every tool, not just the first page.
+#[tokio::test]
+async fn tools_list_follows_cursor_pagination() {
+    let client = Client::connect(&mock_server(), &["--paginate".to_string()])
+        .await
+        .expect("handshake");
+
+    let tools = client.list_tools().await.expect("tools/list");
+    // All three tools, gathered across three single-item pages.
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["echo", "make_reservation", "always_fails"]);
+
+    // The tap proves three separate paginated requests were actually made.
+    let list_requests = client
+        .tap()
+        .entries()
+        .into_iter()
+        .filter(|e| e.method() == Some("tools/list"))
+        .count();
+    assert_eq!(list_requests, 3, "expected one request per page");
+
+    client.shutdown().await.expect("shutdown");
+}

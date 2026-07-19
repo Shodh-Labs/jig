@@ -224,6 +224,23 @@ mod tests {
     }
 
     #[test]
+    fn initialize_result_tolerates_old_version_and_missing_optionals() {
+        // A pre-2025 server negotiating an older protocol version, with no
+        // `capabilities` and no `instructions`, must still parse: Jig accepts
+        // whatever version the server negotiates and treats optional fields as
+        // absent rather than rejecting the handshake.
+        let v = json!({
+            "protocolVersion": "2024-11-05",
+            "serverInfo": { "name": "legacy-server", "version": "0.1.0" }
+        });
+        let init: InitializeResult = serde_json::from_value(v).unwrap();
+        assert_eq!(init.protocol_version, "2024-11-05");
+        assert_eq!(init.server_info.name, "legacy-server");
+        assert!(init.capabilities.is_null());
+        assert!(init.instructions.is_none());
+    }
+
+    #[test]
     fn tool_parses_input_schema_as_raw_json() {
         let v = json!({
             "name": "echo",

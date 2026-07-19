@@ -17,6 +17,11 @@ use crate::transport::{StdioTransport, DEFAULT_REQUEST_TIMEOUT};
 const CLIENT_NAME: &str = "jig";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Hard cap on `*/list` pages followed via `nextCursor`. Generous enough for
+/// any real server, but bounded so a buggy server that always returns a fresh
+/// cursor cannot make Jig loop forever.
+const MAX_LIST_PAGES: usize = 1000;
+
 /// Tunable options for a [`Client`] connection.
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
@@ -135,42 +140,79 @@ impl Client {
 
     /// List the server's tools. Returns an empty vec (not an error) if the
     /// server does not advertise the `tools` capability or reports the method
-    /// as unsupported.
+    /// as unsupported. Follows `nextCursor` pagination to completion.
     pub async fn list_tools(&self) -> Result<Vec<Tool>> {
-        if !self.has_capability("tools") {
-            return Ok(Vec::new());
-        }
-        match self.transport.request("tools/list", json!({})).await {
-            Ok(result) => extract_list(&result, "tools"),
-            Err(e) if e.is_method_not_found() => Ok(Vec::new()),
-            Err(e) => Err(e),
-        }
+        self.list_paginated("tools", "tools/list", "tools").await
     }
 
     /// List the server's resources. Graceful when unsupported (see
-    /// [`Client::list_tools`]).
+    /// [`Client::list_tools`]); paginated.
     pub async fn list_resources(&self) -> Result<Vec<Resource>> {
-        if !self.has_capability("resources") {
-            return Ok(Vec::new());
-        }
-        match self.transport.request("resources/list", json!({})).await {
-            Ok(result) => extract_list(&result, "resources"),
-            Err(e) if e.is_method_not_found() => Ok(Vec::new()),
-            Err(e) => Err(e),
-        }
+        self.list_paginated("resources", "resources/list", "resources")
+            .await
     }
 
     /// List the server's prompts. Graceful when unsupported (see
-    /// [`Client::list_tools`]).
+    /// [`Client::list_tools`]); paginated.
     pub async fn list_prompts(&self) -> Result<Vec<Prompt>> {
-        if !self.has_capability("prompts") {
+        self.list_paginated("prompts", "prompts/list", "prompts")
+            .await
+    }
+
+    /// Shared driver for the `*/list` operations.
+    ///
+    /// * Skips the call entirely if `capability` was not advertised.
+    /// * Degrades a `-32601 method not found` to an empty list, so a server
+    ///   that advertises a capability but has not implemented the method does
+    ///   not fail the whole inspection.
+    /// * Follows MCP cursor pagination: it passes back any `nextCursor` the
+    ///   server returns until the cursor is absent/empty, accumulating every
+    ///   page. A diagnostic tool that showed only the first page would quietly
+    ///   lie about what the server exposes. Two safety valves prevent a
+    ///   misbehaving server from looping forever: a hard page cap and a guard
+    ///   against a cursor that never advances.
+    async fn list_paginated<T: serde::de::DeserializeOwned>(
+        &self,
+        capability: &str,
+        method: &str,
+        key: &str,
+    ) -> Result<Vec<T>> {
+        if !self.has_capability(capability) {
             return Ok(Vec::new());
         }
-        match self.transport.request("prompts/list", json!({})).await {
-            Ok(result) => extract_list(&result, "prompts"),
-            Err(e) if e.is_method_not_found() => Ok(Vec::new()),
-            Err(e) => Err(e),
+
+        let mut items: Vec<T> = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        for _page in 0..MAX_LIST_PAGES {
+            let params = match &cursor {
+                Some(c) => json!({ "cursor": c }),
+                None => json!({}),
+            };
+            let result = match self.transport.request(method, params).await {
+                Ok(result) => result,
+                // Unsupported method: keep whatever we already gathered.
+                Err(e) if e.is_method_not_found() => return Ok(items),
+                Err(e) => return Err(e),
+            };
+
+            items.extend(extract_list::<T>(&result, key)?);
+
+            match result.get("nextCursor").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => {
+                    // A server that returns the same cursor forever would loop
+                    // us indefinitely; stop if it fails to advance.
+                    if cursor.as_deref() == Some(next) {
+                        break;
+                    }
+                    cursor = Some(next.to_string());
+                }
+                // No cursor (absent, null, or empty) means the last page.
+                _ => break,
+            }
         }
+
+        Ok(items)
     }
 
     /// Invoke a tool by name with the given arguments.

@@ -119,6 +119,29 @@ impl ProtocolTap {
         }
     }
 
+    /// Inbound lines that are **not** valid JSON-RPC messages.
+    ///
+    /// Every legitimate MCP message is a JSON object; anything else on the
+    /// server's stdout — a log line, a stack trace, a stray `console.log`, or
+    /// even a bare JSON scalar/array — is stdout pollution that corrupts the
+    /// newline-delimited framing. The reader records such lines verbatim (as a
+    /// JSON string when they were not even parseable) rather than dropping them,
+    /// so this method can surface them to the user. Returned as `(seq, raw)`
+    /// pairs in record order, where `raw` is the offending line's text.
+    pub fn non_protocol_inbound(&self) -> Vec<(u64, String)> {
+        self.entries()
+            .into_iter()
+            .filter(|e| e.direction == Direction::Inbound && !e.message.is_object())
+            .map(|e| {
+                let raw = match &e.message {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                (e.seq, raw)
+            })
+            .collect()
+    }
+
     /// Number of entries recorded so far.
     pub fn len(&self) -> usize {
         match self.inner.lock() {
@@ -202,6 +225,30 @@ mod tests {
             assert!(v.get("direction").is_some());
             assert!(v.get("message").is_some());
         }
+    }
+
+    #[test]
+    fn non_protocol_inbound_flags_stdout_pollution() {
+        let tap = ProtocolTap::new();
+        // A well-formed inbound response: not a violation.
+        tap.record(
+            Direction::Inbound,
+            json!({ "jsonrpc": "2.0", "id": 1, "result": {} }),
+        );
+        // A non-JSON log line the reader preserved as a string: a violation.
+        tap.record(
+            Direction::Inbound,
+            Value::String("[info] server started".into()),
+        );
+        // A bare JSON scalar on stdout: also not a valid JSON-RPC message.
+        tap.record(Direction::Inbound, json!(42));
+        // Outbound noise (we never emit non-objects, but prove it is ignored).
+        tap.record(Direction::Outbound, Value::String("ignored".into()));
+
+        let bad = tap.non_protocol_inbound();
+        assert_eq!(bad.len(), 2);
+        assert_eq!(bad[0], (1, "[info] server started".to_string()));
+        assert_eq!(bad[1], (2, "42".to_string()));
     }
 
     #[test]
