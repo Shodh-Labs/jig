@@ -11,6 +11,9 @@
 //! configurable via the `PROPTEST_CASES` environment variable, so CI stays
 //! fast while a nightly run can crank the pressure up.
 
+use std::collections::HashSet;
+
+use jig_core::bench::{classify_anthropic, classify_openai, validate_args};
 use jig_core::http::parse_sse;
 use jig_core::tokens::canonical_tool_json;
 use jig_core::transport::{classify_inbound, parse_response};
@@ -90,6 +93,41 @@ proptest! {
     #[test]
     fn parse_response_never_panics(v in arb_json()) {
         let _ = parse_response(v);
+    }
+
+    // ---- Bench: classification & validation are total over arbitrary JSON ----
+
+    /// Classifying an arbitrary Anthropic-shaped response never panics, whatever
+    /// junk the (mock or misbehaving) provider returns. The outcome is always
+    /// one of the taxonomy variants.
+    #[test]
+    fn classify_anthropic_never_panics(v in arb_json()) {
+        let tools: HashSet<String> = ["echo", "make_reservation"].iter().map(|s| s.to_string()).collect();
+        let c = classify_anthropic(&v, &tools);
+        // The tag is always a known taxonomy label (proves a variant was formed).
+        prop_assert!(matches!(
+            c.outcome.tag(),
+            "selected" | "no_tool" | "hallucinated_tool" | "provider_error"
+        ));
+    }
+
+    /// Same total-ness for the OpenAI dialect — including the malformed
+    /// `arguments`-string path, which must degrade, never unwind.
+    #[test]
+    fn classify_openai_never_panics(v in arb_json()) {
+        let tools: HashSet<String> = ["echo", "make_reservation"].iter().map(|s| s.to_string()).collect();
+        let c = classify_openai(&v, &tools);
+        prop_assert!(matches!(
+            c.outcome.tag(),
+            "selected" | "no_tool" | "hallucinated_tool" | "provider_error"
+        ));
+    }
+
+    /// The argument validator is total: arbitrary (schema, args) pairs yield a
+    /// verdict, never a panic.
+    #[test]
+    fn validate_args_never_panics(schema in arb_json(), args in arb_json()) {
+        let _ = validate_args(&schema, &args);
     }
 
     /// A well-formed `{ "result": ... }` envelope always yields that result.

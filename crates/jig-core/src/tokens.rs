@@ -141,6 +141,11 @@ struct ModelSpec {
     /// For `--exact-anthropic`: the concrete Anthropic API model id to send to
     /// the `count_tokens` endpoint. `None` for non-Anthropic models.
     api_model: Option<&'static str>,
+    /// Which provider dialect `jig bench` speaks to for this model.
+    bench_provider: crate::bench::Provider,
+    /// The concrete API model string `jig bench` sends on the wire. Hardcoded
+    /// mappings age, so `jig bench --api-model <string>` overrides this.
+    bench_api_model: &'static str,
 }
 
 /// The model registry. One entry per supported model — extend here.
@@ -151,6 +156,8 @@ const REGISTRY: &[ModelSpec] = &[
         encoding: Encoding::O200kBase,
         anthropic: false,
         api_model: None,
+        bench_provider: crate::bench::Provider::OpenAI,
+        bench_api_model: "gpt-4o",
     },
     ModelSpec {
         id: "gpt-4",
@@ -158,6 +165,8 @@ const REGISTRY: &[ModelSpec] = &[
         encoding: Encoding::Cl100kBase,
         anthropic: false,
         api_model: None,
+        bench_provider: crate::bench::Provider::OpenAI,
+        bench_api_model: "gpt-4",
     },
     ModelSpec {
         id: "claude-sonnet",
@@ -165,6 +174,8 @@ const REGISTRY: &[ModelSpec] = &[
         encoding: Encoding::O200kBase,
         anthropic: true,
         api_model: Some("claude-sonnet-4-5"),
+        bench_provider: crate::bench::Provider::Anthropic,
+        bench_api_model: "claude-sonnet-4-5",
     },
     ModelSpec {
         id: "claude-opus",
@@ -172,8 +183,21 @@ const REGISTRY: &[ModelSpec] = &[
         encoding: Encoding::O200kBase,
         anthropic: true,
         api_model: Some("claude-opus-4-1"),
+        bench_provider: crate::bench::Provider::Anthropic,
+        bench_api_model: "claude-opus-4-1",
     },
 ];
+
+/// Resolve a model id/alias into its `jig bench` mapping: the canonical id, the
+/// provider dialect, and the concrete API model string. `None` if unknown.
+///
+/// This shares the one registry so budget and bench never drift on which model
+/// ids exist or which provider a `claude-*`/`gpt-*` id belongs to.
+pub fn bench_model_spec(
+    model_id: &str,
+) -> Option<(&'static str, crate::bench::Provider, &'static str)> {
+    resolve(model_id).map(|s| (s.id, s.bench_provider, s.bench_api_model))
+}
 
 fn unknown_model(id: &str) -> TokenError {
     TokenError::UnknownModel {
