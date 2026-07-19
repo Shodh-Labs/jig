@@ -71,7 +71,9 @@ Jig has been validated against a battery of real public MCP servers — see
 
 ## License
 
-TBD before first release. The suite format spec and CLI runner are intended to be open.
+[Apache 2.0](LICENSE) — permanently. Everything in this repository (core library, CLI, mock server, and the `.jig` suite format) is and will remain Apache 2.0; no relicensing, no license switch later.
+
+Contributions are accepted under the [Developer Certificate of Origin](https://developercertificate.org/) — sign off your commits with `git commit -s`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
