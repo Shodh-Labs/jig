@@ -33,7 +33,7 @@ jobs:
           - fuzz_command_splitter
           - fuzz_tap_jsonl_roundtrip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install nightly toolchain
         run: rustup toolchain install nightly --profile minimal
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
