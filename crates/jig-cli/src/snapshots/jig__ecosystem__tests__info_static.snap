@@ -1,0 +1,17 @@
+---
+source: crates/jig-cli/src/ecosystem.rs
+expression: "render_info_human(\"acme-db\", &registry, &npm)"
+---
+Info for: acme-db
+
+registry (registry.modelcontextprotocol.io):
+  name:        io.github.acme/db
+  version:     1.2.0
+  description: A database MCP server.
+
+npm (registry.npmjs.org):
+  package:     acme-db-mcp
+  version:     0.4.1
+  published:   2026-05-05T12:00:00Z
+  description: npm build of the acme db server.
+  install:     npx -y acme-db-mcp

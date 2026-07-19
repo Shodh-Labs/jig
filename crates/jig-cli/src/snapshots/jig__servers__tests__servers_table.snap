@@ -1,0 +1,8 @@
+---
+source: crates/jig-cli/src/servers.rs
+expression: render_table(&sample())
+---
+NAME        SOURCE          TRANSPORT                                          ENV               DISABLED
+---------------------------------------------------------------------------------------------------------
+github      claude-desktop  stdio: npx -y @modelcontextprotocol/server-github  GITHUB_TOKEN=•••  -
+remote-api  vscode          http: https://example.com/mcp                      -                 yes

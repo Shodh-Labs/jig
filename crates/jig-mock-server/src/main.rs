@@ -341,6 +341,12 @@ fn error_response(id: Value, code: i64, message: &str) -> Value {
 }
 
 fn handle_initialize(id: Value) -> Value {
+    // Test hook: when `JIG_MOCK_INSTRUCTIONS` is present in the environment, echo
+    // its value back as the `instructions` string. This lets an integration test
+    // prove that environment variables (e.g. from a discovered `--server` config
+    // entry) actually reach the spawned child process.
+    let instructions = std::env::var("JIG_MOCK_INSTRUCTIONS")
+        .unwrap_or_else(|_| "A toy MCP server for exercising Jig.".to_string());
     success_response(
         id,
         json!({
@@ -351,7 +357,7 @@ fn handle_initialize(id: Value) -> Value {
                 "name": "jig-mock-server",
                 "version": env!("CARGO_PKG_VERSION"),
             },
-            "instructions": "A toy MCP server for exercising Jig."
+            "instructions": instructions
         }),
     )
 }

@@ -1,0 +1,8 @@
+---
+source: crates/jig-cli/src/ecosystem.rs
+expression: "render_search_human(&outcome(), 20)"
+---
+NAME               SOURCE    VERSION  DESCRIPTION
+--------------------------------------------------------------------------------
+io.github.acme/db  registry  1.2.0    A database MCP server for querying things.
+acme-mcp-server    npm       0.4.1    npm-published MCP server.

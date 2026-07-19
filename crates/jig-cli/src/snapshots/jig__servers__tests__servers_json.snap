@@ -1,0 +1,37 @@
+---
+source: crates/jig-cli/src/servers.rs
+expression: render_json(&sample())
+---
+{
+  "servers": [
+    {
+      "disabled": false,
+      "env": {
+        "GITHUB_TOKEN": "•••"
+      },
+      "name": "github",
+      "source": "claude-desktop",
+      "sourceFile": "claude_desktop_config.json",
+      "transport": {
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-github"
+        ],
+        "command": "npx",
+        "type": "stdio"
+      }
+    },
+    {
+      "disabled": true,
+      "env": {},
+      "name": "remote-api",
+      "source": "vscode",
+      "sourceFile": ".vscode/mcp.json",
+      "transport": {
+        "type": "http",
+        "url": "https://example.com/mcp"
+      }
+    }
+  ],
+  "warnings": []
+}
