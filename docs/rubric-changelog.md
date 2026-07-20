@@ -13,6 +13,33 @@ Jig's report card is versioned. Every score Jig emits — human report, `--json`
 
 ---
 
+## Outside the rubric: judged description quality (`jig check --judge`)
+
+`jig check --judge` asks a model whether each tool description states its
+purpose, distinguishes its siblings, and documents its parameters. **That output
+is explicitly OUTSIDE `rubric-v1.3`** and outside every rubric version — present
+and future — until a changelog entry says otherwise.
+
+It is not a dimension, it has no weight, and it is not an input to the
+composite, any dimension score, the grade, the badge, or `--min-score`. It does
+not affect `rubricVersion`, which continues to describe the deterministic score
+only. Two `rubric-v1.3` reports on the same server are comparable whether one of
+them was judged and the other was not — an integration test asserts the
+deterministic document is byte-identical either way.
+
+The reason it sits outside is the same reason the rubric is versioned at all: a
+score has to mean the same thing twice. A model's answer is not reproducible, is
+not pinned to an arithmetic, and would silently change as providers retire and
+replace models underneath a fixed model id. So the judged verdict carries its
+own provenance instead — `JUDGE_PROMPT_VERSION`, the verbatim prompt, the
+temperature, and the model id **as the provider reported it** — and stays out of
+the number.
+
+The scored `description_quality` dimension is unchanged and remains
+deterministic, heuristic, and labelled as such in every report.
+
+---
+
 ## `rubric-v1.3`
 
 Where `rubric-v1.1` and `rubric-v1.2` were arithmetic releases — same

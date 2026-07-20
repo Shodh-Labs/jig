@@ -230,6 +230,7 @@ jig check --stdio "npx -y @playwright/mcp@latest"     # human report card + ./ji
 jig check --stdio "<cmd>" --json                       # full findings + per-dimension scores
 jig check --stdio "<cmd>" --badge                      # shields.io endpoint JSON for a README badge
 jig check --stdio "<cmd>" --min-score 80               # CI gate: exit nonzero below the floor
+jig check --stdio "<cmd>" --judge                      # + an opt-in, never-scored model verdict on descriptions
 jig check --stdio "<cmd>" --report card.html           # write the HTML report to a chosen path
 jig check --stdio "<cmd>" --no-report                  # skip the HTML report
 jig check --server "playwright"                        # a server discovered by `jig servers`, by name
@@ -341,12 +342,83 @@ run scores against the ecosystem (the report then says e.g. `bundled census
 2026-07-19 (n=29) — 7th percentile`, always naming the sample size and its age).
 Pass `--percentiles <file>` to use your own dataset, or `--percentiles none` to
 fall back to the documented absolute bands. Description quality is deterministic
-heuristics — labelled "heuristic", never an LLM verdict — and robustness scores
+heuristics — labelled "heuristic", never an LLM verdict (see
+[`--judge`](#--judge--the-opt-in-description-judge) for the opt-in, never-scored
+model verdict) — and robustness scores
 only what was actually observed in the session, never assumed. `--min-score <n>`
 is the CI gate: wire `jig check --stdio "<cmd>" --min-score 80` into a pipeline
 and a regression that drops the grade fails the build. See
 [`docs/percentiles-schema.md`](docs/percentiles-schema.md) for the dataset
 format.
+
+#### `--judge` — the opt-in description judge
+
+A deterministic heuristic can tell you a description is 8 characters long or
+says `TODO`. It cannot tell you whether the description *states what the tool
+does*. That is the most common failure in the wild: a survey of 856 published
+tool descriptions (arXiv:2602.14878) found 97.1% carried at least one smell and
+**56% never stated their purpose at all** — every one of which a length-and-
+placeholder heuristic scores as fine.
+
+`jig check --judge` closes that gap by asking a model three fixed questions
+about each tool, given the whole tool surface at once:
+
+1. **Does the description state what the tool does?**
+2. **Does it say when to use this tool rather than a sibling tool on the same
+   server?**
+3. **Are the parameter descriptions sufficient to fill them correctly?**
+
+Each comes back `yes` / `no` / `unclear` with one line of rationale.
+
+```
+jig check --stdio "<cmd>" --judge                                  # needs a provider key
+jig check --stdio "<cmd>" --judge --judge-model claude-sonnet      # pick the judge model
+jig check --stdio "<cmd>" --judge   --base-url http://localhost:11434/v1 --no-auth --api-model llama3.1   # a local Ollama judges
+```
+
+```
+Description judge (opt-in · never scored)
+  model claude-sonnet-4-5 · prompt judge-prompt-v1 · temperature 0 · https://api.anthropic.com/v1/messages
+
+  search_docs
+    ✓ states its purpose      yes      Says it searches the indexed documentation corpus.
+    ✗ distinguishes siblings  no       Never says when to use this rather than `search_code`.
+    ? parameters sufficient   unclear  `scope` is named but its accepted values are undocumented.
+
+  Judged output is outside rubric-v1.3: it is reported, never scored, and changed nothing above.
+```
+
+**The honesty rules are the feature.** They are not conventions, they are how
+the code is built:
+
+- **Off by default.** No judge call is made — no key is read, no request leaves
+  the machine — unless `--judge` is passed.
+- **Never mixed into the deterministic score.** The judged verdict appears in
+  its own clearly-titled report section and its own `judged` key in `--json`. It
+  **cannot** alter the composite, any dimension score, the badge, `--min-score`
+  gating, or the HTML report card's grade — it is not an input to any of them.
+  An integration test asserts the deterministic document is byte-identical with
+  and without `--judge` against the same server, badge included.
+- **Everything pinned and recorded.** Every judged run emits the judge model id
+  **as the provider reported it** (never the id you asked for — an unreported
+  model stays `null`), a `JUDGE_PROMPT_VERSION` constant, the temperature, and
+  the exact prompt text verbatim in `--json`. A judged number whose prompt
+  version is unknown is worthless.
+- **Graceful absence.** No key, no endpoint, a provider error, a timeout — the
+  check prints one line saying the judge was unavailable and why, then proceeds
+  normally and exits with its usual code. Never a hard failure, never a silent
+  skip.
+- **Defensive parsing.** Models sometimes return prose instead of the requested
+  structure, or answer about only some of the tools. Prose becomes an explicit
+  `unparseable` verdict; an omitted tool becomes `not_judged`. Nothing is ever
+  guessed, coerced, or backfilled.
+
+Judged output is **outside `rubric-v1.3`** — see the
+[rubric changelog](docs/rubric-changelog.md).
+
+Model access is `jig bench`'s, unchanged: a vendor key from the environment, or
+`--base-url` (+ `--no-auth`) for a local Ollama / LM Studio / llama.cpp / vLLM
+or a company gateway. See [Model access](#model-access).
 
 #### Tool-set advisor
 
