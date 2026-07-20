@@ -699,9 +699,11 @@ dependencies = [
 name = "jig-core"
 version = "0.5.0"
 dependencies = [
+ "base64",
  "proptest",
  "regex",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -715,8 +717,10 @@ name = "jig-mock-server"
 version = "0.5.0"
 dependencies = [
  "axum",
+ "base64",
  "insta",
  "jig-core",
+ "ring",
  "serde_json",
  "tokio",
 ]

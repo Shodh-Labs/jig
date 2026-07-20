@@ -1,11 +1,16 @@
 //! `jig auth` — **deterministic OAuth conformance probing** for Streamable HTTP
 //! MCP servers.
 //!
-//! This is **not** a login tool. V1 performs no authorization flows, opens no
-//! browser, and needs no credentials. It probes the *discoverable* auth surfaces
-//! of a remote MCP server and grades their spec conformance — everything
-//! checkable, nothing probabilistic. That is Jig's house style: an instrument,
-//! not a guess.
+//! This module performs no authorization flows, opens no browser, and needs no
+//! credentials. It probes the *discoverable* auth surfaces of a remote MCP
+//! server and grades their spec conformance — everything checkable, nothing
+//! probabilistic. That is Jig's house style: an instrument, not a guess.
+//!
+//! Running the flow for real — Dynamic Client Registration, PKCE, the browser
+//! round trip, the token exchange, and an authenticated session to prove the
+//! token — lives next door in [`mod@crate::login`], which reuses this module's
+//! well-known URL builders, metadata parsers, and redacted HTTP recorder so the
+//! two can never disagree about where a document lives or what it says.
 //!
 //! # What it checks (each probe → a typed [`AuthFinding`])
 //!
@@ -59,6 +64,17 @@ const WELL_KNOWN_OIDC: &str = "/.well-known/openid-configuration";
 
 /// How much of an HTTP body to capture for the `--json` record and the tap.
 const BODY_CAPTURE_LEN: usize = 8 * 1024;
+
+/// The request body of a probe request. Both variants are recorded to the tap
+/// with their secret-bearing members redacted; see [`redact_json`] and
+/// [`redact_form`].
+pub(crate) enum RequestBody {
+    /// A JSON body (`application/json`).
+    Json(Value),
+    /// An `application/x-www-form-urlencoded` body — the OAuth token,
+    /// registration-error, and revocation shapes.
+    Form(Vec<(String, String)>),
+}
 
 // ---------------------------------------------------------------------------
 // Finding data model
@@ -411,12 +427,12 @@ impl AuthServerMetadata {
 }
 
 /// A string field, if present and a string.
-fn string_field(v: &Value, key: &str) -> Option<String> {
+pub(crate) fn string_field(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 /// A JSON array of strings, dropping any non-string entries. `[]` if absent.
-fn string_array(v: &Value, key: &str) -> Vec<String> {
+pub(crate) fn string_array(v: &Value, key: &str) -> Vec<String> {
     v.get(key)
         .and_then(Value::as_array)
         .map(|a| {
@@ -502,7 +518,7 @@ fn origin_string(u: &reqwest::Url) -> String {
     }
 }
 
-fn push_unique(v: &mut Vec<String>, s: String) {
+pub(crate) fn push_unique(v: &mut Vec<String>, s: String) {
     if !v.contains(&s) {
         v.push(s);
     }
@@ -513,10 +529,20 @@ fn push_unique(v: &mut Vec<String>, s: String) {
 // ---------------------------------------------------------------------------
 
 /// The response of one probe request, distilled to what grading needs.
-struct FetchResult {
-    status: Option<u16>,
-    www_authenticate: Option<String>,
-    json: Option<Value>,
+pub(crate) struct FetchResult {
+    /// The HTTP status, or `None` if the request never completed.
+    pub(crate) status: Option<u16>,
+    /// The `WWW-Authenticate` header value, if any.
+    pub(crate) www_authenticate: Option<String>,
+    /// The parsed response body **with secrets redacted** — safe to log, but
+    /// therefore useless for reading a token out of. Use [`FetchResult::raw_json`]
+    /// for that, and never let its contents escape into a record.
+    pub(crate) json: Option<Value>,
+    /// The parsed response body as received, secrets intact. Only the token and
+    /// registration steps look at this, and only to pull out the credential.
+    pub(crate) raw_json: Option<Value>,
+    /// A transport error message, if the request failed to complete.
+    pub(crate) error: Option<String>,
 }
 
 /// Header names whose values are secrets and must be redacted in any record.
@@ -590,7 +616,7 @@ pub async fn probe(
         reqwest::Method::POST,
         url,
         &[],
-        Some(init_body.clone()),
+        Some(RequestBody::Json(init_body.clone())),
         timeout,
     )
     .await;
@@ -884,7 +910,7 @@ pub async fn probe(
             reqwest::Method::POST,
             url,
             headers,
-            Some(init_body),
+            Some(RequestBody::Json(init_body)),
             timeout,
         )
         .await;
@@ -1137,7 +1163,7 @@ fn compute_verdict(auth_required: bool, findings: &[AuthFinding]) -> Verdict {
 }
 
 /// The minimal `initialize` request body used for both probes.
-fn initialize_body() -> Value {
+pub(crate) fn initialize_body() -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -1154,7 +1180,7 @@ fn initialize_body() -> Value {
 /// log, and distill the response. Never panics; a transport failure yields a
 /// [`FetchResult`] with `status: None` and the exchange's `error` set.
 #[allow(clippy::too_many_arguments)]
-async fn fetch(
+pub(crate) async fn fetch(
     client: &reqwest::Client,
     tap: &ProtocolTap,
     exchanges: &mut Vec<HttpExchange>,
@@ -1162,14 +1188,21 @@ async fn fetch(
     method: reqwest::Method,
     url: &str,
     extra_headers: &[(String, String)],
-    body: Option<Value>,
+    body: Option<RequestBody>,
     timeout: Option<Duration>,
 ) -> FetchResult {
     // Assemble the request headers we will send (for the record + the wire).
     let mut sent_headers: Vec<(String, String)> = Vec::new();
     sent_headers.push(("Accept".to_string(), "application/json".to_string()));
-    if body.is_some() {
-        sent_headers.push(("Content-Type".to_string(), "application/json".to_string()));
+    match &body {
+        Some(RequestBody::Json(_)) => {
+            sent_headers.push(("Content-Type".to_string(), "application/json".to_string()));
+        }
+        Some(RequestBody::Form(_)) => sent_headers.push((
+            "Content-Type".to_string(),
+            "application/x-www-form-urlencoded".to_string(),
+        )),
+        None => {}
     }
     for (k, v) in extra_headers {
         sent_headers.push((k.clone(), v.clone()));
@@ -1178,6 +1211,16 @@ async fn fetch(
         .iter()
         .map(|(k, v)| (k.clone(), redact_header(k, v)))
         .collect();
+
+    // The request body as it will appear in the record: never the real thing.
+    // A token request carries the authorization code, the PKCE verifier, and
+    // possibly a client secret; a registration request is harmless but goes
+    // through the same door, so there is exactly one redaction path.
+    let recorded_body = match &body {
+        Some(RequestBody::Json(v)) => redact_json(v.clone()),
+        Some(RequestBody::Form(pairs)) => redact_form(pairs),
+        None => Value::Null,
+    };
 
     // Record the outbound request to the tap (redacted).
     tap.record(
@@ -1188,6 +1231,7 @@ async fn fetch(
                 "method": method.as_str(),
                 "url": url,
                 "headers": headers_to_json(&redacted_request),
+                "body": recorded_body,
             }
         }),
     );
@@ -1196,8 +1240,10 @@ async fn fetch(
     for (k, v) in &sent_headers {
         req = req.header(k.as_str(), v.as_str());
     }
-    if let Some(b) = &body {
-        req = req.json(b);
+    match &body {
+        Some(RequestBody::Json(b)) => req = req.json(b),
+        Some(RequestBody::Form(pairs)) => req = req.form(pairs),
+        None => {}
     }
     if let Some(t) = timeout {
         req = req.timeout(t);
@@ -1228,6 +1274,8 @@ async fn fetch(
                 status: None,
                 www_authenticate: None,
                 json: None,
+                raw_json: None,
+                error: Some(msg),
             };
         }
     };
@@ -1253,14 +1301,21 @@ async fn fetch(
     }
 
     let raw_body = resp.text().await.unwrap_or_default();
-    let body_text = if raw_body.is_empty() {
-        None
-    } else {
-        Some(truncate(&raw_body, BODY_CAPTURE_LEN))
+    let raw_json = serde_json::from_str::<Value>(&raw_body).ok();
+    let json = raw_json.clone().map(redact_json);
+
+    // What goes into the record. A token-endpoint response is JSON carrying an
+    // access token, so the *redacted* re-serialization is the only form allowed
+    // out of this function into a record; the raw text is captured only when the
+    // body is not JSON at all (an HTML error page, a plain-text 404).
+    let body_text = match (&json, raw_body.is_empty()) {
+        (Some(v), _) => Some(truncate(
+            &serde_json::to_string(v).unwrap_or_default(),
+            BODY_CAPTURE_LEN,
+        )),
+        (None, false) => Some(truncate(&raw_body, BODY_CAPTURE_LEN)),
+        (None, true) => None,
     };
-    let json = serde_json::from_str::<Value>(&raw_body)
-        .ok()
-        .map(redact_json);
 
     exchange.status = Some(status);
     exchange.response_headers = response_headers;
@@ -1284,12 +1339,39 @@ async fn fetch(
         status: Some(status),
         www_authenticate,
         json,
+        raw_json,
+        error: None,
     }
+}
+
+/// Redact the secret-bearing members of a form body for the record. OAuth's
+/// form-encoded requests carry the authorization code, the PKCE verifier, and
+/// the client secret — each of which is enough to mint or replay a token.
+pub(crate) fn redact_form(pairs: &[(String, String)]) -> Value {
+    const SECRET_FIELDS: &[&str] = &[
+        "code",
+        "code_verifier",
+        "client_secret",
+        "refresh_token",
+        "assertion",
+        "client_assertion",
+        "password",
+    ];
+    let mut map = serde_json::Map::new();
+    for (k, v) in pairs {
+        let value = if SECRET_FIELDS.contains(&k.to_ascii_lowercase().as_str()) {
+            "<redacted>".to_string()
+        } else {
+            v.clone()
+        };
+        map.insert(k.clone(), Value::String(value));
+    }
+    Value::Object(map)
 }
 
 /// Redact obvious secrets from a parsed JSON body (defence in depth — metadata
 /// documents are public, but a mis-scripted server might echo a token).
-fn redact_json(mut v: Value) -> Value {
+pub(crate) fn redact_json(mut v: Value) -> Value {
     const SECRET_KEYS: &[&str] = &[
         "access_token",
         "refresh_token",
