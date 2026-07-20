@@ -4,12 +4,305 @@ Jig's report card is versioned. Every score Jig emits — human report, `--json`
 `--badge`, the HTML report card — carries the `rubricVersion` that produced it.
 
 > **Scores from different rubric versions are not comparable.** A `rubric-v1`
-> 73, a `rubric-v1.1` 73 and a `rubric-v1.2` 73 were produced by different
-> arithmetic and mean different things. This is a standing property of the
+> 73, a `rubric-v1.1` 73, a `rubric-v1.2` 73 and a `rubric-v1.3` 73 were
+> produced by different arithmetic and mean different things. This is a standing property of the
 > rubric, not a caveat attached to any one release. When comparing servers, or comparing one server over time,
 > check that the rubric versions match before reading anything into the delta.
 > Re-run the older subject under the current rubric instead of adjusting the old
 > number by hand.
+
+---
+
+## `rubric-v1.3`
+
+Where `rubric-v1.1` and `rubric-v1.2` were arithmetic releases — same
+observations, better maths — this one is mostly the opposite. Three of its four
+changes make Jig **measure things it previously could not**, closing SOPs 12, 25
+and 26, each of which carried an honest *"not machine-checkable"* line in the
+SOP guide. The fourth is an arithmetic defect found by the director: a server
+that breaks its own protocol framing could still read "A".
+
+Two of the new measurements are **reported and never scored**. That is
+deliberate, and it is the same posture the tool-set advisor has held since it
+shipped: a detector earns its way into the composite by first being watched in
+the wild, not by being switched on the day it is written.
+
+### 1. A server that breaks its own framing could still score "A"
+
+**The defect.** A fixture carrying stdout pollution, an off-spec capability and
+missing tool descriptions scored **A 91**. Weighted averaging is why: protocol
+compliance is a quarter of the composite, so a single 15-point framing break
+moves the total by under four points, and four clean dimensions absorbed it.
+
+But a server that pollutes stdout does not have a small problem in one of five
+areas. It has **broken its own framing**, and the four clean dimensions are
+describing a server no client can talk to. An A on that is not a slightly
+generous score; it is a false statement, and it is the kind of false statement
+that destroys a grading instrument's credibility the first time a user tries the
+server.
+
+**The fix.** Protocol compliance gets the treatment context cost has had since
+`rubric-v1.1`: a heavy enough defect **bounds** the composite rather than merely
+nudging it.
+
+```text
+ceiling(high_points) = clamp(100 - high_points, 55, 100)
+```
+
+`high_points` is the total deduction carried by **HIGH-severity** protocol
+findings. The ramp is continuous, monotone non-increasing, and inert at
+`high_points == 0` — where the overwhelming majority of servers sit.
+
+| High protocol defect | Deduction | Ceiling | Grade |
+|:---------------------|----------:|--------:|:------|
+| one malformed tool name | 8 | 92 | A− |
+| one polluting stdout line | 15 | 85 | B |
+| unknown method accepted | 20 | 80 | B− |
+| two polluting stdout lines | 30 | 70 | C |
+| a `*/list` that never answered | 40 | 60 | D |
+| 45 and above | — | 55 | F |
+
+**Why the ramp reads the deduction, not a count or the sub-score.** Three inputs
+were available and the choice matters.
+
+A **count of HIGH findings** — one → 85, two → 75 — is a step function, which is
+precisely the discontinuity `rubric-v1.2` spent a release removing from the
+context cap. It would also rank a server with one catastrophic defect above one
+with two trivial ones.
+
+The **protocol sub-score** is continuous but wrong, because it also moves on
+MEDIUM defects. An off-spec capability is a real finding and not a framing
+break; letting it drag the ceiling would cap servers that never violated the
+contract this rule exists to enforce. In the fixture above, the off-spec
+capability contributes to the 75 sub-score and contributes **nothing** to the
+ceiling — correctly.
+
+The **total HIGH-severity deduction** is continuous *and* selective: it moves
+only on defects that stop clients working, and it moves smoothly with how many
+there are and how bad each one is.
+
+**The slope is 1.0, and that is a refusal rather than a tuning.** The `PROTOCOL_*`
+penalty table already encodes how bad each protocol defect is, in points. The
+ceiling reuses that judgement one-for-one instead of asserting a fresh slope
+that would need its own justification and its own maintenance. The rule reads in
+one line: *a High protocol finding costs the composite ceiling exactly what it
+cost the protocol dimension.*
+
+The handover proposed ~85 for one finding and ~75 for two. One lands exactly;
+two lands at 70 rather than 75, because two independent breaks of the framing
+contract is a materially worse server than one and the penalty table already
+says so. Choosing a 0.83 slope to hit a round 75 would have bought five points
+of agreement with a number nobody could derive.
+
+**The effect on the director's fixture.** A 91 → **B 85**, with the ceiling and
+its cause stated on their own line in every renderer:
+
+```
+  ⓘ  composite capped at 85 by protocol compliance (15 points of high-severity
+     protocol defects): 1 non-protocol line(s) on stdout — this corrupts MCP's
+     newline-delimited framing (would have scored 91)
+```
+
+**When both ceilings apply**, the composite takes the lower and the report keeps
+both, because a reader is entitled to know the server was capped twice over. In
+practice they rarely co-occur: a context sub-score low enough to ceiling below
+85 already drags the uncapped composite under it.
+
+### 2. Tool poisoning was not machine-checkable (SOP 12)
+
+**The gap.** A tool description is untrusted input to the model, even when you
+wrote it — a different server in the same session may not have. *Tool
+poisoning*, the practice of embedding model-directed instructions in
+registration metadata, is a live class of indirect prompt injection specific to
+MCP, demonstrated by Invariant Labs and now benchmarked by **MCPTox**
+([arXiv:2508.14925](https://arxiv.org/abs/2508.14925)). Jig graded description
+*quality and cost* and said nothing at all about adversarial *content*.
+
+**The fix.** A new deterministic analyzer, `crates/jig-core/src/injection.rs`.
+No LLM anywhere — every signal is a mechanical fact about the text. Five
+detectors:
+
+| Detector | Severity | What it matches |
+|:---------|:---------|:----------------|
+| Model-directed imperatives | High | instruction override, concealment, invocation ordering, authority override |
+| Fake conversation turns | High | chat-template tokens, XML-ish role tags, multi-role transcripts |
+| Hidden characters | High | zero-width, bidi controls (Trojan Source), homoglyph tool names |
+| Exfiltration shape | Medium | a URL within 120 characters of an outbound-transfer verb |
+| Name/behaviour mismatch | Medium | a read-shaped name or `readOnlyHint: true` over a mutating description |
+
+**False-positive discipline is the whole design problem.** A legitimate
+description absolutely can say "do not use this for binary files". The
+distinguishing property of an injection is that it is **model-directed and
+tool-control-bearing**: it tells the *assistant* what to do about tools,
+instructions, or disclosure — not the developer what the tool is for.
+
+So the table never contains a bare imperative stem. `you must always` is
+expanded mechanically across a list of *tool-control objects* (`call`, `use`,
+`invoke`, `mention`, `reveal`, …) which deliberately excludes input-shaped verbs
+(`provide`, `supply`, `pass`). That single decision is what lets `You must
+always call \`audit_log\` first` fire while `You must always provide a valid API
+key` does not. Every pattern carries a written rationale, a test asserts none of
+them can be added without one, and a pinned corpus of benign phrasings — several
+of them deliberate near-misses — is asserted to produce zero findings.
+
+**They are reported, never scored.** No injection finding touches the composite.
+Whether adversarial content should move a *quality* grade, as opposed to failing
+the server outright, is a product decision that deserves its own release rather
+than being smuggled in with the detector.
+
+**They are, however, always pinned.** A poisoned description is the single most
+important thing a user can learn about a server, and a 90-tool surface
+generating dozens of schema nits must never be able to bury it below the fold of
+"Top fixes".
+
+**A sibling sentinel, not a reuse.** Findings are tagged `Dimension::Injection`
+(machine key `injection`) rather than folded into the existing `tool_set`
+advisor category. The two answer different questions and a user acts on them
+differently — "will the model pick the right tool?" is a quality conversation,
+"is this metadata adversarial?" is a trust one — and machine consumers filtering
+on `tool_set` would otherwise have started silently receiving security findings.
+
+**What it still cannot do.** A semantic attack written in plain, well-formed
+English, with no override phrasing, no fake turns, no hidden characters and no
+URL, passes cleanly. This is a lint for the *shape* the published attacks take,
+not a red-teamer, and there is no threshold at which it becomes one.
+
+### 3. Credential-failure UX was not machine-checkable (SOP 26)
+
+**The gap.** Failing to start is not itself a defect: a server that needs an API
+key and does not have one *should* refuse. What varies — and what the user
+actually experiences — is the **shape** of the refusal. The census measured 29
+servers over stdio; **14 died on a missing credential and 2 hung until the
+timeout fired**. Those populations were indistinguishable in a report that only
+recorded "did not start", and they are not remotely the same product.
+
+**The fix.** When a stdio server fails to connect, Jig re-launches it once under
+observation and grades how it failed, parsing the child's retained stderr for an
+environment-variable name.
+
+| Observed failure | Verdict | Severity | Robustness sub-score |
+|:-----------------|:--------|:---------|---------------------:|
+| Exits nonzero **and** names the variable | Pass | Info | — (no sub-score) |
+| Exits nonzero without naming it | *fail fast is right; say which variable* | Medium | 60 |
+| Hangs until timeout | never hang on a missing credential | High | 0 |
+| Exits **zero** on a failed start | a client cannot distinguish this from success | High | 0 |
+
+A hang and a zero-exit both score 0, for different reasons. The hang gives the
+client no signal at all, so the user waits out a timeout and blames the client.
+The zero-exit is worse in kind if not in degree: it is an affirmative lie, and a
+supervisor that reads it as success will not restart.
+
+**The Pass case earns nothing.** Naming a variable in stderr is not proof the
+server documents it, and this rule cannot distinguish a genuine credential
+failure from any other non-zero exit that happens to mention a capitalized
+identifier. So it only ever *penalizes* the three shapes that are unambiguously
+worse for the user, and never rewards the good one with points it cannot
+justify.
+
+**The guard that keeps it honest.** The probe sends a well-formed `initialize`
+and watches stdout. A server that **answers** did not fail to start, whatever
+went wrong afterwards, and is graded `NotObserved` rather than given a verdict
+this rule is not entitled to reach. The probe also holds stdin open for its
+whole window: closing it would send EOF, and a correct server exits 0 on EOF —
+which would then have to be read as "exited zero after a failed start".
+
+`jig check` and `jig info --probe` print the same verdict line from the same
+core function, so the two commands cannot disagree about the same server.
+
+### 4. "Cold start" conflated npm download with server boot (SOP 25)
+
+**The defect.** Jig's own README advertised an **8-second `npx` cold start** for
+`@modelcontextprotocol/server-everything`, and SOP 25 cited it as evidence that
+authors should budget their cold start. That number is two numbers glued
+together: npm resolving and downloading a package tree, and the server process
+actually booting and answering `initialize`.
+
+Only the second is a property of the server. The first belongs to the registry,
+the network, and whether the user has run this package before — and it is paid
+**once**, not per session. Grading them as one figure told authors to optimize
+something most of them do not control, and let a genuinely slow boot hide inside
+a big download.
+
+Worse, the 8s figure traces to a caption on a **design-prototype screenshot**,
+not to a recorded measurement. It has been removed from the README rather than
+restated.
+
+**The fix.** For `npx`-shaped commands Jig runs a pre-warm pass first:
+
+```text
+npx --yes --package <pkg> -- node -e ""
+```
+
+This installs the package into the `_npx` cache and then runs a trivial `node`
+program *instead of* the package's own binary, so the cache is populated without
+the server ever starting. That pass is timed as **install**; the real launch is
+then timed from spawn to the `initialize` response and reported as **boot**.
+
+```
+install 12.5s · boot 8.8s
+```
+
+**Only boot is scored.** Install is reported and never graded. Non-`npx`
+commands report install as `n/a`; `--no-prewarm` skips the pass for offline,
+air-gapped, or known-warm runs and reports install as `skipped` — a state
+deliberately distinct from `n/a`, so "we did not look" is never rendered as
+"there was nothing to look at".
+
+**The measured split.**
+
+Measured on Windows 11 / Node 22.16 / warm network, against
+`@modelcontextprotocol/server-everything`, using `jig check` itself:
+
+| Run | install | boot |
+|:----|--------:|-----:|
+| cold cache (`_npx` deleted) | **12.5s** | 8.8s |
+| warm cache | 2.0s | 3.1s |
+| warm cache, repeat | 2.0s | 2.8s |
+
+The headline: the old single figure was **dominated by install**, and neither
+half of it was stable. On a cold cache the download alone is 12.5s — larger than
+the whole 8s Jig used to quote — while the part the author actually controls is
+a fraction of it.
+
+Two further facts the split exposes, both of which the conflated number hid:
+
+**Boot is not constant across runs of the same server.** 8.8s cold versus
+~2.9s warm, for a package that is by then fully downloaded in both cases. The
+residual is npm's own resolution work on first use of a cache entry, charged to
+a number that is supposed to describe the server. This is why `--no-prewarm`
+reports `install skipped` rather than `n/a`: a warm-cache run and a
+never-looked run produce very different boot figures and must not be conflated
+in turn.
+
+**Most of even the warm boot is not the server.** Timing the cached entrypoint
+directly — `node <cache>/dist/index.js`, bypassing the `npx` shim — the same
+server answers `initialize` in **0.30s** (0.303 / 0.300 / 0.289 over three
+runs). So of the ~2.9s Jig reports as boot, roughly 2.6s is npm shim overhead
+and 0.3s is `server-everything` actually starting.
+
+Jig does **not** subtract that 2.6s, and the honest reason is that it cannot do
+so defensibly from one session: the correction is not a constant, and measuring
+it would require timing a null server through the same path on every run.
+Reported boot is therefore an **upper bound** on server boot — the safe
+direction for a grade, and now a documented one rather than an unexamined one.
+
+**Honesty about what boot still contains.** Even after the split, boot for an
+`npx` command includes npm's own shim resolution and process launch — Jig times
+the launch, not the server's first instruction. Subtracting it would require
+timing a null server through the same path and asserting the difference is
+constant, which it is not. The number therefore slightly **over-estimates**
+server boot, which is the safe direction for a grade.
+
+### What did *not* change
+
+- **Dimension weights.** Still 25 / 25 / 20 / 15 / 15.
+- **Grade bands and badge colors.** Still `A >= 90 · B 80–89 · C 70–79 · D 60–69 · F < 60`.
+- **The context-cost cap.** The `rubric-v1.2` ramp and its census anchors are untouched.
+- **Rate-based scoring.** Shrinkage, class weights and the floor of 15 are untouched.
+- **Measurement.** Context cost is still gpt-4o exact tokens over the canonical rendering.
+- **Findings.** Every pre-existing defect still produces the same finding with the same fix text.
+- **Not-applicable handling.** A dimension with no observations is still excluded from the composite, never assumed to be 100.
+- **No LLM.** Every detector added here is deterministic, and the only heuristic dimension is still description quality.
 
 ---
 

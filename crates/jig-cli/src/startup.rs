@@ -44,7 +44,11 @@ const STDERR_LINE_MAX: usize = 1024;
 pub(crate) async fn prewarm(program: &str, args: &[String]) -> Option<Duration> {
     let package = boot::npx_package(program, args)?;
     let t0 = Instant::now();
-    let status = Command::new(program)
+    // Resolve through the transport's own helper: on Windows `npx` is an
+    // `npx.cmd` shim that `CreateProcess` will not find by bare name, and a
+    // pre-warm that silently fails to spawn would report `install n/a` while
+    // quietly folding the entire download back into `boot`.
+    let status = Command::new(jig_core::transport::resolve_program(program))
         .args(boot::prewarm_args(&package))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -73,7 +77,7 @@ pub(crate) async fn probe_credential_failure(
     args: &[String],
     env: &[(String, String)],
 ) -> Option<StartupObservation> {
-    let mut command = Command::new(program);
+    let mut command = Command::new(jig_core::transport::resolve_program(program));
     command
         .args(args)
         .stdin(Stdio::piped())

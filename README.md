@@ -33,7 +33,7 @@ real model in the loop.
 ![Jig workbench — request/response spans from a live MCP session](docs/media/workbench-wire.png)
 
 <p align="center"><em>A real session against <code>@modelcontextprotocol/server-everything</code>, rendered from jig's protocol tap:
-the 8-second npx cold start folded out of the way, an unsolicited mid-request notification caught on the wire,
+the npx cold start folded out of the way, an unsolicited mid-request notification caught on the wire,
 payload inspector open. This is an interactive design prototype — the workbench app is not built yet; the CLI ships today.</em></p>
 
 ## Why a grade?
@@ -130,17 +130,28 @@ Every run also writes this — the self-contained HTML report card, by default:
 
 ![The HTML report card jig writes by default — score hero, dimension bars, token chart](docs/media/report-page.png)
 
-One session, one grade over five weighted dimensions (`rubric-v1.1`):
+One session, one grade over five weighted dimensions (`rubric-v1.3`):
 
 | Dimension | Weight | What it scores | How it's scored |
 |:----------|-------:|:---------------|:----------------|
-| Protocol compliance | 25 | handshake, stdout framing/pollution, spec-valid capabilities, timeouts | absolute penalties from 100 |
+| Protocol compliance | 25 | handshake, stdout framing/pollution, spec-valid capabilities, timeouts | absolute penalties from 100; **caps the composite** when a HIGH-severity defect fires |
 | Context cost | 25 | gpt-4o exact total tokens (percentile vs the ecosystem, or absolute bands) | interpolated bands; **caps the composite** when catastrophic |
 | Schema hygiene | 20 | per tool: descriptions, param types & descriptions, annotations | **rate-based**, floor 15 |
 | Description quality | 15 | *heuristic* — description length, name consistency, titles (no LLM) | **rate-based**, floor 15 |
-| Robustness | 15 | *observed only* — list latency, clean shutdown | mean of observed sub-scores |
+| Robustness | 15 | *observed only* — list latency, server boot, clean shutdown, credential-failure UX | mean of observed sub-scores |
 
 Grades: **A** ≥ 90 · **B** 80–89 · **C** 70–79 · **D** 60–69 · **F** < 60.
+
+Two sections are **reported and never scored**, because neither is a defect the
+composite can price honestly:
+
+- the **tool-set advisor** — naming collisions, cost dominance, the accuracy cliff;
+- the **tool-poisoning lint** (`rubric-v1.3`) — a deterministic, no-LLM scan of tool
+  names, descriptions, and parameter descriptions for the *shape* of the published
+  injection attacks.
+
+Both stay out of the score and are **pinned into Top fixes**, so an unscored finding
+can never be buried under the scored ones.
 
 **Rate-based dimensions.** Schema hygiene and description quality grade
 *per-item* defects, so they score the **rate** of defects rather than the raw
@@ -174,22 +185,24 @@ composite capped at 55 by context cost: 42,288 tokens is 25× the census median
 
 > Scores from different rubric versions are **not comparable**. See
 > [`docs/rubric-changelog.md`](docs/rubric-changelog.md) for what changed in
-> `rubric-v1.1` and why.
+> `rubric-v1.3` and why.
 
 Every deduction is a typed finding carrying the fix, and the three highest-impact
 fixes are surfaced up top:
 
 ```
 jig check · jig-mock-server v0.1.0
-protocol 2025-06-18 · rubric-v1.1
+protocol 2025-06-18 · rubric-v1.3
 
-  ✓  98 / 100   grade A
+  ✓  99 / 100   grade A
+
+  install n/a · boot 0.8s
 
   ✓  Protocol compliance  100   clean handshake, no stdout pollution, spec-valid capabilities
   ✓  Context cost          99   183 tokens (no ecosystem data — absolute bands)
-  ✓  Schema hygiene        94   `make_reservation`: parameter `party` missing a description (+1 more)
-  ✓  Description quality   97   heuristic · 3 tool(s) have no human-facing title
-  ✓  Robustness           100   list 3ms, clean shutdown
+  ✓  Schema hygiene        96   `make_reservation`: parameter `party` missing a description (+1 more)
+  ✓  Description quality   99   heuristic · 3 tool(s) have no human-facing title
+  ✓  Robustness           100   list 2ms, boot 751ms, clean shutdown
 
 Top fixes
   1. [schema_hygiene] `make_reservation`: parameter `party` missing a description
@@ -317,7 +330,7 @@ Authorization Server Metadata
 stdio target gets a clear error). Every HTTP exchange is captured to the tap
 (`--tap`) and to `--json`, with any token redacted. `jig check --http` also
 surfaces a compact, informational auth line — the auth dimension is **not** scored
-into `rubric-v1.1` in this milestone.
+into `rubric-v1.3` in this milestone.
 
 #### `jig auth --login` — the real authorization-code flow
 
