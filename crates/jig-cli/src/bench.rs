@@ -16,12 +16,74 @@ use serde_json::{json, Value};
 
 use crate::{client_options, emit, warn_non_protocol_output, write_tap_if_requested, Target};
 
+/// Where a bench/eval run sends its requests, and whether it authenticates.
+///
+/// This is the whole of "Model access, option 2": point `--base-url` at any
+/// endpoint that speaks the OpenAI dialect — Ollama, LM Studio, llama.cpp,
+/// vLLM, or a company gateway — and add `--no-auth` when it needs no
+/// credential. Nothing about a bench changes except where it posts and what
+/// header it does (or does not) send.
+#[derive(Debug, Clone, Default)]
+pub struct Endpoint {
+    /// The `--base-url` override, if given.
+    pub base_url: Option<String>,
+    /// The `--no-auth` opt-out of the key requirement.
+    pub no_auth: bool,
+}
+
+impl Endpoint {
+    /// The effective base URL: the flag, else the long-standing
+    /// `JIG_BENCH_BASE_URL` environment override (which the integration tests
+    /// use), else `None` for the vendor default.
+    pub(crate) fn effective_base_url(&self) -> Option<String> {
+        self.base_url
+            .clone()
+            .or_else(|| std::env::var("JIG_BENCH_BASE_URL").ok())
+    }
+
+    /// Resolve the credential for `provider` under this endpoint policy.
+    ///
+    /// `--no-auth` yields the empty string — the documented keyless mode, in
+    /// which no credential header is sent at all. It is rejected without a
+    /// `--base-url`, because sending no key to a vendor API is not a mode, it
+    /// is a mistake: clap enforces that too, and this is the defence in depth.
+    pub(crate) fn resolve_key(&self, provider: Provider) -> Result<String, String> {
+        if self.no_auth {
+            if self.base_url.is_none() {
+                return Err(
+                    "--no-auth requires --base-url: it disables the key requirement for an \
+                     endpoint you host, not for a vendor API."
+                        .to_string(),
+                );
+            }
+            return Ok(String::new());
+        }
+        require_key(provider)
+    }
+
+    /// The default model id for this endpoint.
+    ///
+    /// A `--base-url` endpoint is assumed to speak the **OpenAI** dialect —
+    /// that is what Ollama, LM Studio, llama.cpp and vLLM all emulate — so the
+    /// default resolves to an OpenAI-dialect model regardless of which vendor
+    /// key happens to be in the environment. The concrete model string is
+    /// whatever `--api-model` names.
+    pub(crate) fn default_model(&self) -> &'static str {
+        if self.base_url.is_some() {
+            "gpt-4o"
+        } else {
+            default_model()
+        }
+    }
+}
+
 /// Run `jig bench`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     target: &Target,
     models: Vec<String>,
     api_model: Option<String>,
+    endpoint: Endpoint,
     task: String,
     runs: usize,
     temperature: f64,
@@ -31,9 +93,10 @@ pub async fn run(
     timeout_secs: u64,
     max_message_bytes: u64,
 ) -> Result<ExitCode, String> {
-    // Default model: claude-sonnet if an Anthropic key is present, else gpt-4o.
+    // Default model: claude-sonnet if an Anthropic key is present, else gpt-4o;
+    // always an OpenAI-dialect model behind a --base-url.
     let models: Vec<String> = if models.is_empty() {
-        vec![default_model().to_string()]
+        vec![endpoint.default_model().to_string()]
     } else {
         models
     };
@@ -53,7 +116,7 @@ pub async fn run(
                     .to_string(),
             );
         }
-        let key = require_key(m.provider)?;
+        let key = endpoint.resolve_key(m.provider)?;
         resolved.push((m, key));
     }
 
@@ -62,6 +125,7 @@ pub async fn run(
         target,
         tap.clone(),
         resolved,
+        &endpoint,
         &task,
         runs,
         temperature,
@@ -82,6 +146,7 @@ async fn run_inner(
     target: &Target,
     tap: ProtocolTap,
     resolved: Vec<(BenchModel, String)>,
+    endpoint: &Endpoint,
     task: &str,
     runs: usize,
     temperature: f64,
@@ -109,7 +174,7 @@ async fn run_inner(
             temperature,
             max_tokens: bench::DEFAULT_MAX_TOKENS,
             timeout: opts.request_timeout,
-            base_url: std::env::var("JIG_BENCH_BASE_URL").ok(),
+            base_url: endpoint.effective_base_url(),
             api_key: key,
         };
         let report = bench::run_bench(&tools, &config)
@@ -402,6 +467,14 @@ fn render_model_section(report: &BenchReport) -> String {
         "Params: temp={} · runs={} · max_tokens={}\n",
         report.temperature, report.runs, report.max_tokens
     ));
+    // Where the requests actually went, and whether a vendor credential was
+    // used. Stated on every run — a report that does not say where it sent its
+    // traffic is not a measurement, it is a rumour.
+    s.push_str(&format!(
+        "Sent to: {} · {}\n",
+        report.endpoint,
+        auth_label(report.keyless)
+    ));
 
     // Distribution block.
     let dist = report.distribution();
@@ -451,6 +524,15 @@ fn render_model_section(report: &BenchReport) -> String {
     // One-line takeaway.
     s.push_str(&format!("\nTakeaway: {}\n", dist.takeaway()));
     s
+}
+
+/// The credential label for a run: exactly what was (or was not) sent.
+pub(crate) fn auth_label(keyless: bool) -> &'static str {
+    if keyless {
+        "no vendor key used (--no-auth)"
+    } else {
+        "authenticated with a provider API key"
+    }
 }
 
 /// Build the per-run table (run #, outcome, tool, args, latency, tokens).
@@ -592,6 +674,8 @@ fn model_json(report: &BenchReport) -> Value {
         "model": report.model_id,
         "provider": report.provider.label(),
         "apiModel": report.api_model,
+        "endpoint": report.endpoint,
+        "keyless": report.keyless,
         "temperature": report.temperature,
         "maxTokens": report.max_tokens,
         "runs": report.runs,
@@ -782,7 +866,75 @@ mod tests {
             rendered_request: rendered,
             results,
             server_tool_names: vec!["echo".into(), "make_reservation".into()],
+            endpoint: jig_core::bench::provider_endpoint(Provider::OpenAI, None),
+            keyless: false,
         }
+    }
+
+    /// The same fixture pointed at a local, keyless OpenAI-compatible endpoint.
+    fn keyless_report() -> BenchReport {
+        BenchReport {
+            endpoint: jig_core::bench::provider_endpoint(
+                Provider::OpenAI,
+                Some("http://localhost:11434/v1"),
+            ),
+            keyless: true,
+            ..fixture_report()
+        }
+    }
+
+    #[test]
+    fn keyless_run_says_so_in_both_renderings() {
+        let human = render_human(&server(), &[keyless_report()]);
+        assert!(
+            human.contains("http://localhost:11434/v1/chat/completions"),
+            "the endpoint must be stated verbatim:\n{human}"
+        );
+        assert!(human.contains("no vendor key used"), "{human}");
+
+        let doc: Value =
+            serde_json::from_str(&render_json(&server(), &[keyless_report()])).unwrap();
+        assert_eq!(
+            doc["models"][0]["endpoint"],
+            "http://localhost:11434/v1/chat/completions"
+        );
+        assert_eq!(doc["models"][0]["keyless"], true);
+    }
+
+    #[test]
+    fn a_keyed_run_is_never_reported_as_keyless() {
+        let human = render_human(&server(), &[fixture_report()]);
+        assert!(
+            human.contains("authenticated with a provider API key"),
+            "{human}"
+        );
+        assert!(!human.contains("no vendor key used"), "{human}");
+    }
+
+    #[test]
+    fn no_auth_without_a_base_url_is_refused() {
+        let e = Endpoint {
+            base_url: None,
+            no_auth: true,
+        };
+        let err = e.resolve_key(Provider::OpenAI).unwrap_err();
+        assert!(err.contains("--no-auth requires --base-url"), "{err}");
+    }
+
+    #[test]
+    fn a_base_url_defaults_to_the_openai_dialect() {
+        let e = Endpoint {
+            base_url: Some("http://localhost:1234/v1".into()),
+            no_auth: true,
+        };
+        // Even if an Anthropic key is in the environment: these endpoints
+        // emulate OpenAI, so that is the dialect we speak to them.
+        assert_eq!(e.default_model(), "gpt-4o");
+        assert_eq!(e.resolve_key(Provider::OpenAI).unwrap(), "");
+        assert_eq!(
+            e.effective_base_url().as_deref(),
+            Some("http://localhost:1234/v1")
+        );
     }
 
     #[test]

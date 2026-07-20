@@ -23,6 +23,8 @@ expression: "render_json(&server(), &[fixture_report()])"
         ],
         "total": 4
       },
+      "endpoint": "https://api.openai.com/v1/chat/completions",
+      "keyless": false,
       "maxTokens": 1024,
       "model": "gpt-4o",
       "provider": "openai",

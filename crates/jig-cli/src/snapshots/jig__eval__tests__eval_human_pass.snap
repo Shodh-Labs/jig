@@ -19,6 +19,8 @@ Totals:
 Pinned context (reproduce this run):
   model:             gpt-4o (openai)
   api model:         gpt-4o
+  endpoint:          https://api.openai.com/v1/chat/completions
+  auth:              authenticated with a provider API key
   reported version:  gpt-mock-1
   temperature:       1
   runs:              3 (per case)

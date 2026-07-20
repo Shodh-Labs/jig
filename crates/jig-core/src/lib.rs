@@ -52,8 +52,10 @@ pub use auth::{
     WwwAuthenticate, MCP_AUTH_SPEC_REVISION,
 };
 pub use bench::{
-    ArgCheck, BenchConfig, BenchError, BenchModel, BenchReport, Distribution, Outcome, Provider,
-    RunResult, Usage, BENCH_SYSTEM_PROMPT,
+    classify_sampling_text, distribution_of, finalize_args_check, host_models_of,
+    provider_endpoint, render_sampling_params, ArgCheck, BenchConfig, BenchError, BenchModel,
+    BenchReport, Distribution, Outcome, Provider, RunResult, SamplingBenchReport, Usage,
+    BENCH_SYSTEM_PROMPT, SAMPLING_MODEL_UNKNOWN, SAMPLING_RESPONSE_PROTOCOL,
 };
 pub use check::{
     badge_color, bundled_percentiles, capability_offspec_note, evaluate, CheckInput, ContextCap,

@@ -7,6 +7,7 @@ Task:   Book a table for two tonight
 
 Model:  gpt-4o (openai, api=gpt-4o) — reported version: gpt-4o-2024-08-06
 Params: temp=1 · runs=4 · max_tokens=1024
+Sent to: https://api.openai.com/v1/chat/completions · authenticated with a provider API key
 
 Distribution:
   make_reservation  2/4 (50%)

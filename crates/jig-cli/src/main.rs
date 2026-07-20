@@ -415,6 +415,17 @@ enum Command {
         /// mappings age). Applies only with a single --model.
         #[arg(long, value_name = "STRING")]
         api_model: Option<String>,
+        /// Send to an OpenAI-compatible endpoint instead of the vendor API —
+        /// Ollama (http://localhost:11434/v1), LM Studio
+        /// (http://localhost:1234/v1), llama.cpp, vLLM, or a company gateway.
+        /// Pair with --api-model to name the model the endpoint serves.
+        #[arg(long, value_name = "URL")]
+        base_url: Option<String>,
+        /// Send no credential at all, for a --base-url endpoint that needs
+        /// none (the usual case for a local model runtime). Without this, a
+        /// provider API key is still required.
+        #[arg(long, requires = "base_url")]
+        no_auth: bool,
         /// Number of times to send the request (default 3).
         #[arg(long, value_name = "N", default_value_t = 3)]
         runs: usize,
@@ -465,6 +476,17 @@ enum Command {
         /// Override the concrete API model string sent on the wire.
         #[arg(long, value_name = "STRING")]
         api_model: Option<String>,
+        /// Send to an OpenAI-compatible endpoint instead of the vendor API —
+        /// Ollama (http://localhost:11434/v1), LM Studio
+        /// (http://localhost:1234/v1), llama.cpp, vLLM, or a company gateway.
+        /// Pair with --api-model to name the model the endpoint serves.
+        #[arg(long, value_name = "URL")]
+        base_url: Option<String>,
+        /// Send no credential at all, for a --base-url endpoint that needs
+        /// none (the usual case for a local model runtime). Without this, a
+        /// provider API key is still required.
+        #[arg(long, requires = "base_url")]
+        no_auth: bool,
         /// Force N runs for every case, overriding case/suite defaults.
         #[arg(long, value_name = "N")]
         runs_override: Option<usize>,
@@ -877,6 +899,8 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             task,
             models,
             api_model,
+            base_url,
+            no_auth,
             runs,
             temp,
             json,
@@ -890,6 +914,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 &target,
                 models,
                 api_model,
+                bench::Endpoint { base_url, no_auth },
                 task,
                 runs,
                 temp,
@@ -908,6 +933,8 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             suites,
             model,
             api_model,
+            base_url,
+            no_auth,
             runs_override,
             temp,
             gate,
@@ -923,6 +950,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 suites,
                 model,
                 api_model,
+                bench::Endpoint { base_url, no_auth },
                 runs_override,
                 temp,
                 gate,

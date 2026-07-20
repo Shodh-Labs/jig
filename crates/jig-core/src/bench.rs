@@ -42,6 +42,14 @@
 //! `OPENAI_API_KEY`) and passed in [`BenchConfig::api_key`]. They are never
 //! logged, never placed in [`BenchReport::rendered_request`], and redacted from
 //! any provider text before it is stored (see [`redact`]).
+//!
+//! A key is not always required. [`BenchConfig::base_url`] points the bench at
+//! any **OpenAI-compatible** endpoint — Ollama, LM Studio, llama.cpp, vLLM, or a
+//! company gateway — and [`BenchConfig::api_key`] may then be empty, in which
+//! case no `Authorization` header is sent at all. Every report records the exact
+//! endpoint it talked to and whether a vendor key was used
+//! ([`BenchReport::endpoint`] / [`BenchReport::keyless`]), so a keyless run is
+//! never mistaken for a vendor-API run.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -195,11 +203,24 @@ pub struct BenchConfig {
     pub max_tokens: u32,
     /// Per-request timeout. `None` waits indefinitely.
     pub timeout: Option<Duration>,
-    /// Override the provider base URL (e.g. a mock provider in tests). `None`
-    /// uses [`Provider::default_base_url`].
+    /// Override the provider base URL — an OpenAI-compatible endpoint (Ollama,
+    /// LM Studio, llama.cpp, vLLM, a company gateway) or a mock provider in
+    /// tests. `None` uses [`Provider::default_base_url`].
     pub base_url: Option<String>,
     /// The API key — read from env by the caller. Never logged or serialized.
+    ///
+    /// **Empty means keyless**: no `x-api-key` / `Authorization` header is sent.
+    /// That is only sensible against a [`BenchConfig::base_url`] that needs no
+    /// credential; the caller is responsible for that pairing.
     pub api_key: String,
+}
+
+impl BenchConfig {
+    /// Whether this run sends no credential at all (an empty
+    /// [`BenchConfig::api_key`]).
+    pub fn is_keyless(&self) -> bool {
+        self.api_key.is_empty()
+    }
 }
 
 /// How a selected call's arguments fared against the tool's JSON Schema.
@@ -334,47 +355,62 @@ pub struct BenchReport {
     pub results: Vec<RunResult>,
     /// The tool names the server exposed, for reference.
     pub server_tool_names: Vec<String>,
+    /// The exact endpoint URL the runs were sent to. Reported verbatim so a
+    /// `--base-url` run is never confused with a vendor-API run.
+    pub endpoint: String,
+    /// Whether the run sent **no** credential (`--no-auth` against a local or
+    /// self-hosted endpoint). Recorded so output can say so plainly.
+    pub keyless: bool,
 }
 
 impl BenchReport {
     /// Aggregate the per-run outcomes into a distribution.
     pub fn distribution(&self) -> Distribution {
-        let mut selected: Vec<(String, usize)> = Vec::new();
-        let mut hallucinated: Vec<(String, usize)> = Vec::new();
-        let mut no_tool = 0usize;
-        let mut provider_error = 0usize;
+        distribution_of(&self.results)
+    }
+}
 
-        let bump = |v: &mut Vec<(String, usize)>, name: &str| {
-            if let Some(entry) = v.iter_mut().find(|(n, _)| n == name) {
-                entry.1 += 1;
-            } else {
-                v.push((name.to_string(), 1));
-            }
-        };
+/// Aggregate any slice of run results into a [`Distribution`].
+///
+/// Free-standing so every bench-shaped runner — the direct provider API path
+/// ([`run_bench`]) and the MCP-sampling path alike — produces the *same*
+/// distribution from the *same* code, rather than each rolling its own tally.
+pub fn distribution_of(results: &[RunResult]) -> Distribution {
+    let mut selected: Vec<(String, usize)> = Vec::new();
+    let mut hallucinated: Vec<(String, usize)> = Vec::new();
+    let mut no_tool = 0usize;
+    let mut provider_error = 0usize;
 
-        for r in &self.results {
-            match &r.outcome {
-                Outcome::Selected { tool, .. } => bump(&mut selected, tool),
-                Outcome::HallucinatedTool { name, .. } => bump(&mut hallucinated, name),
-                Outcome::NoTool { .. } => no_tool += 1,
-                Outcome::ProviderError { .. } => provider_error += 1,
-            }
+    let bump = |v: &mut Vec<(String, usize)>, name: &str| {
+        if let Some(entry) = v.iter_mut().find(|(n, _)| n == name) {
+            entry.1 += 1;
+        } else {
+            v.push((name.to_string(), 1));
         }
+    };
 
-        // Deterministic order: descending count, ties by name ascending.
-        let sort = |v: &mut Vec<(String, usize)>| {
-            v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        };
-        sort(&mut selected);
-        sort(&mut hallucinated);
-
-        Distribution {
-            selected,
-            hallucinated,
-            no_tool,
-            provider_error,
-            total: self.results.len(),
+    for r in results {
+        match &r.outcome {
+            Outcome::Selected { tool, .. } => bump(&mut selected, tool),
+            Outcome::HallucinatedTool { name, .. } => bump(&mut hallucinated, name),
+            Outcome::NoTool { .. } => no_tool += 1,
+            Outcome::ProviderError { .. } => provider_error += 1,
         }
+    }
+
+    // Deterministic order: descending count, ties by name ascending.
+    let sort = |v: &mut Vec<(String, usize)>| {
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    };
+    sort(&mut selected);
+    sort(&mut hallucinated);
+
+    Distribution {
+        selected,
+        hallucinated,
+        no_tool,
+        provider_error,
+        total: results.len(),
     }
 }
 
@@ -719,6 +755,36 @@ pub fn classify_openai(resp: &Value, server_tools: &HashSet<String>) -> Classifi
     }
 }
 
+/// Fill in the real argument validation on a [`Outcome::Selected`] outcome, now
+/// that the tool schemas are in hand.
+///
+/// The classifiers are pure over a response body and cannot see the server's
+/// schemas, so they leave [`ArgCheck::Valid`] as a placeholder. Every runner
+/// calls this exactly once per classified outcome; sharing it is what keeps the
+/// direct-API path and the MCP-sampling path from drifting apart on what
+/// "valid arguments" means. Outcomes that are not a selection, and selections
+/// whose arguments were already found unparseable, are left untouched.
+pub fn finalize_args_check(tools: &[Tool], outcome: &mut Outcome) {
+    let Outcome::Selected {
+        tool,
+        arguments,
+        args_check,
+    } = outcome
+    else {
+        return;
+    };
+    if *args_check != ArgCheck::Valid {
+        return;
+    }
+    if let Some(schema) = tools
+        .iter()
+        .find(|t| &t.name == tool)
+        .map(|t| &t.input_schema)
+    {
+        *args_check = validate_args(schema, arguments);
+    }
+}
+
 /// Turn a resolved tool name + arguments into a Selected or HallucinatedTool
 /// outcome, validating args when the tool is real.
 fn classify_tool_call(name: String, arguments: Value, server_tools: &HashSet<String>) -> Outcome {
@@ -1004,22 +1070,7 @@ pub async fn run_bench(tools: &[Tool], config: &BenchConfig) -> Result<BenchRepo
                     Provider::OpenAI => classify_openai(&resp_value, &server_tools),
                 };
                 // Fill in real arg validation now that we have the schemas.
-                if let Outcome::Selected {
-                    tool,
-                    arguments,
-                    args_check,
-                } = &mut classified.outcome
-                {
-                    if *args_check == ArgCheck::Valid {
-                        if let Some(schema) = tools
-                            .iter()
-                            .find(|t| &t.name == tool)
-                            .map(|t| &t.input_schema)
-                        {
-                            *args_check = validate_args(schema, arguments);
-                        }
-                    }
-                }
+                finalize_args_check(tools, &mut classified.outcome);
                 RunResult {
                     index,
                     outcome: classified.outcome,
@@ -1057,13 +1108,47 @@ pub async fn run_bench(tools: &[Tool], config: &BenchConfig) -> Result<BenchRepo
         rendered_request,
         results,
         server_tool_names,
+        endpoint,
+        keyless: config.is_keyless(),
     })
 }
 
 /// Build the endpoint URL from the provider and an optional base-URL override.
-fn provider_endpoint(provider: Provider, base_url: Option<&str>) -> String {
-    let base = base_url.unwrap_or_else(|| provider.default_base_url());
-    format!("{}{}", base.trim_end_matches('/'), provider.path())
+///
+/// Public because it is the single source of truth for "where did this bench
+/// actually send its requests?" — the CLI reports it before a run so a user can
+/// confirm the target before any traffic leaves the machine.
+///
+/// The join is **idempotent in the API version segment**. Every
+/// OpenAI-compatible runtime documents its base URL *including* the version —
+/// Ollama's is `http://localhost:11434/v1`, LM Studio's `http://localhost:1234/v1`
+/// — while [`Provider::path`] also begins `/v1`. Naively concatenating produces
+/// `…/v1/v1/chat/completions`, a 404 that looks like a broken server rather
+/// than a fumbled URL. So a base already ending in the path's version segment
+/// absorbs it, and both conventions reach the same endpoint:
+///
+/// ```
+/// # use jig_core::bench::{provider_endpoint, Provider};
+/// let with_v1 = provider_endpoint(Provider::OpenAI, Some("http://localhost:11434/v1"));
+/// let bare = provider_endpoint(Provider::OpenAI, Some("http://localhost:11434"));
+/// assert_eq!(with_v1, "http://localhost:11434/v1/chat/completions");
+/// assert_eq!(with_v1, bare);
+/// ```
+pub fn provider_endpoint(provider: Provider, base_url: Option<&str>) -> String {
+    let base = base_url
+        .unwrap_or_else(|| provider.default_base_url())
+        .trim_end_matches('/');
+    let path = provider.path();
+    // The leading segment of the path (`/v1`), if the base already carries it.
+    let version = path
+        .split('/')
+        .nth(1)
+        .map(|seg| format!("/{seg}"))
+        .unwrap_or_default();
+    if !version.is_empty() && base.ends_with(&version) {
+        return format!("{}{}", base, &path[version.len()..]);
+    }
+    format!("{base}{path}")
 }
 
 /// One send with bounded retry. Returns the parsed JSON body on success, or a
@@ -1077,16 +1162,29 @@ async fn send_with_retry(
 ) -> Result<Value, String> {
     let mut last_detail = String::new();
     for attempt in 1..=MAX_ATTEMPTS {
-        let mut req = client.post(endpoint).json(body);
-        req = match provider {
-            Provider::Anthropic => req
-                .header("x-api-key", &config.api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json"),
-            Provider::OpenAI => req
-                .header("authorization", format!("Bearer {}", config.api_key))
-                .header("content-type", "application/json"),
-        };
+        let mut req = client
+            .post(endpoint)
+            .json(body)
+            .header("content-type", "application/json");
+        // A blank key is the documented "keyless" mode: send no credential
+        // header at all. Local runtimes (Ollama, LM Studio, llama.cpp, vLLM)
+        // want no `Authorization`, and some reject a `Bearer ` with an empty
+        // token outright — so omitting the header is the correct behaviour,
+        // not a courtesy.
+        if !config.api_key.is_empty() {
+            req = match provider {
+                Provider::Anthropic => req
+                    .header("x-api-key", &config.api_key)
+                    .header("anthropic-version", "2023-06-01"),
+                Provider::OpenAI => {
+                    req.header("authorization", format!("Bearer {}", config.api_key))
+                }
+            };
+        } else if provider == Provider::Anthropic {
+            // The version header is not a credential and the Messages API
+            // requires it regardless.
+            req = req.header("anthropic-version", "2023-06-01");
+        }
 
         match req.send().await {
             Ok(resp) => {
@@ -1146,6 +1244,268 @@ fn parse_retry_after(resp: &reqwest::Response) -> Option<Duration> {
 /// Exponential-ish default back-off when no `Retry-After` is supplied.
 fn default_backoff(attempt: u32) -> Duration {
     Duration::from_millis(200 * (1u64 << (attempt.saturating_sub(1).min(4))))
+}
+
+// ---------------------------------------------------------------------------
+// The MCP-sampling dialect (no credentials at all)
+// ---------------------------------------------------------------------------
+
+/// The response protocol appended to [`BENCH_SYSTEM_PROMPT`] when a bench runs
+/// over MCP `sampling/createMessage` instead of a provider's function-calling
+/// API.
+///
+/// # Why this exists
+///
+/// `sampling/createMessage` (MCP `2025-06-18`, *Client Features → Sampling*)
+/// returns a **single content block** — `{role, content: {type, text}, model,
+/// stopReason}`. It has no `tool_use` block and no `tool_calls` array, so the
+/// model's selection cannot ride a structured channel the way it does on the
+/// Anthropic and OpenAI dialects. The selection is therefore requested as a
+/// JSON object in the text, and parsed back out by
+/// [`classify_sampling_text`].
+///
+/// This is a real, documented difference from the direct-API path and is
+/// labelled as such in every sampling-backed report. The *classification* that
+/// follows is not forked: the parsed name and arguments are fed through the
+/// same [`classify_anthropic`] path (hence the same hallucination check) and
+/// the same [`finalize_args_check`] schema validation.
+pub const SAMPLING_RESPONSE_PROTOCOL: &str = "\n\nAvailable tools are listed below as JSON. \
+    Reply with a single JSON object and nothing else. To call a tool, reply \
+    {\"tool\": \"<name>\", \"arguments\": { ... }}. If no tool fits, reply \
+    {\"tool\": null, \"answer\": \"<your plain-text answer>\"}. Do not wrap the object in \
+    prose or code fences.";
+
+/// The model identity recorded when a sampling host reports no `model` string.
+///
+/// Sampling deliberately gives the server **no** control over model selection —
+/// the client picks. Jig never guesses: a run whose host did not name its model
+/// is recorded with this exact string rather than being attributed to whatever
+/// model happened to be configured elsewhere.
+pub const SAMPLING_MODEL_UNKNOWN: &str = "unknown — host-selected";
+
+/// Build the `params` object of a `sampling/createMessage` request for a
+/// bench run over the tools of an MCP server.
+///
+/// The shape follows MCP `2025-06-18` *Client Features → Sampling*: `messages`
+/// (each `{role, content: {type: "text", text}}`), `systemPrompt`, `maxTokens`,
+/// `temperature`, and `modelPreferences`.
+///
+/// `modelPreferences` deliberately carries **no `hints`**. Hints are the
+/// mechanism for nudging a host toward a named model family; using them would
+/// let a report imply a model that was never actually measured. Only the three
+/// abstract priorities are sent, and the host's own choice is reported verbatim.
+pub fn render_sampling_params(
+    tools: &[Tool],
+    task: &str,
+    temperature: f64,
+    max_tokens: u32,
+) -> Value {
+    let tools_json: Vec<Value> = tools
+        .iter()
+        .map(|t| {
+            let mut m = Map::new();
+            m.insert("name".to_string(), json!(t.name));
+            if let Some(d) = &t.description {
+                m.insert("description".to_string(), json!(d));
+            }
+            m.insert("inputSchema".to_string(), input_schema_or_empty(t));
+            Value::Object(m)
+        })
+        .collect();
+
+    let system = format!(
+        "{BENCH_SYSTEM_PROMPT}{SAMPLING_RESPONSE_PROTOCOL}\n\nTools:\n{}",
+        serde_json::to_string(&tools_json).unwrap_or_else(|_| "[]".to_string())
+    );
+
+    json!({
+        "messages": [
+            { "role": "user", "content": { "type": "text", "text": task } }
+        ],
+        "systemPrompt": system,
+        "maxTokens": max_tokens,
+        "temperature": temperature,
+        "modelPreferences": {
+            "costPriority": 0.3,
+            "speedPriority": 0.5,
+            "intelligencePriority": 0.8,
+        },
+    })
+}
+
+/// Classify the assistant text a host returned from `sampling/createMessage`
+/// into the **existing** bench outcome taxonomy.
+///
+/// The text is expected to be the JSON object described by
+/// [`SAMPLING_RESPONSE_PROTOCOL`]. Whatever it actually is, this is total and
+/// never panics:
+///
+/// * a `{"tool": "<name>", "arguments": {...}}` object is rebuilt into the
+///   Anthropic `tool_use` shape and run through [`classify_anthropic`], so an
+///   unknown name lands as [`Outcome::HallucinatedTool`] by exactly the same
+///   rule as on the direct-API path;
+/// * `{"tool": null, ...}` is [`Outcome::NoTool`], carrying the `answer` when
+///   one was supplied;
+/// * text that is not the expected object at all is [`Outcome::NoTool`] with
+///   the text as its excerpt — a model that ignored the protocol did not, in
+///   fact, select a tool.
+///
+/// The returned [`Outcome::Selected`] still carries the placeholder
+/// [`ArgCheck::Valid`]; the caller completes it with [`finalize_args_check`].
+pub fn classify_sampling_text(text: &str, server_tools: &HashSet<String>) -> Outcome {
+    let Some(obj) = extract_json_object(text) else {
+        return Outcome::NoTool {
+            excerpt: excerpt(text),
+        };
+    };
+
+    match obj.get("tool").and_then(Value::as_str) {
+        Some(name) if !name.trim().is_empty() => {
+            let arguments = obj.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            // Route through the Anthropic classifier rather than re-deriving
+            // "is this a real tool?" here — one rule, one place.
+            let synthetic = json!({
+                "content": [ { "type": "tool_use", "name": name, "input": arguments } ]
+            });
+            classify_anthropic(&synthetic, server_tools).outcome
+        }
+        _ => {
+            let answer = obj
+                .get("answer")
+                .and_then(Value::as_str)
+                .unwrap_or(text);
+            Outcome::NoTool {
+                excerpt: excerpt(answer),
+            }
+        }
+    }
+}
+
+/// Pull the first balanced top-level JSON object out of `text`, tolerating the
+/// code fences and surrounding prose real models add despite instructions.
+/// `None` when nothing parses.
+fn extract_json_object(text: &str) -> Option<Map<String, Value>> {
+    // The common case: the whole (trimmed, de-fenced) text is the object.
+    let trimmed = strip_code_fence(text.trim());
+    if let Ok(Value::Object(m)) = serde_json::from_str::<Value>(trimmed) {
+        return Some(m);
+    }
+    // Otherwise scan for a balanced `{...}` span, respecting string literals so
+    // a brace inside a quoted value does not throw the depth off.
+    let bytes = trimmed.as_bytes();
+    let start = bytes.iter().position(|b| *b == b'{')?;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, b) in bytes.iter().enumerate().skip(start) {
+        if in_string {
+            match (escaped, b) {
+                (true, _) => escaped = false,
+                (false, b'\\') => escaped = true,
+                (false, b'"') => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return match serde_json::from_str::<Value>(&trimmed[start..=i]) {
+                        Ok(Value::Object(m)) => Some(m),
+                        _ => None,
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Strip a leading ```` ```json ```` / ```` ``` ```` fence and its closing
+/// fence, if present.
+fn strip_code_fence(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("```") else {
+        return text;
+    };
+    // Drop the optional language tag on the opening fence line.
+    let rest = match rest.find('\n') {
+        Some(nl) => &rest[nl + 1..],
+        None => rest,
+    };
+    rest.trim_end()
+        .strip_suffix("```")
+        .unwrap_or(rest)
+        .trim_end()
+}
+
+/// A bench report produced over MCP sampling rather than a provider API.
+///
+/// Deliberately *not* a [`BenchReport`]: that type's `model_id`/`provider`/
+/// `api_model` fields assert facts a sampling run cannot know. The host chose
+/// the model; all Jig can honestly record is what the host said it used, in
+/// [`SamplingBenchReport::host_models`].
+#[derive(Debug, Clone)]
+pub struct SamplingBenchReport {
+    /// The natural-language task that was benched.
+    pub task: String,
+    /// Number of `sampling/createMessage` requests issued.
+    pub runs: usize,
+    /// The requested sampling temperature. Advisory only — a host is free to
+    /// ignore it, which is itself a reason this report never claims otherwise.
+    pub temperature: f64,
+    /// The requested `maxTokens`.
+    pub max_tokens: u32,
+    /// The minimal bench system prompt constant this run built on.
+    pub system_prompt: &'static str,
+    /// The exact `sampling/createMessage` params sent every run.
+    pub rendered_request: Value,
+    /// Per-run results, in order.
+    pub results: Vec<RunResult>,
+    /// The tool names the target server exposed.
+    pub server_tool_names: Vec<String>,
+    /// Every distinct model identity the host reported, in first-seen order.
+    /// Contains [`SAMPLING_MODEL_UNKNOWN`] for runs the host did not name.
+    pub host_models: Vec<String>,
+}
+
+impl SamplingBenchReport {
+    /// Aggregate the per-run outcomes into a distribution — the *same*
+    /// [`distribution_of`] the direct-API path uses, so the two are comparable.
+    pub fn distribution(&self) -> Distribution {
+        distribution_of(&self.results)
+    }
+
+    /// A one-line, non-overclaiming description of whose model was measured.
+    pub fn model_label(&self) -> String {
+        match self.host_models.len() {
+            0 => SAMPLING_MODEL_UNKNOWN.to_string(),
+            1 => self.host_models[0].clone(),
+            _ => format!(
+                "{} (host varied the model across runs)",
+                self.host_models.join(", ")
+            ),
+        }
+    }
+}
+
+/// Collect the distinct model identities across run results, in first-seen
+/// order, substituting [`SAMPLING_MODEL_UNKNOWN`] where the host named none.
+pub fn host_models_of(results: &[RunResult]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in results {
+        let id = r
+            .model_version
+            .clone()
+            .unwrap_or_else(|| SAMPLING_MODEL_UNKNOWN.to_string());
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1386,6 +1746,8 @@ mod tests {
             rendered_request: Value::Null,
             results,
             server_tool_names: vec![],
+            endpoint: provider_endpoint(Provider::Anthropic, None),
+            keyless: false,
         }
     }
 
@@ -1436,6 +1798,152 @@ mod tests {
         assert_eq!(r["nested"][0], "***");
     }
 
+    // ---- MCP sampling dialect ------------------------------------------------
+
+    #[test]
+    fn sampling_params_match_the_2025_06_18_shape() {
+        let tools = vec![tool(
+            "search_docs",
+            json!({ "type": "object", "properties": { "q": { "type": "string" } } }),
+        )];
+        let p = render_sampling_params(&tools, "find rate limits", 0.4, 512);
+        // Spec shape: messages[].content is an object with a `type`.
+        assert_eq!(p["messages"][0]["role"], "user");
+        assert_eq!(p["messages"][0]["content"]["type"], "text");
+        assert_eq!(p["messages"][0]["content"]["text"], "find rate limits");
+        assert_eq!(p["maxTokens"], 512);
+        assert_eq!(p["temperature"], 0.4);
+        assert_eq!(p["modelPreferences"]["intelligencePriority"], 0.8);
+        // Never steer the host toward a named model — that would let a report
+        // imply a model that was not actually measured.
+        assert!(
+            p["modelPreferences"].get("hints").is_none(),
+            "modelPreferences must carry no hints"
+        );
+        // The tool surface and the response protocol ride in the system prompt.
+        let system = p["systemPrompt"].as_str().unwrap();
+        assert!(system.starts_with(BENCH_SYSTEM_PROMPT));
+        assert!(system.contains("search_docs"));
+    }
+
+    #[test]
+    fn sampling_selection_reuses_the_shared_taxonomy() {
+        let known = server_tools(&["search_docs"]);
+        let out = classify_sampling_text(
+            r#"{"tool": "search_docs", "arguments": {"q": "rate limits"}}"#,
+            &known,
+        );
+        match out {
+            Outcome::Selected {
+                tool, arguments, ..
+            } => {
+                assert_eq!(tool, "search_docs");
+                assert_eq!(arguments["q"], "rate limits");
+            }
+            other => panic!("expected selected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sampling_unknown_tool_is_hallucinated_like_the_api_path() {
+        let out = classify_sampling_text(
+            r#"{"tool": "delete_everything", "arguments": {}}"#,
+            &server_tools(&["search_docs"]),
+        );
+        assert!(matches!(out, Outcome::HallucinatedTool { .. }));
+    }
+
+    #[test]
+    fn sampling_null_tool_and_off_protocol_text_are_both_no_tool() {
+        let known = server_tools(&["search_docs"]);
+        match classify_sampling_text(r#"{"tool": null, "answer": "Nothing fits."}"#, &known) {
+            Outcome::NoTool { excerpt } => assert_eq!(excerpt, "Nothing fits."),
+            other => panic!("expected no_tool, got {other:?}"),
+        }
+        // A model that ignored the protocol entirely did not select a tool.
+        match classify_sampling_text("I would probably use search_docs here.", &known) {
+            Outcome::NoTool { excerpt } => assert!(excerpt.contains("search_docs")),
+            other => panic!("expected no_tool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sampling_tolerates_code_fences_and_surrounding_prose() {
+        let known = server_tools(&["search_docs"]);
+        let fenced = "```json\n{\"tool\": \"search_docs\", \"arguments\": {\"q\": \"a\"}}\n```";
+        assert!(matches!(
+            classify_sampling_text(fenced, &known),
+            Outcome::Selected { .. }
+        ));
+        let chatty =
+            "Sure! {\"tool\": \"search_docs\", \"arguments\": {\"q\": \"} not a brace\"}} \
+                      — hope that helps.";
+        assert!(matches!(
+            classify_sampling_text(chatty, &known),
+            Outcome::Selected { .. }
+        ));
+    }
+
+    #[test]
+    fn sampling_args_are_validated_by_the_shared_validator() {
+        let tools = vec![tool(
+            "search_docs",
+            json!({ "type": "object", "properties": { "q": { "type": "string" } }, "required": ["q"] }),
+        )];
+        let mut out = classify_sampling_text(
+            r#"{"tool": "search_docs", "arguments": {}}"#,
+            &server_tools(&["search_docs"]),
+        );
+        finalize_args_check(&tools, &mut out);
+        match out {
+            Outcome::Selected { args_check, .. } => {
+                assert!(matches!(args_check, ArgCheck::Invalid { .. }));
+            }
+            other => panic!("expected selected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_models_records_unknown_rather_than_guessing() {
+        let results = vec![
+            RunResult {
+                index: 1,
+                outcome: selected("a"),
+                latency_ms: 0,
+                usage: Usage::default(),
+                model_version: Some("host-model-x".into()),
+                raw_response: Value::Null,
+            },
+            RunResult {
+                index: 2,
+                outcome: selected("a"),
+                latency_ms: 0,
+                usage: Usage::default(),
+                model_version: None,
+                raw_response: Value::Null,
+            },
+        ];
+        let models = host_models_of(&results);
+        assert_eq!(models, vec!["host-model-x", SAMPLING_MODEL_UNKNOWN]);
+    }
+
+    #[test]
+    fn keyless_config_is_reported_as_such() {
+        let mut config = BenchConfig {
+            model: BenchModel::resolve("gpt-4o").unwrap(),
+            task: "t".into(),
+            runs: 1,
+            temperature: 1.0,
+            max_tokens: 16,
+            timeout: None,
+            base_url: Some("http://localhost:11434/v1".into()),
+            api_key: String::new(),
+        };
+        assert!(config.is_keyless());
+        config.api_key = "sk-x".into();
+        assert!(!config.is_keyless());
+    }
+
     #[test]
     fn provider_endpoint_uses_override_and_default() {
         assert_eq!(
@@ -1445,6 +1953,32 @@ mod tests {
         assert_eq!(
             provider_endpoint(Provider::OpenAI, Some("http://127.0.0.1:9000/")),
             "http://127.0.0.1:9000/v1/chat/completions"
+        );
+    }
+
+    /// The recipes in the README are the ones users paste. Every local runtime
+    /// documents its base URL *with* the `/v1`, so that form must not double it.
+    #[test]
+    fn base_url_join_is_idempotent_in_the_version_segment() {
+        for base in [
+            "http://localhost:11434/v1",  // Ollama
+            "http://localhost:11434/v1/", // …with a trailing slash
+            "http://localhost:11434",     // …and without the version at all
+        ] {
+            assert_eq!(
+                provider_endpoint(Provider::OpenAI, Some(base)),
+                "http://localhost:11434/v1/chat/completions",
+                "base {base} joined wrong"
+            );
+        }
+        assert_eq!(
+            provider_endpoint(Provider::Anthropic, Some("https://gateway.corp/v1")),
+            "https://gateway.corp/v1/messages"
+        );
+        // A path that merely *contains* v1 elsewhere is untouched.
+        assert_eq!(
+            provider_endpoint(Provider::OpenAI, Some("https://gw.corp/v1/openai")),
+            "https://gw.corp/v1/openai/v1/chat/completions"
         );
     }
 }
