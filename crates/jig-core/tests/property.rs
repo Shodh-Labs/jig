@@ -477,12 +477,21 @@ proptest! {
 
     /// For any parseable http(s) URL, the canonical form carries no fragment and
     /// no gratuitous trailing slash.
+    ///
+    /// The precondition is enforced, not assumed. `canonical_resource_uri`
+    /// documents that it returns its input unchanged when the input does not
+    /// parse, so an unparseable URL keeps its `#frag` — correct behaviour, but
+    /// outside this property. The generator can emit such a host: `xn--` is a
+    /// syntactically fine label here yet an invalid IDN punycode prefix, so
+    /// `https://xn--.example.com/#frag` does not parse. Discard those rather
+    /// than weakening the assertion.
     #[test]
     fn canonical_uri_has_no_fragment_or_trailing_slash(
         host in "[a-z][a-z0-9-]{0,20}",
         path in "(/[a-z0-9]{1,8}){0,3}",
     ) {
         let url = format!("https://{host}.example.com{path}/#frag");
+        prop_assume!(reqwest::Url::parse(&url).is_ok());
         let canonical = canonical_resource_uri(&url);
         prop_assert!(!canonical.contains('#'));
         prop_assert!(!canonical.ends_with('/') || canonical == "https://");
