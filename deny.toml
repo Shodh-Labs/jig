@@ -30,6 +30,12 @@ allow = [
     # them, so it does not reach Jig's Apache-2.0 source. Allowed for
     # dependencies; we do not modify or vendor those files.
     "MPL-2.0",
+    # Also arrived with the Tauri tree. Both are permissive and impose no
+    # copyleft obligation: Zlib (foldhash) is an OSI-approved permissive
+    # licence; the LLVM exception (target-lexicon) *widens* Apache-2.0 by
+    # removing the attribution requirement for binary redistribution.
+    "Zlib",
+    "Apache-2.0 WITH LLVM-exception",
 ]
 # Fuzzy-match threshold for license-text detection; 0.8 is the cargo-deny default.
 confidence-threshold = 0.8
