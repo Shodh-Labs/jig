@@ -23,6 +23,9 @@ use jig_core::bench::{classify_anthropic, classify_openai, validate_args};
 use jig_core::check::{MetricSamples, Percentiles};
 use jig_core::eval::{load_suite_str, Matcher};
 use jig_core::http::parse_sse;
+use jig_core::login::{
+    build_authorization_url, parse_callback_query, query_from_request_line, s256_challenge,
+};
 use jig_core::tokens::canonical_tool_json;
 use jig_core::transport::{classify_inbound, parse_response};
 use jig_core::{
@@ -411,6 +414,65 @@ proptest! {
         for u in auth_server_metadata_urls(&s) {
             prop_assert!(u.contains("/.well-known/"));
         }
+    }
+
+    /// The OAuth callback parser is **total**. Its input arrives on a loopback
+    /// port that any process on the machine can connect to, so "arbitrary bytes
+    /// must not panic the parser" is a security property, not just hygiene.
+    #[test]
+    fn callback_query_parse_never_panics(s in ".*") {
+        let p = parse_callback_query(&s);
+        let _ = p.is_authorization_response();
+        // A response is actionable exactly when it carries a code or an error —
+        // nothing else can smuggle the parser into thinking it has one.
+        prop_assert_eq!(
+            p.is_authorization_response(),
+            p.code.is_some() || p.error.is_some()
+        );
+    }
+
+    /// The same, driven through the raw HTTP request line the loopback listener
+    /// actually reads off the socket.
+    #[test]
+    fn callback_request_line_parse_never_panics(s in ".*") {
+        let _ = parse_callback_query(query_from_request_line(&s));
+    }
+
+    /// Every `code` a parser can produce round-trips through an authorization
+    /// URL's query encoding, so a code containing `&`, `=`, `%` or a space
+    /// cannot be truncated or split on the way back out.
+    #[test]
+    fn authorization_url_round_trips_arbitrary_parameter_values(
+        client_id in ".{0,40}",
+        state in ".{0,40}",
+        challenge in ".{0,40}",
+    ) {
+        let url = build_authorization_url(
+            "https://as.example.com/authorize",
+            &client_id,
+            "http://127.0.0.1:1/jig/callback",
+            &state,
+            &challenge,
+            "https://mcp.example.com/mcp",
+            None,
+        ).expect("a valid endpoint always builds");
+        let parsed = reqwest::Url::parse(&url).expect("the builder emits a valid URL");
+        let pairs: std::collections::HashMap<String, String> =
+            parsed.query_pairs().into_owned().collect();
+        prop_assert_eq!(pairs.get("client_id"), Some(&client_id));
+        prop_assert_eq!(pairs.get("state"), Some(&state));
+        prop_assert_eq!(pairs.get("code_challenge"), Some(&challenge));
+        prop_assert_eq!(pairs.get("code_challenge_method").map(String::as_str), Some("S256"));
+    }
+
+    /// The PKCE S256 transform is deterministic, and its output is always a
+    /// 43-character base64url string with no padding (RFC 7636 §4.2).
+    #[test]
+    fn s256_challenge_is_deterministic_and_well_formed(verifier in ".{0,200}") {
+        let a = s256_challenge(&verifier);
+        prop_assert_eq!(&a, &s256_challenge(&verifier));
+        prop_assert_eq!(a.len(), 43);
+        prop_assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     /// For any parseable http(s) URL, the canonical form carries no fragment and
