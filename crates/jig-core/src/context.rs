@@ -22,6 +22,7 @@
 use serde_json::Value;
 
 use crate::bench::{self, Provider, BENCH_SYSTEM_PROMPT};
+use crate::clients::{self, ClientError, ClientRendering};
 use crate::protocol::Tool;
 use crate::tokens::{Exactness, ModelCounter, TokenError};
 
@@ -93,6 +94,43 @@ pub struct ContextView {
     pub total_tokens: usize,
     /// The exact provider request body, with the placeholder task.
     pub body: Value,
+    /// The client rendering this view was built under, when it is not the
+    /// default raw-API one. `None` means `--client api`: the body is exactly
+    /// what `jig bench` sends, with no client transformation applied.
+    pub client: Option<ClientVariant>,
+}
+
+/// A per-client rendering applied on top of the raw API request, plus its cost
+/// difference — see [`crate::clients`] for the evidence rules.
+#[derive(Debug, Clone)]
+pub struct ClientVariant {
+    /// The rendering: which client, its evidence level, citation, and the
+    /// per-tool transformed names.
+    pub rendering: ClientRendering,
+    /// Total tokens under the raw API rendering, for comparison.
+    pub api_total_tokens: usize,
+    /// `total_tokens - api_total_tokens`. Signed: a client that shortens names
+    /// (VS Code truncates at 64 characters) can render *cheaper* than the raw
+    /// request, and reporting that as a positive number would be a lie.
+    pub delta_tokens: i64,
+}
+
+impl ClientVariant {
+    /// The delta rendered for a person: `+12 tokens vs the raw API request`.
+    ///
+    /// Always states the baseline, so a reader is never left guessing what the
+    /// number is relative to.
+    pub fn delta_summary(&self) -> String {
+        match self.delta_tokens {
+            0 => "identical cost to the raw API request".to_string(),
+            d => format!(
+                "{}{} token{} vs the raw API request",
+                if d > 0 { "+" } else { "-" },
+                d.abs(),
+                if d.abs() == 1 { "" } else { "s" }
+            ),
+        }
+    }
 }
 
 /// Assemble the [`ContextView`] for `tools` (+ optional `instructions`) rendered
@@ -112,9 +150,78 @@ pub fn build(
     tools: &[Tool],
     instructions: Option<&str>,
 ) -> Result<ContextView, TokenError> {
+    build_inner(provider, model_id, api_model, tools, instructions, None)
+}
+
+/// Like [`build`], but rendered as `client` would present the tool surface.
+///
+/// The resulting [`ContextView::client`] carries the transformation, its
+/// citation, and the token delta against the raw API rendering. Only what the
+/// citation establishes is applied — see [`crate::clients`].
+///
+/// # Errors
+///
+/// As [`build`], plus [`ContextBuildError::Client`] when the id is unknown or
+/// names a client whose rendering no public source establishes. Jig refuses to
+/// invent a rendering rather than emitting a plausible fiction.
+pub fn build_for_client(
+    provider: Provider,
+    model_id: &str,
+    api_model: &str,
+    tools: &[Tool],
+    instructions: Option<&str>,
+    client: &str,
+    server_name: &str,
+) -> Result<ContextView, ContextBuildError> {
+    let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+    let rendering = clients::render_names(client, server_name, &tool_names)?;
+
+    // The baseline is computed the same way for every client, so the delta is a
+    // like-for-like comparison rather than two differently-derived numbers.
+    let api_view = build_inner(provider, model_id, api_model, tools, instructions, None)?;
+    if rendering.spec.id == clients::DEFAULT_CLIENT {
+        return Ok(api_view);
+    }
+
+    let mut view = build_inner(
+        provider,
+        model_id,
+        api_model,
+        tools,
+        instructions,
+        Some(&rendering),
+    )?;
+    view.client = Some(ClientVariant {
+        api_total_tokens: api_view.total_tokens,
+        delta_tokens: view.total_tokens as i64 - api_view.total_tokens as i64,
+        rendering,
+    });
+    Ok(view)
+}
+
+/// Errors from assembling a client-specific context view.
+#[derive(Debug, thiserror::Error)]
+pub enum ContextBuildError {
+    /// The tokenizer/model layer rejected the request.
+    #[error(transparent)]
+    Token(#[from] TokenError),
+    /// The `--client` value was unknown, or names a client whose rendering is
+    /// not established by any public source.
+    #[error(transparent)]
+    Client(#[from] ClientError),
+}
+
+fn build_inner(
+    provider: Provider,
+    model_id: &str,
+    api_model: &str,
+    tools: &[Tool],
+    instructions: Option<&str>,
+    rendering: Option<&ClientRendering>,
+) -> Result<ContextView, TokenError> {
     let counter = ModelCounter::new(model_id)?;
 
-    let body = bench::render_request_parts(
+    let mut body = bench::render_request_parts(
         provider,
         tools,
         CONTEXT_TASK_PLACEHOLDER,
@@ -122,6 +229,12 @@ pub fn build(
         CONTEXT_TEMPERATURE,
         bench::DEFAULT_MAX_TOKENS,
     );
+
+    // Apply the client's transformation to the body *before* anything is
+    // counted, so every per-tool figure and the total describe the same bytes.
+    if let Some(r) = rendering {
+        clients::apply_to_request_body(&mut body, r);
+    }
 
     let system_tokens = counter.count(BENCH_SYSTEM_PROMPT);
 
@@ -144,8 +257,14 @@ pub fn build(
                 .and_then(|arr| arr.get(i))
                 .map(|entry| counter.count(&serde_json::to_string(entry).unwrap_or_default()))
                 .unwrap_or(0);
+            // Under a client rendering the model sees the *transformed* name;
+            // showing the MCP name here would misreport what reaches the model.
+            let name = rendering
+                .and_then(|r| r.names.get(i))
+                .map(|n| n.rendered.clone())
+                .unwrap_or_else(|| t.name.clone());
             ToolContext {
-                name: t.name.clone(),
+                name,
                 description: t.description.clone(),
                 tokens,
                 schema_lines: schema_to_human_lines(&t.input_schema),
@@ -171,6 +290,8 @@ pub fn build(
         tools_tokens,
         total_tokens,
         body,
+        // Filled in by `build_for_client` once the delta is known.
+        client: None,
     })
 }
 
@@ -426,6 +547,104 @@ mod tests {
         let instr = view.instructions.unwrap();
         assert!(!instr.sent_by_bench);
         assert!(instr.tokens > 0);
+    }
+
+    #[test]
+    fn default_client_view_carries_no_variant() {
+        let tools = vec![tool("echo", Some("Echo it"), json!({ "type": "object" }))];
+        let view = build_for_client(
+            Provider::OpenAI,
+            "gpt-4o",
+            "gpt-4o",
+            &tools,
+            None,
+            "api",
+            "srv",
+        )
+        .unwrap();
+        assert!(
+            view.client.is_none(),
+            "`api` is the baseline, not a variant"
+        );
+        // Byte-identical to the plain build.
+        let plain = build(Provider::OpenAI, "gpt-4o", "gpt-4o", &tools, None).unwrap();
+        assert_eq!(view.body, plain.body);
+        assert_eq!(view.total_tokens, plain.total_tokens);
+    }
+
+    #[test]
+    fn claude_code_variant_reports_a_positive_delta_and_renames_in_the_body() {
+        let tools = vec![tool("echo", Some("Echo it"), json!({ "type": "object" }))];
+        let view = build_for_client(
+            Provider::Anthropic,
+            "claude-sonnet",
+            "claude-x",
+            &tools,
+            None,
+            "claude-code",
+            "filesystem",
+        )
+        .unwrap();
+
+        let variant = view.client.as_ref().expect("a variant was requested");
+        // The prefix is strictly more text, so the rendering costs more.
+        assert!(
+            variant.delta_tokens > 0,
+            "prefixing must cost tokens: {}",
+            variant.delta_tokens
+        );
+        assert_eq!(
+            view.total_tokens as i64,
+            variant.api_total_tokens as i64 + variant.delta_tokens
+        );
+        assert!(variant.delta_summary().contains("vs the raw API request"));
+
+        // The body the model would receive carries the transformed name...
+        assert_eq!(view.body["tools"][0]["name"], "mcp__filesystem__echo");
+        // ...and so does the per-tool view, so the two never disagree.
+        assert_eq!(view.tools[0].name, "mcp__filesystem__echo");
+    }
+
+    #[test]
+    fn a_verified_no_op_client_reports_a_zero_delta_rather_than_nothing() {
+        // The OpenAI Agents SDK verifiably does *not* transform by default.
+        // That is a real, citable finding — it must render as an explicit zero,
+        // not be silently indistinguishable from an unsupported client.
+        let tools = vec![tool("echo", Some("Echo it"), json!({ "type": "object" }))];
+        let view = build_for_client(
+            Provider::OpenAI,
+            "gpt-4o",
+            "gpt-4o",
+            &tools,
+            None,
+            "openai-agents",
+            "srv",
+        )
+        .unwrap();
+        let variant = view.client.as_ref().unwrap();
+        assert_eq!(variant.delta_tokens, 0);
+        assert!(variant.rendering.is_identity());
+        assert_eq!(
+            variant.delta_summary(),
+            "identical cost to the raw API request"
+        );
+    }
+
+    #[test]
+    fn an_unestablished_client_is_an_error_not_a_guess() {
+        let tools = vec![tool("echo", Some("Echo it"), json!({ "type": "object" }))];
+        let err = build_for_client(
+            Provider::OpenAI,
+            "gpt-4o",
+            "gpt-4o",
+            &tools,
+            None,
+            "cursor",
+            "srv",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContextBuildError::Client(_)));
+        assert!(err.to_string().contains("will not guess"));
     }
 
     #[test]

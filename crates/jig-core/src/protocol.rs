@@ -69,6 +69,110 @@ pub struct Tool {
         skip_serializing_if = "Option::is_none"
     )]
     pub output_schema: Option<Value>,
+    /// Optional behavioural hints. A **sibling** of `inputSchema` on the tool
+    /// object, never nested inside it — see [`ToolAnnotations`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
+}
+
+/// Behavioural hints a server may attach to a [`Tool`] (`annotations`), per MCP
+/// `2025-06-18`.
+///
+/// # These are hints, not guarantees
+///
+/// The specification is explicit that every property here is advisory:
+///
+/// > NOTE: all properties in ToolAnnotations are **hints**. They are not
+/// > guaranteed to provide a faithful description of tool behavior (including
+/// > descriptive properties like `title`).
+///
+/// and, normatively, that
+///
+/// > For trust & safety and security, clients **MUST** consider tool
+/// > annotations to be untrusted unless they come from trusted servers.
+///
+/// Jig only ever *reports* what a server declared. It never acts on an
+/// annotation — it does not, for example, treat `readOnlyHint: true` as licence
+/// to invoke a tool.
+///
+/// # Placement
+///
+/// `annotations` sits alongside `description`, `inputSchema` and `outputSchema`
+/// on the tool object. Hints found inside the *input schema* are not
+/// annotations; before this type existed Jig sniffed for them there, which
+/// produced both false positives and false negatives.
+///
+/// # Not counted in the token budget
+///
+/// Annotations are MCP transport metadata consumed **client-side** (display
+/// names, permission gating). They are not part of the `tools` array a client
+/// sends to a model provider — the Anthropic Messages API tool object accepts
+/// `name`, `description`, `input_schema` (and provider-specific extras), and has
+/// no `annotations` member. They therefore cost zero prompt tokens and are
+/// deliberately excluded from
+/// [`canonical_tool_json`](crate::tokens::canonical_tool_json).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolAnnotations {
+    /// A human-readable title for the tool. Display-name precedence per spec is
+    /// `Tool::title`, then `annotations.title`, then `Tool::name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// If true, the tool does not modify its environment. Spec default `false`.
+    #[serde(
+        rename = "readOnlyHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub read_only_hint: Option<bool>,
+    /// If true, the tool may perform destructive updates. Meaningful only when
+    /// `read_only_hint` is not true. Spec default `true`.
+    #[serde(
+        rename = "destructiveHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub destructive_hint: Option<bool>,
+    /// If true, repeated calls with the same arguments have no additional
+    /// effect. Meaningful only when `read_only_hint` is not true. Spec default
+    /// `false`.
+    #[serde(
+        rename = "idempotentHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub idempotent_hint: Option<bool>,
+    /// If true, the tool may interact with an open world of external entities.
+    /// Spec default `true`.
+    #[serde(
+        rename = "openWorldHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub open_world_hint: Option<bool>,
+}
+
+impl ToolAnnotations {
+    /// Whether the server declared **any** annotation field.
+    ///
+    /// A tool carrying a bare `"annotations": {}` declares none: the object is
+    /// present but says nothing about the tool's behaviour, so it is not
+    /// evidence that the server annotated anything.
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.read_only_hint.is_none()
+            && self.destructive_hint.is_none()
+            && self.idempotent_hint.is_none()
+            && self.open_world_hint.is_none()
+    }
+
+    /// The behavioural hints only — `title` is a display concern, not a
+    /// behavioural claim, so it does not count here.
+    pub fn has_behavioural_hint(&self) -> bool {
+        self.read_only_hint.is_some()
+            || self.destructive_hint.is_some()
+            || self.idempotent_hint.is_some()
+            || self.open_world_hint.is_some()
+    }
 }
 
 /// A resource exposed by the server via `resources/list`.
@@ -390,5 +494,86 @@ mod tests {
         let tool: Tool = serde_json::from_value(v).unwrap();
         assert_eq!(tool.name, "echo");
         assert_eq!(tool.input_schema["type"], "object");
+        // No `annotations` sent → the typed field is absent, not a default.
+        assert!(tool.annotations.is_none());
+    }
+
+    #[test]
+    fn tool_annotations_parse_as_a_sibling_of_input_schema() {
+        let v = json!({
+            "name": "delete_file",
+            "inputSchema": { "type": "object" },
+            "annotations": {
+                "title": "Delete a file",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        });
+        let tool: Tool = serde_json::from_value(v).unwrap();
+        let a = tool.annotations.expect("annotations should parse");
+        assert_eq!(a.title.as_deref(), Some("Delete a file"));
+        assert_eq!(a.read_only_hint, Some(false));
+        assert_eq!(a.destructive_hint, Some(true));
+        assert_eq!(a.idempotent_hint, Some(true));
+        assert_eq!(a.open_world_hint, Some(false));
+        assert!(!a.is_empty());
+        assert!(a.has_behavioural_hint());
+    }
+
+    #[test]
+    fn hints_inside_the_input_schema_are_not_annotations() {
+        // The pre-typed heuristic sniffed the *input schema* for `*Hint` keys.
+        // Per spec these are properties of the arguments object, not tool
+        // annotations, and must not be mistaken for them.
+        let v = json!({
+            "name": "misleading",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "readOnlyHint": { "type": "boolean" } },
+                "annotations": {}
+            }
+        });
+        let tool: Tool = serde_json::from_value(v).unwrap();
+        assert!(tool.annotations.is_none());
+    }
+
+    #[test]
+    fn empty_annotations_object_declares_nothing() {
+        let v = json!({
+            "name": "bare",
+            "inputSchema": { "type": "object" },
+            "annotations": {}
+        });
+        let tool: Tool = serde_json::from_value(v).unwrap();
+        let a = tool.annotations.expect("the object itself is present");
+        assert!(a.is_empty());
+        assert!(!a.has_behavioural_hint());
+    }
+
+    #[test]
+    fn annotation_title_alone_is_not_a_behavioural_hint() {
+        let v = json!({
+            "name": "t",
+            "inputSchema": { "type": "object" },
+            "annotations": { "title": "Pretty name" }
+        });
+        let tool: Tool = serde_json::from_value(v).unwrap();
+        let a = tool.annotations.unwrap();
+        assert!(!a.is_empty());
+        assert!(!a.has_behavioural_hint());
+    }
+
+    #[test]
+    fn unknown_annotation_keys_do_not_fail_the_tool() {
+        // A future spec revision adding a hint must not break parsing.
+        let v = json!({
+            "name": "t",
+            "inputSchema": { "type": "object" },
+            "annotations": { "readOnlyHint": true, "futureHint": "whatever" }
+        });
+        let tool: Tool = serde_json::from_value(v).unwrap();
+        assert_eq!(tool.annotations.unwrap().read_only_hint, Some(true));
     }
 }

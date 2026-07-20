@@ -1,8 +1,9 @@
 ---
 source: crates/jig-cli/src/context.rs
-expression: "render_human(&mock_server(), &v)"
+expression: "render_human(&mock_server(), &client_view(\"claude-code\"))"
 ---
 Context — what claude-sonnet (anthropic dialect) receives from jig-mock-server v0.1.0  [nothing is sent to any API]
+  rendered as Claude Code (approximated) — +27 tokens vs the raw API request
 
   system prompt                                         42 tok
     You are connected to a set of tools. Read the user's task and, if one of the available tools is appropriate, call exactly one tool to accomplish it. If no tool fits, answer in plain text.
@@ -11,25 +12,30 @@ Context — what claude-sonnet (anthropic dialect) receives from jig-mock-server
     (offered by the server; not sent by `jig bench` — see footer)
     A toy MCP server for exercising Jig.
 
-  tools (3)                                            175 tok
-  ├─ make_reservation                                   99 tok
+  tools (3)                                            202 tok
+  ├─ mcp__jig-mock-server__make_reservation            108 tok
   │    "Book a table. Demonstrates a nested object argument and an enum."
   │    date: string (required) — "ISO-8601 date."
   │    party: object (required)
   │      seating: string — one of [indoor, outdoor, bar]
   │      size: integer (required)
-  ├─ echo                                               42 tok
+  ├─ mcp__jig-mock-server__echo                         51 tok
   │    "Echo the provided text straight back."
   │    text: string (required) — "Text to echo."
-  └─ always_fails                                       34 tok
+  └─ mcp__jig-mock-server__always_fails                 43 tok
        "A tool that always reports an error, for testing error paths."
        (no parameters)
 
-  TOTAL context before the user's first word           217 tok  (claude-sonnet, approx)
+  TOTAL context before the user's first word           244 tok  (claude-sonnet, approx)
 
-This is the anthropic API rendering — what `jig bench` sends. Chat clients reshape the
-tool surface before it reaches the model; `--client <name>` renders the ones jig
-can cite, and `--client list` shows what is verified, approximated or unknown.
+Rendered as Claude Code over the anthropic dialect, +27 tokens vs the raw API request.
+Source: https://code.claude.com/docs/en/hooks — "MCP tools follow the naming pattern
+        `mcp__<server>__<tool>`"
+Not established: whether the description or input schema is rewritten, and what
+                 system-prompt framing is added — Claude Code is closed-source, so only the
+                 name format is citable. The token delta therefore covers only the
+                 transformation above — treat it as a lower bound, not this client's full
+                 cost.
 No API key is needed or used: context computes this locally and sends nothing to any
 provider.
 Server instructions are shown for reference but are not in the request body: `jig

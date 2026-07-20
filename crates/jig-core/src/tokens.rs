@@ -297,6 +297,16 @@ impl ModelCounter {
 ///
 /// This is the one place the "what gets counted" question is answered. Keep it
 /// pluggable: a future milestone may add client-specific rendering variants.
+/// # Why `annotations` is absent
+///
+/// A tool may carry an [`annotations`] object. It is **not** counted, because it
+/// is never sent to the model: annotations are client-side metadata (display
+/// name, permission gating), and neither the Anthropic nor the OpenAI tool
+/// object has a member for them. Adding the typed field to [`Tool`] therefore
+/// left this rendering byte-identical, and every previously published figure —
+/// including the bundled census — remains directly comparable.
+///
+/// [`annotations`]: crate::protocol::Tool::annotations
 pub fn canonical_tool_json(tool: &Tool) -> String {
     let mut map = Map::new();
     map.insert("name".to_string(), json!(tool.name));
@@ -577,6 +587,53 @@ mod tests {
         let r2 = canonical_tool_json(&t2);
         assert!(!r2.contains("description"), "unexpected description: {r2}");
         assert!(r2.contains("\"name\":\"bare\""));
+    }
+
+    /// **The metric must not move when a server annotates its tools.**
+    ///
+    /// Annotations never reach the model — no provider tool object carries
+    /// them — so they cost zero prompt tokens. If this ever fails, the canonical
+    /// rendering has silently changed and every published figure (including the
+    /// bundled census) has been invalidated without a changelog entry.
+    #[test]
+    fn annotations_do_not_change_the_canonical_rendering_or_the_count() {
+        let bare: Tool = serde_json::from_value(json!({
+            "name": "delete_thing",
+            "description": "Delete a thing.",
+            "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } } },
+        }))
+        .unwrap();
+
+        let annotated: Tool = serde_json::from_value(json!({
+            "name": "delete_thing",
+            "description": "Delete a thing.",
+            "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } } },
+            "annotations": {
+                "title": "A title long enough to be several tokens on its own",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": true
+            },
+        }))
+        .unwrap();
+
+        assert!(annotated.annotations.is_some(), "fixture must be annotated");
+        assert_eq!(
+            canonical_tool_json(&bare),
+            canonical_tool_json(&annotated),
+            "annotations leaked into the canonical rendering"
+        );
+
+        let counter = ModelCounter::new("gpt-4o").unwrap();
+        assert_eq!(
+            counter.count(&canonical_tool_json(&bare)),
+            counter.count(&canonical_tool_json(&annotated))
+        );
+        assert_eq!(
+            budget_local("gpt-4o", &[bare], None).unwrap().total,
+            budget_local("gpt-4o", &[annotated], None).unwrap().total
+        );
     }
 
     #[test]

@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc af15839611d2f3baabf335e31b7035254ab02e1721117ff53d693b26692ed899 # shrinks to host = "xn--", path = ""
+cc aaf1e315e37a306f10febd2b8f1542c4ee2c05b246cc67a421892b6f550bb0ff # shrinks to host = "xn--", path = ""

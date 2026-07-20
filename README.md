@@ -580,11 +580,47 @@ Context — what gpt-4o (openai dialect) receives from jig-mock-server v0.1.0  [
 the same exactness labels as [`jig budget`](#jig-budget--the-token-budget-engine)
 (exact for OpenAI's real tokenizer, `~approx` for Claude).
 
-**Honesty.** This is the *provider API* rendering — what `jig bench` sends. Chat
-clients (Claude Desktop, Cursor, …) may render tool context differently;
-per-client renderings are a future milestone. Server `instructions` are shown for
-reference but are **not** in the bench request body (bench sends only the system
-prompt + tools), so they are excluded from the request total.
+#### Per-client renderings (`--client`)
+
+A chat client sits between the MCP server and the provider, and may reshape the
+tool surface on the way. `--client <name>` renders the ones Jig can **cite**:
+
+```sh
+jig context --stdio "<cmd>" --client claude-code                        # mcp__<server>__<tool>
+jig context --stdio "<cmd>" --client vscode                             # mcp_<server>_<tool>, capped
+jig context --client list                                               # every client + evidence + citation
+```
+
+```
+Context — what gpt-4o (openai dialect) receives from jig-mock-server v0.5.0  [nothing is sent to any API]
+  rendered as Claude Code (approximated) — +27 tokens vs the raw API request
+```
+
+Every variant is derived from official documentation or open-source code, and
+the source is printed with the output. Where no such source exists Jig
+**refuses** rather than guessing — a fabricated rendering would be
+indistinguishable from a measurement.
+
+| `--client` | Evidence | Rendering | Source |
+|---|---|---|---|
+| `api` *(default)* | verified | the raw provider request `jig bench` sends | Jig's own request assembly |
+| `claude-code` | **approximated** | `mcp__<server>__<tool>` | [Claude Code hooks docs](https://code.claude.com/docs/en/hooks) — name format only; the description/schema framing is not public |
+| `vscode` | verified | `mcp_<server>_<tool>`, prefix ≤18 chars, id ≤64; description and schema untouched | `microsoft/vscode` — `mcpTypes.ts`, `mcpLanguageModelToolContribution.ts` |
+| `openai-agents` | verified | **no transformation by default** — identical to `api` | `openai/openai-agents-python` — `src/agents/mcp/util.py` |
+| `claude-desktop` | **unknown** | *not implemented* | docs cover configuration and the approval UI only; closed-source |
+| `cursor` | **unknown** | *not implemented* | docs document neither a name transform nor a tool limit; the widely-repeated "40 tool limit" is forum-only |
+
+Note that the three verified prefix schemes all differ from one another, so no
+cross-client generalization is safe — which is exactly why the unknowns stay
+unknown.
+
+**Honesty.** The default is the *provider API* rendering — what `jig bench`
+sends. For any other client, the reported delta covers **only the cited
+transformation**, so treat it as a **lower bound**: none of these sources
+establishes a client's system-prompt framing or the per-tool instructions it may
+add. Server `instructions` are shown for reference but are **not** in the bench
+request body (bench sends only the system prompt + tools), so they are excluded
+from the request total.
 
 ### Transports: stdio and Streamable HTTP
 

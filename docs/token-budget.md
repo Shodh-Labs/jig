@@ -26,6 +26,36 @@ Sorted keys make the rendering (and therefore the count) independent of the
 order a server happened to send fields in — the output is byte-stable and
 diffable in CI.
 
+### What is deliberately *not* counted: tool annotations
+
+MCP `2025-06-18` puts an optional `annotations` object on the tool, as a sibling
+of `inputSchema` (`title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint`). Jig now models these as a typed field, so the obvious question
+is whether they belong in the canonical rendering.
+
+**They do not, and the V1 numbers are unchanged.** Annotations are metadata the
+*client* consumes — display names and permission gating — and the spec is
+explicit that this is a client-side trust decision: "clients **MUST** consider
+tool annotations to be untrusted unless they come from trusted servers". They
+are not forwarded to the model. The Anthropic Messages API tool object accepts
+`name`, `description`, `input_schema` (plus provider-specific extras such as
+`cache_control`); there is no `annotations` member, and the OpenAI function
+shape has no equivalent either. A server can annotate every tool it exposes and
+the prompt it costs does not move by a single token.
+
+Counting them would therefore inflate the estimate and break the one promise
+this document makes — that Jig counts *the tools array as sent to the API*.
+
+Consequences, stated plainly:
+
+- `canonical_tool_json` is byte-identical before and after the typed
+  `annotations` field was added.
+- Every existing token figure, including the bundled census, remains valid and
+  directly comparable. **No re-baselining was required**, because nothing about
+  what gets counted changed.
+- Should a provider ever begin transmitting annotations in its tools array, this
+  becomes a V2 rendering with a loud changelog entry — not a silent edit to V1.
+
 Example canonical rendering of a simple `echo` tool:
 
 ```json

@@ -27,9 +27,9 @@ Context — what gpt-4o (openai dialect) receives from jig-mock-server v0.1.0  [
 
   TOTAL context before the user's first word           232 tok  (gpt-4o, exact)
 
-This is the openai API rendering — what `jig bench` sends. Chat clients (Claude Desktop,
-Cursor, …) may render tool context differently; per-client renderings are a future
-milestone.
+This is the openai API rendering — what `jig bench` sends. Chat clients reshape the
+tool surface before it reaches the model; `--client <name>` renders the ones jig
+can cite, and `--client list` shows what is verified, approximated or unknown.
 No API key is needed or used: context computes this locally and sends nothing to any
 provider.
 Server instructions are shown for reference but are not in the request body: `jig

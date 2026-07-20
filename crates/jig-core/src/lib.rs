@@ -34,6 +34,7 @@ pub mod bench;
 pub mod boot;
 pub mod check;
 pub mod client;
+pub mod clients;
 pub mod context;
 pub mod credential;
 pub mod discovery;
@@ -68,8 +69,13 @@ pub use check::{
     BUNDLED_PERCENTILES_JSON, RATE_SCORE_FLOOR, RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};
+pub use clients::{
+    known_clients, ClientError, ClientRendering, ClientSpec, Evidence, RenderedName, CLIENTS,
+    DEFAULT_CLIENT,
+};
 pub use context::{
-    build as build_context, schema_to_human_lines, ContextView, InstructionsSection, ToolContext,
+    build as build_context, build_for_client as build_context_for_client, schema_to_human_lines,
+    ClientVariant, ContextBuildError, ContextView, InstructionsSection, ToolContext,
     CONTEXT_TASK_PLACEHOLDER, CONTEXT_TEMPERATURE,
 };
 pub use credential::{
@@ -96,8 +102,8 @@ pub use login::{
 };
 pub use protocol::{
     ContentBlock, Implementation, InitializeResult, Prompt, PromptArgument, PromptGetResult,
-    PromptMessage, Resource, ResourceContents, ResourceReadResult, Tool, ToolCallResult,
-    LATEST_PROTOCOL_VERSION,
+    PromptMessage, Resource, ResourceContents, ResourceReadResult, Tool, ToolAnnotations,
+    ToolCallResult, LATEST_PROTOCOL_VERSION,
 };
 pub use tap::{Direction, NonProtocolLine, ProtocolTap, TapEntry};
 pub use tokens::{
@@ -105,5 +111,5 @@ pub use tokens::{
     ToolBudget, CANONICAL_RENDERING_DOC,
 };
 pub use transport::{
-    StdioTransport, Transport, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_REQUEST_TIMEOUT,
+    StderrVolume, StdioTransport, Transport, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_REQUEST_TIMEOUT,
 };
