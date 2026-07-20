@@ -3,7 +3,7 @@ source: crates/jig-cli/src/check.rs
 expression: render_human(&report)
 ---
 jig check · jig-mock-server v0.1.0
-protocol 2025-06-18 · rubric-v1.2
+protocol 2025-06-18 · rubric-v1.3
 
   ✓  99 / 100   grade A
 

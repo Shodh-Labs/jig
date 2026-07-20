@@ -95,11 +95,19 @@ expression: render_json(&report)
     }
   ],
   "grade": "A",
+  "injection": [],
+  "protocolCap": null,
   "protocolVersion": "2025-06-18",
-  "rubricVersion": "rubric-v1.2",
+  "rubricVersion": "rubric-v1.3",
   "server": {
     "name": "jig-mock-server",
     "version": "0.1.0"
+  },
+  "timing": {
+    "bootSeconds": null,
+    "installSeconds": null,
+    "prewarmSkipped": false,
+    "scored": "boot"
   },
   "toolCount": 3,
   "topFixes": [

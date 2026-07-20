@@ -1000,8 +1000,8 @@ fn mismatch_findings(tools: &[Tool], out: &mut Vec<Finding>) {
                  name/behaviour mismatch"
             ),
             format!(
-                "either rename `{name}` to say what it does, or reword the description if it \
-                 does not in fact {verb}. A model routes on the name first; a read-shaped name \
+                "either rename `{name}` to say what it does, or reword the description if that \
+                 is not what it does. A model routes on the name first; a read-shaped name \
                  over a mutating body is how a destructive call gets made without the user \
                  being asked (MCPTox, arXiv:2508.14925)"
             ),
@@ -1015,8 +1015,8 @@ fn mismatch_findings(tools: &[Tool], out: &mut Vec<Finding>) {
                  \"{verb}\" — the annotation contradicts the text"
             ),
             format!(
-                "set `readOnlyHint: false` on `{name}` if it {verb}, or correct the \
-                 description. Clients use annotations to decide what to run without \
+                "set `readOnlyHint: false` on `{name}` if that is what it does, or correct \
+                 the description. Clients use annotations to decide what to run without \
                  confirmation, so a false read-only hint removes the consent step the MCP \
                  spec's trust guidance depends on"
             ),

@@ -318,9 +318,28 @@ async fn probe_package(pkg: &str, yes: bool) -> Result<ProbeReport, String> {
         request_timeout: Some(PROBE_REQUEST_TIMEOUT),
         ..ClientOptions::default()
     };
-    let client = Client::connect_with_env("npx", &args, &[], tap, opts)
-        .await
-        .map_err(|e| format!("failed to launch '{pkg}' via npx: {e}"))?;
+    let client = match Client::connect_with_env("npx", &args, &[], tap, opts).await {
+        Ok(client) => client,
+        // SOP 26 (`rubric-v1.3`): failing to start is the most common outcome in
+        // the census, so grade *how* it failed rather than reporting only that
+        // it did. `jig check` prints the same verdict line from the same core
+        // rule, so the two commands can never disagree about the same server.
+        Err(e) => {
+            let base = format!("failed to launch '{pkg}' via npx: {e}");
+            return Err(
+                match crate::startup::probe_credential_failure("npx", &args, &[]).await {
+                    Some(observation) => {
+                        let verdict = jig_core::grade_startup(&observation);
+                        match verdict.finding() {
+                            Some(f) => format!("{base}\n  {}\n  -> {}", verdict.line(), f.fix),
+                            None => format!("{base}\n  {}", verdict.line()),
+                        }
+                    }
+                    None => base,
+                },
+            );
+        }
+    };
 
     let tools = client.list_tools().await.map_err(|e| e.to_string())?;
     let instructions = client.instructions().map(str::to_string);

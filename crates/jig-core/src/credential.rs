@@ -318,13 +318,13 @@ pub fn grade(obs: &StartupObservation) -> Verdict {
 /// 1. **`KEY=value` form.** A candidate token immediately followed by `=`. This
 ///    is self-evidencing: nothing else in a log line looks like that.
 /// 2. **Prose form.** A candidate token on a line that also contains one of
-///    [`CONTEXT_CUES`] (`env`, `missing`, `required`, `set`, …), which is what
+///    `CONTEXT_CUES` (`env`, `missing`, `required`, `set`, …), which is what
 ///    makes it a statement *about configuration* rather than an acronym that
 ///    happens to be capitalized.
 ///
 /// A candidate token is `[A-Z][A-Z0-9_]{2,}` — the shape the brief specifies —
-/// less the [`STOPWORDS`] that are log furniture. When a line offers several,
-/// the one that looks most like a credential wins (see [`CREDENTIAL_SUFFIXES`]),
+/// less the `STOPWORDS` that are log furniture. When a line offers several,
+/// the one that looks most like a credential wins (see `CREDENTIAL_SUFFIXES`),
 /// then the longest, then the first: a stable total order, so the same stderr
 /// always yields the same variable.
 pub fn named_variable(stderr: &[String]) -> Option<String> {

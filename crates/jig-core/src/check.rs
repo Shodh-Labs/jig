@@ -858,7 +858,7 @@ pub struct ContextCap {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProtocolCap {
     /// The ceiling applied, in `55.0..100.0`, read off the ramp in
-    /// [`protocol_cap_ceiling`].
+    /// `protocol_cap_ceiling`.
     pub cap: f64,
     /// The weighted composite *before* the cap, so the cost of the cap is
     /// legible.
@@ -919,6 +919,10 @@ pub struct Report {
     /// composite; they surface in a dedicated report section and may be ranked
     /// into "Top fixes". Empty when no advisory fired.
     pub advisor: Vec<Finding>,
+    /// The install/boot split measured for this session (`rubric-v1.3`, SOP
+    /// 25), echoed from [`Observations::timing`] so every renderer can show the
+    /// timing line without needing the original [`CheckInput`].
+    pub timing: crate::boot::Timing,
     /// Tool-poisoning / prompt-injection findings (see [`crate::injection`],
     /// `rubric-v1.3`), stably sorted. Tagged [`Dimension::Injection`], **never**
     /// scored into the composite, and every one of them
@@ -1377,11 +1381,22 @@ pub fn evaluate(input: &CheckInput, percentiles: Option<&Percentiles>) -> Report
     // own framing must not read "A", however clean the rest of it is. Same
     // treatment as the context cap — a continuous ramp, a pinned finding, and an
     // explicit line in every renderer.
+    //
+    // The finding's message is deliberately *shorter* than `cap.explanation`: it
+    // states the ceiling and what it cost, but not the cause. The cause is
+    // already a HIGH finding of its own, sitting directly beneath this one in
+    // the same ranked list, and repeating it verbatim made the top of "Top
+    // fixes" read as the same sentence twice. `cap.explanation` — which does
+    // name the cause — is what the dedicated cap line and the JSON carry.
     let protocol_cap = protocol_compliance_cap(&protocol, uncapped).inspect(|cap| {
         protocol.findings.push(Finding {
             dimension: Dimension::Protocol,
             severity: Severity::High,
-            message: cap.explanation.clone(),
+            message: format!(
+                "composite capped at {:.0} by protocol compliance — this server would \
+                 otherwise score {:.0}",
+                cap.cap, cap.uncapped
+            ),
             fix: "fix the high-severity protocol defect above. Until the server frames its \
                   own messages correctly, the remaining dimensions describe a server clients \
                   cannot talk to"
@@ -1434,6 +1449,7 @@ pub fn evaluate(input: &CheckInput, percentiles: Option<&Percentiles>) -> Report
         rubric_version: RUBRIC_VERSION,
         tool_count: input.tools.len(),
         per_tool_tokens: costs.per_tool.clone(),
+        timing: input.observations.timing.clone(),
         advisor,
         injection,
     }
@@ -2785,7 +2801,10 @@ fn score_robustness(input: &CheckInput) -> DimensionScore {
             ROBUST_BOOT_SLOW_SCORE
         };
         subscores.push(sub);
-        parts.push(obs.timing.line());
+        // Just the graded half here: the full install/boot split has its own
+        // line in every renderer, and repeating it inside the robustness
+        // summary would imply install was scored too.
+        parts.push(format!("boot {ms}ms"));
         if sub < 100.0 {
             findings.push(Finding {
                 dimension: Dimension::Robustness,
