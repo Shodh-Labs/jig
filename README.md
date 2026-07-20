@@ -47,6 +47,11 @@ before the first prompt**, selection accuracy collapsing past ~30 tools, and rou
 Today almost everyone tests by poking a chat client and eyeballing it. A grade with
 ranked fixes replaces the eyeball.
 
+**Want the standards behind the grade?** The
+[MCP Server Design & Deployment SOPs](docs/sop/mcp-server-design-and-deployment.md)
+— 33 numbered, evidence-cited rules, each with the exact jig command that verifies
+it (and an honest label where none can yet).
+
 > *A jig holds the workpiece and guides the tool, so every cut is repeatable.
 > Your MCP server is the workpiece. The model is the tool.*
 
