@@ -1,6 +1,6 @@
 {
   "name": "@shodh/jig",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A testing workbench for MCP (Model Context Protocol) servers — inspect, call, budget, and bench MCP servers from the command line.",
   "bin": {
     "jig": "bin/jig.js"
