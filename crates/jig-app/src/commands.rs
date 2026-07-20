@@ -13,7 +13,7 @@ use crate::dto;
 use crate::session::{self, ConnectOptions, Target};
 use crate::wire;
 use jig_core::check::{evaluate, CheckInput, Observations, PollutionSite};
-use jig_core::{Client, JigError, ProtocolTap, Tool};
+use jig_core::{BootTiming, StartupVerdict, Client, JigError, ProtocolTap, Tool};
 use serde::Serialize;
 use serde_json::Value;
 use std::time::Instant;
@@ -282,6 +282,11 @@ pub async fn run_check(state: tauri::State<'_, AppState>) -> Result<dto::ReportD
             // unobserved rather than assumed, as in the CLI.
             stderr_noise_bytes: None,
             unknown_method,
+            // The workbench connects directly and does not pre-warm an npx
+            // cache, so neither startup grading nor an install/boot split is
+            // observed here — left unobserved rather than assumed.
+            startup: StartupVerdict::NotObserved,
+            timing: BootTiming::default(),
         },
     };
 

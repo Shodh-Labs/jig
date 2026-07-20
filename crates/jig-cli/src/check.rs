@@ -19,8 +19,8 @@ use std::time::Instant;
 
 use jig_core::check::{ContextProvenance, DimensionScore, Finding, Severity};
 use jig_core::{
-    self, badge_color, evaluate, CheckInput, CheckReport, JigError, Observations, Percentiles,
-    PollutionSite, ProtocolTap,
+    self, badge_color, evaluate, grade_startup, BootTiming, CheckInput, CheckReport, JigError,
+    Observations, Percentiles, PollutionSite, ProtocolTap, StartupVerdict,
 };
 use serde_json::{json, Value};
 
@@ -43,6 +43,7 @@ pub async fn run(
     tap_path: Option<&Path>,
     timeout_secs: u64,
     max_message_bytes: u64,
+    no_prewarm: bool,
 ) -> Result<ExitCode, String> {
     // Load the ecosystem dataset. With no --percentiles the bundled census is
     // used; `--percentiles none` opts out; an explicit missing file is an error.
@@ -60,6 +61,7 @@ pub async fn run(
         no_report,
         timeout_secs,
         max_message_bytes,
+        no_prewarm,
     )
     .await;
 
@@ -185,7 +187,20 @@ pub(crate) async fn observe_and_evaluate(
     percentiles: Option<&Percentiles>,
     timeout_secs: u64,
     max_message_bytes: u64,
+    no_prewarm: bool,
 ) -> Result<CheckReport, String> {
+    // SOP 25: populate the npx cache *before* timing the launch, so the boot
+    // number is the server's and not the registry's. Non-npx commands and
+    // `--no-prewarm` skip straight through. See [`jig_core::boot`].
+    let install = match target {
+        Target::Stdio { program, args, .. } if !no_prewarm => {
+            crate::startup::prewarm(program, args).await
+        }
+        _ => None,
+    };
+
+    // Boot is launch -> `initialize` response, with the cache already warm.
+    let boot_start = Instant::now();
     let client = match target
         .connect(tap.clone(), timeout_secs, max_message_bytes)
         .await
@@ -193,8 +208,43 @@ pub(crate) async fn observe_and_evaluate(
         Ok(client) => client,
         // A stdio server that dies before/during the handshake is a startup
         // failure. Add one line of ecosystem cohort context when the dataset
-        // carries it (silent otherwise) — our strongest census signal.
-        Err(e) => return Err(startup_failure_message(target, e, percentiles)),
+        // carries it, and — SOP 26 — re-launch once to grade *how* it failed,
+        // because "names the missing variable" and "hangs forever" are wildly
+        // different products that this message previously rendered identically.
+        Err(e) => {
+            let base = startup_failure_message(target, e, percentiles);
+            return Err(match target {
+                Target::Stdio { program, args, env } => {
+                    match crate::startup::probe_credential_failure(program, args, env).await {
+                        Some(observation) => {
+                            let verdict = grade_startup(&observation);
+                            match verdict.finding() {
+                                Some(f) => format!(
+                                    "{base}
+  {}
+  → {}",
+                                    verdict.line(),
+                                    f.fix
+                                ),
+                                None => format!(
+                                    "{base}
+  {}",
+                                    verdict.line()
+                                ),
+                            }
+                        }
+                        None => base,
+                    }
+                }
+                Target::Http { .. } => base,
+            });
+        }
+    };
+    let boot = Some(boot_start.elapsed());
+    let timing = BootTiming {
+        install,
+        boot,
+        prewarm_skipped: no_prewarm && matches!(target, Target::Stdio { .. }),
     };
 
     // The one session: time the list operation, then read the surface. A list
@@ -246,6 +296,10 @@ pub(crate) async fn observe_and_evaluate(
             // unobserved rather than assumed.
             stderr_noise_bytes: None,
             unknown_method,
+            // The server started, so there is no credential failure to grade
+            // (SOP 26 applies only to the failure path above).
+            startup: StartupVerdict::NotObserved,
+            timing,
         },
     };
 
@@ -264,9 +318,11 @@ async fn run_inner(
     no_report: bool,
     timeout_secs: u64,
     max_message_bytes: u64,
+    no_prewarm: bool,
 ) -> Result<ExitCode, String> {
     let report =
-        observe_and_evaluate(target, &tap, percentiles, timeout_secs, max_message_bytes).await?;
+        observe_and_evaluate(target, &tap, percentiles, timeout_secs, max_message_bytes, no_prewarm)
+            .await?;
 
     if badge {
         emit_line(&render_badge(&report));
@@ -370,6 +426,28 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
         ));
     }
 
+    // The protocol-compliance ceiling (rubric-v1.3), on the same terms: a
+    // bounded composite always states the ceiling and the defect that caused it.
+    if let Some(cap) = &report.protocol_cap {
+        s.push_str(&format!(
+            "  ⓘ  {} (would have scored {})\n\n",
+            cap.explanation,
+            cap.uncapped.round() as i64
+        ));
+    }
+
+    // The install/boot split (rubric-v1.3, SOP 25). Shown whenever a boot time
+    // was measured, so the number that *is* graded is never confused with the
+    // cold-start figure that is not.
+    if report.timing.boot.is_some() {
+        s.push_str(&format!(
+            "  {}
+
+",
+            report.timing.line()
+        ));
+    }
+
     // Per-dimension lines, in rubric order.
     let label_width = report
         .dimensions
@@ -384,6 +462,15 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
     // Tool-set advisor: emergent, cross-tool problems the per-tool dimensions
     // can't see. Rendered only when it has something to say.
     if let Some(section) = crate::advisor_view::render_section(&report.advisor) {
+        s.push('\n');
+        s.push_str(&section);
+    }
+
+    // Tool poisoning / prompt injection (rubric-v1.3). Unscored, but rendered
+    // above "Top fixes" because it is a trust finding, not a quality one.
+    if let Some(section) =
+        crate::advisor_view::render_titled_section("Tool poisoning (unscored)", &report.injection)
+    {
         s.push('\n');
         s.push_str(&section);
     }
@@ -514,8 +601,27 @@ pub(crate) fn render_json(report: &CheckReport) -> String {
             "contextScore": round2(c.context_score),
             "explanation": c.explanation,
         })),
+        // Present (non-null) only when a HIGH-severity protocol defect actually
+        // bounded the composite - see `rubric-v1.3`.
+        "protocolCap": report.protocol_cap.as_ref().map(|c| json!({
+            "cap": c.cap,
+            "uncapped": round2(c.uncapped),
+            "highPoints": round2(c.high_points),
+            "protocolScore": round2(c.protocol_score),
+            "explanation": c.explanation,
+        })),
+        // The install/boot split (`rubric-v1.3`, SOP 25). `install` is null
+        // when there was nothing to pre-warm; only `boot` is scored.
+        "timing": {
+            "installSeconds": report.timing.install.map(|d| round2(d.as_secs_f64())),
+            "bootSeconds": report.timing.boot.map(|d| round2(d.as_secs_f64())),
+            "prewarmSkipped": report.timing.prewarm_skipped,
+            "scored": "boot",
+        },
         "dimensions": dimensions,
         "advisor": report.advisor.iter().map(finding_json).collect::<Vec<_>>(),
+        // Tool-poisoning findings (`rubric-v1.3`). Reported, never scored.
+        "injection": report.injection.iter().map(finding_json).collect::<Vec<_>>(),
         "topFixes": top_fixes,
     });
     format!(

@@ -245,6 +245,7 @@ pub(crate) fn render(report: &CheckReport, meta: &ReportMeta) -> String {
     render_hero(&mut s, report, composite, g);
     render_callouts(&mut s, report);
     render_chart(&mut s, report);
+    render_injection(&mut s, report);
     render_advisor(&mut s, report);
     render_top_fixes(&mut s, report);
     render_footer(&mut s, report, meta);
@@ -294,6 +295,22 @@ fn render_hero(s: &mut String, report: &CheckReport, composite: u32, g: char) {
             "      <div class=\"capnote\">{} — would have scored {}</div>\n",
             html_escape(&cap.explanation),
             cap.uncapped.round() as i64
+        ));
+    }
+    // The protocol-compliance ceiling (rubric-v1.3), on the same terms.
+    if let Some(cap) = &report.protocol_cap {
+        s.push_str(&format!(
+            "      <div class=\"capnote\">{} \u{2014} would have scored {}</div>\n",
+            html_escape(&cap.explanation),
+            cap.uncapped.round() as i64
+        ));
+    }
+    // The install/boot split (rubric-v1.3, SOP 25): only boot is graded, so the
+    // shareable card must not let the two be confused.
+    if report.timing.boot.is_some() {
+        s.push_str(&format!(
+            "      <div class=\"sub\">{} \u{b7} only boot is scored</div>\n",
+            html_escape(&report.timing.line())
         ));
     }
     s.push_str("    </div>\n    <div class=\"dims\">\n");
@@ -480,6 +497,31 @@ fn median_tokens(per_tool: &[(String, usize)]) -> usize {
     } else {
         (v[mid - 1] + v[mid]) / 2
     }
+}
+
+/// The tool-poisoning section (`rubric-v1.3`, SOP 12). Rendered *above* the
+/// advisor because it is a trust finding rather than a quality one: a reader
+/// scanning the shared card must meet "this description tells the model to hide
+/// its actions from you" before "you have 61 tools".
+fn render_injection(s: &mut String, report: &CheckReport) {
+    if report.injection.is_empty() {
+        return;
+    }
+    s.push_str("  <section>\n");
+    s.push_str(&format!(
+        "    <h2>Tool poisoning \u{2014} prompt-injection findings ({})</h2>\n",
+        report.injection.len()
+    ));
+    s.push_str(
+        "    <p class=\"cap\">Deterministic detectors for adversarial content in tool metadata \
+         (MCPTox, arXiv:2508.14925). Reported, not scored into the grade \u{2014} but a poisoned \
+         description is the most important thing on this page.</p>\n",
+    );
+    s.push_str("    <div class=\"panel flist\">\n");
+    for f in &report.injection {
+        render_finding_row(s, f);
+    }
+    s.push_str("    </div>\n  </section>\n");
 }
 
 fn render_advisor(s: &mut String, report: &CheckReport) {

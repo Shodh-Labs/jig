@@ -62,6 +62,7 @@ mod render;
 mod report;
 mod serve;
 mod servers;
+mod startup;
 
 /// Write `s` to stdout, flushing, in a broken-pipe-safe way.
 ///
@@ -185,6 +186,12 @@ enum Command {
         /// Maximum size in bytes of a single inbound message (0 = no cap).
         #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
         max_message_bytes: u64,
+        /// Skip the npx pre-warm pass that separates install time from server
+        /// boot time (SOP 25). Use offline or air-gapped, or when the package
+        /// cache is known to be warm; install is then reported as `skipped`
+        /// and boot still scored.
+        #[arg(long)]
+        no_prewarm: bool,
     },
     /// Probe and grade a remote server's discoverable OAuth conformance
     /// (RFC 9728 / 8414 / 7591 / 8707 / 9207 / 6750), or — with `--login` —
@@ -780,6 +787,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             tap,
             timeout,
             max_message_bytes,
+            no_prewarm,
         } => {
             let target = Target::resolve(stdio, http, server, header)?;
             check::run(
@@ -793,6 +801,7 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 tap.as_deref(),
                 timeout,
                 max_message_bytes,
+                no_prewarm,
             )
             .await
         }

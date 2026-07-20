@@ -507,13 +507,22 @@ impl Transport {
 /// absolute/relative, or already carrying an extension, is returned untouched.
 /// If nothing matches we return the original so the caller still gets the
 /// familiar "program not found" spawn error.
+///
+/// Public because the `rubric-v1.3` pre-warm pass (SOP 25) spawns `npx` itself,
+/// outside the transport, and must resolve it identically — a pre-warm that
+/// silently failed to find `npx.cmd` would report `install n/a` and fold the
+/// whole download back into the boot number it exists to separate.
 #[cfg(not(windows))]
-fn resolve_program(program: &str) -> std::path::PathBuf {
+pub fn resolve_program(program: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(program)
 }
 
+/// Resolve a program name to a path `CreateProcess` will find, walking `PATH`
+/// with each `PATHEXT` extension. See the non-Windows definition above for the
+/// full rationale — on this platform the function is emphatically not the
+/// identity, and `npx` is the motivating case.
 #[cfg(windows)]
-fn resolve_program(program: &str) -> std::path::PathBuf {
+pub fn resolve_program(program: &str) -> std::path::PathBuf {
     use std::path::{Path, PathBuf};
 
     let as_path = Path::new(program);

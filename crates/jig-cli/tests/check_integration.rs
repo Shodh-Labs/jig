@@ -83,27 +83,53 @@ fn stdout(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
+/// The process's stderr as text. The `rubric-v1.3` credential-UX verdicts are
+/// emitted on the error path, so they land here rather than on stdout.
+fn stderr(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
 /// Redact machine-dependent latency so the human report is snapshot-stable.
+///
+/// Two shapes are machine-dependent: `<n>ms` (list latency, and the boot
+/// sub-score line) and `<n.n>s` — the install/boot split added in
+/// `rubric-v1.3`, whose seconds figure depends on process-spawn speed.
 fn redact_latency(s: &str) -> String {
-    // Replace "<n>ms" with "<ms>".
+    // Replace "<n>ms" with "<ms>" and "<n.n>s" with "<s>".
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        // Look for a run of ASCII digits followed by "ms".
+        // Look for a run of ASCII digits (optionally with one decimal point)
+        // followed by "ms" or "s".
         if bytes[i].is_ascii_digit() {
             let start = i;
             while i < bytes.len() && bytes[i].is_ascii_digit() {
                 i += 1;
             }
+            let mut decimal_end = i;
+            if i < bytes.len() && bytes[i] == b'.' {
+                let mut j = i + 1;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j > i + 1 {
+                    decimal_end = j;
+                }
+            }
             if s[i..].starts_with("ms") {
                 out.push_str("<ms>");
                 i += 2; // skip "ms"
                 continue;
-            } else {
-                out.push_str(&s[start..i]);
+            }
+            // A decimal-seconds figure, e.g. "0.5s" in the install/boot line.
+            if decimal_end > i && s[decimal_end..].starts_with('s') {
+                out.push_str("<s>");
+                i = decimal_end + 1;
                 continue;
             }
+            out.push_str(&s[start..i]);
+            continue;
         }
         let ch = s[i..].chars().next().unwrap();
         out.push(ch);
@@ -194,7 +220,7 @@ fn json_output_has_dimensions_weights_and_rubric_version() {
     let out = run_check("", &["--json"]);
     assert!(out.status.success());
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON report");
-    assert_eq!(v["rubricVersion"], "rubric-v1.2");
+    assert_eq!(v["rubricVersion"], "rubric-v1.3");
     // The bundled census now engages by default (M7 #4), so context cost is
     // scored against the ecosystem and labelled bundled.
     assert_eq!(v["contextCost"]["provenance"]["type"], "percentile");
@@ -311,6 +337,216 @@ fn json_mode_with_report_flag_writes_file_and_keeps_json_clean() {
     // The announcement goes to stderr, so stdout is still parseable JSON.
     let v: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("stdout stays valid JSON");
-    assert_eq!(v["rubricVersion"], "rubric-v1.2");
+    assert_eq!(v["rubricVersion"], "rubric-v1.3");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// rubric-v1.3: tool poisoning (SOP 12)
+// ---------------------------------------------------------------------------
+
+/// The `--poisoned` fixture carries one instance of every shape the lint
+/// detects. End-to-end over a real handshake, all five must surface.
+#[test]
+fn poisoned_tool_set_is_detected_end_to_end() {
+    let out = run_check("--poisoned", &["--json", "--no-prewarm"]);
+    assert!(out.status.success(), "a poisoned server still scores");
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON report");
+    let findings = v["injection"].as_array().expect("injection array");
+    let text = serde_json::to_string(findings).expect("serializable");
+
+    for shape in [
+        "ignore all previous instructions", // model-directed imperative
+        "role/instruction tags",            // fake conversation turn
+        "zero-width",                       // hidden characters
+        "bidirectional",                    // Trojan Source
+        "outbound-transfer verb",           // exfiltration shape
+        "readOnlyHint",                     // annotation contradiction
+        "named as a read",                  // name/behaviour mismatch
+    ] {
+        assert!(text.contains(shape), "missing detection: {shape}\n{text}");
+    }
+
+    // Every one of them cites its evidence and carries a fix.
+    for f in findings {
+        assert_eq!(f["dimension"], "injection");
+        assert!(!f["fix"].as_str().expect("fix").is_empty());
+        assert_eq!(f["points"], 0.0, "injection findings never score");
+    }
+}
+
+/// Reported, never scored: the poisoned server's grade is driven entirely by the
+/// five rubric dimensions. This is the guarantee that lets the lint ship in
+/// report-only posture without silently re-grading the ecosystem.
+#[test]
+fn poisoning_does_not_move_the_grade() {
+    let out = run_check("--poisoned", &["--json", "--no-prewarm"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
+    assert!(!v["injection"].as_array().expect("array").is_empty());
+    assert_eq!(v["protocolCap"], serde_json::Value::Null);
+    // Protocol is clean, so the composite is a plain weighted mean and the
+    // server still grades well despite being flagrantly poisoned.
+    assert_eq!(v["dimensions"][0]["score"], 100);
+}
+
+/// A clean server produces an empty injection list — the false-positive bar,
+/// enforced end-to-end rather than only in the unit corpus.
+#[test]
+fn a_clean_server_reports_no_poisoning() {
+    let out = run_check("", &["--json", "--no-prewarm"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
+    assert!(v["injection"].as_array().expect("array").is_empty());
+}
+
+/// The poisoning section is visible in the human report and reaches "Top fixes"
+/// — pinned, so a large tool surface can never bury it.
+#[test]
+fn poisoning_surfaces_in_the_human_report_and_top_fixes() {
+    let out = run_check("--poisoned", &["--no-report", "--no-prewarm"]);
+    let text = stdout(&out);
+    assert!(text.contains("Tool poisoning (unscored)"), "{text}");
+    let top = text.split("Top fixes").nth(1).expect("a Top fixes section");
+    assert!(
+        top.contains("[injection]"),
+        "not pinned into Top fixes:\n{top}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// rubric-v1.3: credential-failure UX (SOP 26)
+// ---------------------------------------------------------------------------
+
+/// The four rows of the verdict matrix, end-to-end against a real process that
+/// really fails in each shape.
+#[test]
+fn credential_failure_modes_are_graded() {
+    // (mock flag, expected verdict fragment, expected fix fragment)
+    let cases: &[(&str, &str, &str)] = &[
+        ("names-var", "credential UX: PASS", "no action needed"),
+        (
+            "no-var",
+            "named no environment variable",
+            "name the missing environment variable",
+        ),
+        (
+            "exits-zero",
+            "exited 0 after failing to start",
+            "exit with a non-zero status",
+        ),
+    ];
+    for (mode, verdict, fix) in cases {
+        let out = run_check(
+            &format!("--credential-failure {mode}"),
+            &["--no-report", "--no-prewarm", "--timeout", "5"],
+        );
+        assert!(!out.status.success(), "{mode} must still fail the check");
+        let err = stderr(&out);
+        assert!(err.contains(verdict), "{mode}: missing verdict in:\n{err}");
+        assert!(err.contains(fix), "{mode}: missing fix in:\n{err}");
+        // Every penalizing verdict cites the SOP it comes from.
+        if *mode != "names-var" {
+            assert!(err.contains("SOP 26"), "{mode}: uncited:\n{err}");
+        }
+    }
+}
+
+/// The PASS case names the variable it read out of the child's stderr, so the
+/// user is told exactly which key to set.
+#[test]
+fn a_passing_credential_failure_names_the_variable() {
+    let out = run_check(
+        "--credential-failure names-var",
+        &["--no-report", "--no-prewarm", "--timeout", "5"],
+    );
+    let err = stderr(&out);
+    assert!(err.contains("MOCK_API_KEY"), "variable not named:\n{err}");
+}
+
+/// A server that hangs on a missing credential is graded HIGH rather than
+/// merely timing out — the census's 2 hanging servers were previously
+/// indistinguishable from any other startup failure.
+#[test]
+fn a_hanging_server_is_graded_as_a_hang() {
+    let out = run_check(
+        "--credential-failure hangs",
+        &["--no-report", "--no-prewarm", "--timeout", "3"],
+    );
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("credential UX: HUNG"), "{err}");
+    assert!(err.contains("never block on a missing credential"), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// rubric-v1.3: install-vs-boot timing (SOP 25)
+// ---------------------------------------------------------------------------
+
+/// A non-`npx` command has nothing to install, so install is reported as `n/a`
+/// and boot carries the whole launch. Only boot is ever scored.
+#[test]
+fn a_non_npx_command_reports_install_as_not_applicable() {
+    let out = run_check("", &["--json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
+    assert_eq!(v["timing"]["installSeconds"], serde_json::Value::Null);
+    assert_eq!(v["timing"]["scored"], "boot");
+    assert!(
+        v["timing"]["bootSeconds"].as_f64().expect("boot measured") >= 0.0,
+        "boot must be measured for a server that started"
+    );
+    assert_eq!(v["timing"]["prewarmSkipped"], false);
+}
+
+/// `--no-prewarm` is recorded, so "we did not look" is never rendered as
+/// "there was nothing to look at".
+#[test]
+fn no_prewarm_is_recorded_distinctly() {
+    let out = run_check("", &["--json", "--no-prewarm"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
+    assert_eq!(v["timing"]["prewarmSkipped"], true);
+    assert_eq!(v["timing"]["installSeconds"], serde_json::Value::Null);
+}
+
+/// The human report states the split on its own line, so the graded number
+/// (boot) can never be confused with the cold-start figure that is not graded.
+#[test]
+fn the_human_report_states_the_install_boot_split() {
+    let out = run_check("", &["--no-report", "--no-prewarm"]);
+    let text = stdout(&out);
+    assert!(text.contains("install skipped"), "{text}");
+    assert!(text.contains("boot "), "{text}");
+}
+
+// ---------------------------------------------------------------------------
+// rubric-v1.3: the protocol-compliance ceiling
+// ---------------------------------------------------------------------------
+
+/// A server that pollutes stdout breaks its own framing, and must not read "A"
+/// however clean the rest of it is. End-to-end over the real pollution fixture.
+#[test]
+fn stdout_pollution_ceilings_the_composite() {
+    let out = run_check("--pollute-stdout", &["--json", "--no-prewarm"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
+    let cap = &v["protocolCap"];
+    assert!(
+        !cap.is_null(),
+        "the ceiling must bind on a polluting server"
+    );
+    assert_eq!(cap["cap"], 85.0);
+    assert_eq!(cap["highPoints"], 15.0);
+    // The report states the ceiling *and* its cause.
+    let explanation = cap["explanation"].as_str().expect("explanation");
+    assert!(explanation.contains("capped at 85"), "{explanation}");
+    assert!(explanation.contains("non-protocol line"), "{explanation}");
+    // And the composite really was lowered to it.
+    assert!(v["composite"].as_f64().expect("composite") <= 85.0);
+    assert_eq!(v["grade"], "B");
+}
+
+/// A clean server never sees the ceiling — the ramp is inert where the
+/// overwhelming majority of servers sit.
+#[test]
+fn a_clean_server_has_no_protocol_ceiling() {
+    let out = run_check("", &["--json", "--no-prewarm"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
+    assert_eq!(v["protocolCap"], serde_json::Value::Null);
 }

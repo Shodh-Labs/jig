@@ -509,3 +509,228 @@ fn arb_tools() -> impl Strategy<Value = Vec<Tool>> {
         });
     prop::collection::vec(one, 0..10)
 }
+
+// ---------------------------------------------------------------------------
+// rubric-v1.3 laws: the injection scanner, and ceiling monotonicity
+// ---------------------------------------------------------------------------
+
+proptest! {
+    // ---- Totality: the injection scanner ----------------------------------
+
+    /// The tool-poisoning lint is **total**. It is fed adversarial text by
+    /// definition — a hostile server chooses every byte of these strings — so
+    /// "never panics on arbitrary input" is a security property here, not
+    /// merely hygiene. Arbitrary names, descriptions and schemas (including
+    /// lone surrogates' worth of awkward Unicode, unbalanced tags, and strings
+    /// made entirely of zero-width characters) must yield findings or nothing,
+    /// never an unwind and never a slice on a non-char boundary.
+    #[test]
+    fn injection_scan_is_total(tools in arb_tools()) {
+        let findings = jig_core::scan_injection(&tools);
+        for f in &findings {
+            // The contract every injection finding carries.
+            prop_assert!(f.pinned, "injection findings must be pinned");
+            prop_assert_eq!(f.points, 0.0, "injection findings must never score");
+            prop_assert!(!f.fix.is_empty(), "every finding carries a fix");
+            prop_assert!(!f.message.is_empty());
+        }
+    }
+
+    /// The scanner is **deterministic**: the same tool set always yields
+    /// byte-identical findings in the same order. Snapshot tests and CI diffing
+    /// both depend on this.
+    #[test]
+    fn injection_scan_is_deterministic(tools in arb_tools()) {
+        let a = jig_core::scan_injection(&tools);
+        let b = jig_core::scan_injection(&tools);
+        prop_assert_eq!(
+            a.iter().map(|f| f.message.clone()).collect::<Vec<_>>(),
+            b.iter().map(|f| f.message.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    /// Injection findings **never move the composite**. Whatever the scanner
+    /// says about a tool set, the graded score is the weighted mean of the five
+    /// scored dimensions and nothing else — the guarantee that lets the lint
+    /// ship in report-only posture.
+    #[test]
+    fn injection_never_moves_the_composite(tools in arb_tools()) {
+        let input = CheckInput {
+            server_name: "s".to_string(),
+            server_version: "1".to_string(),
+            protocol_version: "2025-06-18".to_string(),
+            capabilities: json!({ "tools": {} }),
+            instructions: None,
+            tools,
+            observations: Observations::default(),
+        };
+        let report = evaluate(&input, None);
+        // No injection finding is attached to a scored dimension.
+        prop_assert!(report
+            .dimensions
+            .iter()
+            .flat_map(|d| d.findings.iter())
+            .all(|f| f.dimension != jig_core::Dimension::Injection));
+    }
+
+    // ---- Monotonicity: the protocol-compliance ceiling ---------------------
+
+    /// **The ceiling is monotone non-increasing in the defect it prices.** A
+    /// server can never gain grade by breaking its framing *more*. This is the
+    /// same law `rubric-v1.2` established for the context cap, and the reason
+    /// the ramp reads a continuous deduction total rather than a count of
+    /// findings.
+    ///
+    /// Exercised end-to-end through `evaluate` rather than on the private ramp,
+    /// so it pins the behaviour users actually see: adding polluting lines to
+    /// an otherwise fixed server never raises the composite.
+    #[test]
+    fn protocol_ceiling_is_monotone_in_pollution(
+        extra in 0usize..6,
+        latency_ms in 0u64..5_000,
+        clean_shutdown in any::<bool>(),
+    ) {
+        let make = |pollution: usize| {
+            let input = CheckInput {
+                server_name: "s".to_string(),
+                server_version: "1".to_string(),
+                protocol_version: "2025-06-18".to_string(),
+                capabilities: json!({ "tools": {} }),
+                instructions: None,
+                tools: Vec::new(),
+                observations: Observations {
+                    pollution_lines: pollution,
+                    list_latency: Some(Duration::from_millis(latency_ms)),
+                    clean_shutdown,
+                    ..Default::default()
+                },
+            };
+            evaluate(&input, None).composite
+        };
+        let fewer = make(extra);
+        let more = make(extra + 1);
+        prop_assert!(
+            more <= fewer + 1e-9,
+            "more pollution raised the composite: {extra} -> {} vs {} -> {}",
+            fewer,
+            extra + 1,
+            more
+        );
+    }
+
+    /// A reported ceiling is always **binding and honest**: the composite never
+    /// exceeds a stated cap, and a cap is only ever recorded when it actually
+    /// lowered the score. A `ProtocolCap` on a report that changed nothing would
+    /// be a lie in the most-read line of the output.
+    #[test]
+    fn a_reported_ceiling_always_bound(
+        pollution in 0usize..5,
+        offspec in any::<bool>(),
+        list_timed_out in any::<bool>(),
+        instruction_len in 0usize..4_000,
+    ) {
+        let input = CheckInput {
+            server_name: "s".to_string(),
+            server_version: "1".to_string(),
+            protocol_version: "2025-06-18".to_string(),
+            capabilities: if offspec {
+                json!({ "tools": {}, "tasks": {} })
+            } else {
+                json!({ "tools": {} })
+            },
+            instructions: Some("lorem ipsum ".repeat(instruction_len)),
+            tools: Vec::new(),
+            observations: Observations {
+                pollution_lines: pollution,
+                list_timed_out,
+                list_latency: Some(Duration::from_millis(10)),
+                clean_shutdown: true,
+                ..Default::default()
+            },
+        };
+        let report = evaluate(&input, None);
+        if let Some(cap) = &report.protocol_cap {
+            prop_assert!(report.composite <= cap.cap + 1e-9);
+            prop_assert!(cap.uncapped > cap.cap, "a recorded cap must have bound");
+            prop_assert!(cap.high_points > 0.0, "capped without a HIGH defect");
+            prop_assert!(cap.cap >= 55.0 && cap.cap < 100.0);
+            prop_assert!(cap.explanation.contains("capped at"));
+        }
+        if let Some(cap) = &report.context_cap {
+            prop_assert!(report.composite <= cap.cap + 1e-9);
+            prop_assert!(cap.uncapped > cap.cap);
+        }
+        // The composite stays in range whatever the caps did.
+        prop_assert!((0.0..=100.0).contains(&report.composite));
+    }
+
+    // ---- Totality: credential-failure grading ------------------------------
+
+    /// Startup grading is **total** over arbitrary stderr. The bytes come from a
+    /// process that has just crashed, so they are exactly the input least likely
+    /// to be well-formed: partial UTF-8 already lossily decoded, ANSI escapes,
+    /// stack traces, or nothing at all.
+    #[test]
+    fn startup_grading_is_total(
+        exit_code in proptest::option::of(-4i32..4),
+        hung in any::<bool>(),
+        stderr in prop::collection::vec(".{0,120}", 0..8),
+    ) {
+        let obs = jig_core::StartupObservation { exit_code, hung, stderr };
+        let verdict = jig_core::grade_startup(&obs);
+        // The verdict agrees with the observation on the two unambiguous cases.
+        if hung {
+            prop_assert_eq!(&verdict, &jig_core::StartupVerdict::Hung);
+        }
+        if !hung && exit_code == Some(0) {
+            prop_assert_eq!(&verdict, &jig_core::StartupVerdict::ExitedZero);
+        }
+        prop_assert!(!verdict.line().is_empty());
+        prop_assert!(!verdict.tag().is_empty());
+        // A sub-score, when present, is a legal score.
+        if let Some(s) = verdict.subscore() {
+            prop_assert!((0.0..=100.0).contains(&s));
+        }
+    }
+
+    /// Any variable the extractor names is genuinely present in the stderr it
+    /// read, and has the `[A-Z][A-Z0-9_]{2,}` shape the rule documents. The
+    /// fix text quotes this string back to the user, so inventing one would be
+    /// worse than finding none.
+    #[test]
+    fn a_named_variable_is_always_present_and_well_formed(
+        stderr in prop::collection::vec(".{0,120}", 0..8),
+    ) {
+        if let Some(v) = jig_core::named_variable(&stderr) {
+            prop_assert!(v.chars().count() >= 3);
+            prop_assert!(v.starts_with(|c: char| c.is_ascii_uppercase()));
+            prop_assert!(v
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'));
+            prop_assert!(
+                stderr.iter().any(|line| line.contains(&v)),
+                "named a variable that appears nowhere: {v}"
+            );
+        }
+    }
+
+    // ---- Totality: npx package extraction ----------------------------------
+
+    /// Pre-warm parsing is total, and never claims a package it was not given.
+    /// A wrong package name would send jig to install something the user did not
+    /// ask for, so "present in the argv" is a safety property.
+    #[test]
+    fn npx_package_extraction_is_total(
+        program in "[a-z/\\\\.]{0,12}",
+        args in prop::collection::vec("[-a-zA-Z0-9_@/=.]{0,20}", 0..6),
+    ) {
+        if let Some(pkg) = jig_core::npx_package(&program, &args) {
+            prop_assert!(jig_core::is_npx(&program));
+            prop_assert!(!pkg.is_empty());
+            prop_assert!(
+                args.iter().any(|a| a.contains(&pkg)),
+                "invented a package not present in argv: {pkg}"
+            );
+        }
+    }
+}

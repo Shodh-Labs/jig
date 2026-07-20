@@ -1,0 +1,5 @@
+error: unexpected argument '--listen' found
+
+Usage: jig.exe inspect --http <URL>
+
+For more information, try '--help'.

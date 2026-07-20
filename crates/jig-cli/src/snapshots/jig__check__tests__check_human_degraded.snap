@@ -3,9 +3,11 @@ source: crates/jig-cli/src/check.rs
 expression: render_human(&report)
 ---
 jig check · jig-mock-server v0.1.0
-protocol 2025-06-18 · rubric-v1.2
+protocol 2025-06-18 · rubric-v1.3
 
-  ✓  91 / 100   grade A
+  ✓  85 / 100   grade B
+
+  ⓘ  composite capped at 85 by protocol compliance (15 points of high-severity protocol defects): 1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing (would have scored 91)
 
   ⚠  Protocol compliance   75   1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing (+1 more)
   ✓  Context cost          99   170 tokens (no ecosystem data — absolute bands)
@@ -14,12 +16,12 @@ protocol 2025-06-18 · rubric-v1.2
   ✓  Robustness           100   list 12ms, clean shutdown
 
 Top fixes
-  1. [protocol] 1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing
+  1. [protocol] composite capped at 85 by protocol compliance — this server would otherwise score 91
+     → fix the high-severity protocol defect above. Until the server frames its own messages correctly, the remaining dimensions describe a server clients cannot talk to
+  2. [protocol] 1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing
      → route all logging to stderr; the first polluting line is at byte offset 128: "[info] listening on :300…" (hex 5b 69 6e 66 6f 5d 20 6c 69 73 74 65 6e 69 6e 67 20 6f 6e 20 3a 33 30 30…) — stdout must carry only newline-delimited JSON-RPC
-  2. [protocol] capability `tasks` (first defined in revision 2025-11-25) not defined in the negotiated MCP revision 2025-06-18
+  3. [protocol] capability `tasks` (first defined in revision 2025-11-25) not defined in the negotiated MCP revision 2025-06-18
      → gate off-spec capabilities on the negotiated protocol version, or negotiate a revision that defines them
-  3. [schema_hygiene] `echo`: parameter `text` missing a type
-     → give every parameter of `echo` a JSON Schema `type` (or enum/$ref)
 
 Description quality is heuristic (deterministic, no LLM).
 Context cost scored with absolute bands (no ecosystem dataset available).

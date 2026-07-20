@@ -1,10 +1,11 @@
-//! Shared rendering for the **tool-set advisor** section.
+//! Shared rendering for the **unscored finding sections**: the tool-set advisor
+//! and, since `rubric-v1.3`, the tool-poisoning lint.
 //!
 //! Both `jig check` (always) and `jig budget --advise` surface the same
 //! deterministic advisories computed by [`jig_core::advisor`]. This module is
-//! the single place the finding list is turned into text, so the two commands
-//! can never drift on format — and neither re-implements the analysis: it lives
-//! entirely in the core `advisor` module.
+//! the single place such a finding list is turned into text, so the commands
+//! can never drift on format — and none re-implements the analysis: it lives
+//! entirely in the core `advisor` and `injection` modules.
 
 use jig_core::check::Finding;
 
@@ -13,10 +14,17 @@ use jig_core::check::Finding;
 /// over nothing). Findings arrive already stably sorted by the core analyzer, so
 /// this function neither sorts nor filters — it only formats.
 pub(crate) fn render_section(findings: &[Finding]) -> Option<String> {
+    render_titled_section("Advisor (tool-set)", findings)
+}
+
+/// Render an unscored finding section under an explicit title. Used directly by
+/// the `rubric-v1.3` tool-poisoning section, which has the same shape as the
+/// advisor but a different heading and a far more serious meaning.
+pub(crate) fn render_titled_section(title: &str, findings: &[Finding]) -> Option<String> {
     if findings.is_empty() {
         return None;
     }
-    let mut s = String::from("Advisor (tool-set)\n");
+    let mut s = format!("{title}\n");
     for f in findings {
         s.push_str(&format!("  [{}] {}\n", f.severity.tag(), f.message));
         s.push_str(&format!("    → {}\n", f.fix));

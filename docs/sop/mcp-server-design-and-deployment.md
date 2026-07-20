@@ -281,12 +281,35 @@ and the threat is now benchmarked (*MCPTox*,
 input to the model, even when *you* wrote it, because a downstream server in the same
 session may not have.
 
-**Verify.** **Not machine-checkable by jig.** jig grades description *quality and cost*,
-not adversarial *content* — it will not catch a hidden instruction. Use a dedicated MCP
-red-teamer such as [Promptfoo's MCP security testing](https://www.promptfoo.dev/docs/red-team/mcp-security-testing/)
+**Verify.** `jig check --stdio "<cmd>"` — the **Tool poisoning** section (and the
+`injection` array under `--json`). As of `rubric-v1.3` jig runs a deterministic,
+no-LLM lint over every tool name, description, and parameter description, with five
+detectors: **model-directed imperatives** (instruction override, concealment,
+invocation ordering, authority override — matched word-boundary from a documented
+phrase table plus a mechanical `stem × control-object` cross product, so "you must
+always **call**" fires and "you must always **provide** a valid API key" does not) —
+High; **fake conversation turns** (chat-template tokens like `<|im_start|>`, XML-ish
+role tags like `<system>`, or two or more distinct line-anchored role labels) — High;
+**hidden characters** (zero-width `U+200B`–`U+200D` / `U+FEFF`, bidi controls
+`U+202A`–`U+202E` and `U+2066`–`U+2069` — the Trojan Source class, CVE-2021-42574 —
+and non-ASCII homoglyphs in tool *names* specifically) — High; **exfiltration shape**
+(a URL within 120 characters of an outbound-transfer verb) — Medium, and worded as a
+smell rather than proof; and **name/behaviour mismatch** (a `read_*` / `get_*` /
+`list_*` name, or `readOnlyHint: true`, over a description carrying an un-negated
+mutation verb) — Medium. Findings are **reported, never scored** into the composite —
+the same posture as the tool-set advisor — but they are always **pinned**, so they
+cannot be buried beneath the scored findings in "Top fixes". Every finding cites
+MCPTox or the spec's trust guidance and carries a fix.
+
+**Honesty — partially machine-checkable.** The lint matches the *shape* the published
+attacks take, not intent. A semantic attack written in plain, well-formed English —
+no override phrasing, no fake turns, no hidden characters, no URL — passes it
+cleanly, and there is no threshold at which it would not. This is a lint, not a
+red-teamer. Keep running a dedicated one such as
+[Promptfoo's MCP security testing](https://www.promptfoo.dev/docs/red-team/mcp-security-testing/),
 and track the official
 [conformance suite](https://github.com/modelcontextprotocol/conformance)'s security
-scenarios (`dns-rebinding`, and the HTTP-security set) — all of which are explicitly
+scenarios (`dns-rebinding`, and the HTTP-security set) — those remain explicitly
 [outside jig's single-session observer scope](../conformance-alignment.md).
 
 **Citation.** Invariant Labs Tool Poisoning Attack; MCPTox (arXiv:2508.14925);
@@ -561,19 +584,46 @@ handshake, tool count, and token cost (with a printed consent notice + 2s abort 
 **Rule.** Keep the `npx` cold-start cost low. Avoid heavyweight dependency trees and
 **never** do network work in a `postinstall` hook.
 
-**Why.** The first connection pays the install-and-boot cost. Shodh Labs' own protocol tap
-measured an **8-second `npx` cold start** for `@modelcontextprotocol/server-everything`
-— time the user waits on every fresh invocation. High list latency compounds it (SOP 21).
+**Why.** The first connection pays two costs, and they are not the same cost. jig now
+measures them separately: **install** (populating the npm cache) and **boot** (launch to
+`initialize`). The **8-second `npx` cold start** previously quoted here for
+`@modelcontextprotocol/server-everything` conflated the two — it was overwhelmingly npm
+download time, not server startup. Measured apart:
 
-**Verify.** `jig check --stdio "npx -y <pkg>"` — Robustness (list latency); capture the
-full timeline with `--tap traffic.jsonl` and inspect where the seconds go.
+| Cache state | install | boot |
+|:------------|--------:|-----:|
+| cold (`_npx` deleted) | **12.5s** | 8.8s |
+| warm | 2.0s | 3.1s |
+| warm, repeat | 2.0s | 2.8s |
 
-**Honesty — partially machine-checkable.** jig measures *list latency* within a session; it
-does not yet isolate npm install time from server boot time as a separate metric. The 8s
-figure is a Shodh Labs tap measurement, not a census aggregate.
+The download alone, on a cold cache, is larger than the whole 8s that used to be
+quoted for both halves together. Two further facts the split exposes: boot is not
+constant for the same server (8.8s cold vs ~2.9s warm, on an already-downloaded
+package — that residual is npm's first-use resolution work), and most of even the
+warm boot is not your server. Timing the cached entrypoint directly with `node`,
+bypassing the `npx` shim, the same server answers `initialize` in **0.30s**.
 
-**Citation.** Shodh Labs workbench tap (README, "the 8-second npx cold start folded out of
-the way").
+Only **boot** is a property of *your server*; install belongs to the registry and the
+network, is paid once rather than per session, and is therefore reported but never graded.
+Only boot is scored, in Robustness. High list latency compounds it (SOP 21).
+
+**Verify.** `jig check --stdio "npx -y <pkg>"` — for `npx`-shaped commands jig runs a
+pre-warm pass that populates the cache *without starting the server*, then reports the
+split as `install 12.5s · boot 8.8s`, scoring boot alone. Non-`npx` commands report install
+as `n/a`; `--no-prewarm` skips the pre-warm entirely (offline, air-gapped, or a cache you
+know is warm) and reports install as `skipped`. Capture the full timeline with
+`--tap traffic.jsonl` to see where the seconds go.
+
+**Honesty.** Boot for an `npx` command still contains npm's own shim resolution and process
+launch — jig times the launch, not the server's first instruction — so the boot figure
+**over-estimates** true server boot, and by more than a rounding error: of the ~2.9s warm
+boot above, roughly 2.6s is npm and 0.3s is the server. jig does not subtract it, because
+the correction is not a constant and measuring it per-run would mean timing a null server
+through the same path every time. Read boot as an **upper bound**, which is the safe
+direction for a grade.
+
+**Citation.** Shodh Labs workbench tap; `crates/jig-core/src/boot.rs` (pre-warm pass and
+the install/boot split).
 
 ### SOP 26 — Document env vars and design the credential UX
 
@@ -586,11 +636,23 @@ only key names. Your server should be equally careful: read keys from the enviro
 only, and keep them out of logs, errors, and any rendered output.
 
 **Verify.** `jig servers` lists servers configured on the machine with env **values
-redacted**, so you can confirm what a client will pass without exposing it.
+redacted**, so you can confirm what a client will pass without exposing it. And as of
+`rubric-v1.3`, `jig check` and `jig info --probe` **grade the credential-failure UX**:
+when a stdio server fails to start, jig re-launches it once under observation, parses the
+child's stderr for a variable name (`[A-Z][A-Z0-9_]{2,}` in `KEY=value` form or on a line
+carrying a configuration cue), and prints the same verdict line from either command —
+
+| Observed failure | Verdict | Robustness sub-score |
+|:--|:--|--:|
+| Exits nonzero **and** names the variable | Pass — informational, no deduction | — |
+| Exits nonzero without naming it | Medium — *fail fast is right; say which variable* | 60 |
+| Hangs until timeout | High | 0 |
+| Exits **zero** on a failed start | High | 0 |
 
 **Honesty — partially machine-checkable.** jig can show *which* env keys a client is
-configured to pass; it cannot verify your *docs* list them, nor prove your server never
-logs a secret. That part is review, not measurement.
+configured to pass and grade *how* your server fails without them; it cannot verify your
+*docs* list those variables, nor prove your server never logs a secret. That part remains
+review, not measurement.
 
 **Citation.** README §"Discovery" (env redaction);
 [`docs/token-budget.md`](../token-budget.md) on key-handling discipline (mirrors what
@@ -778,7 +840,7 @@ marks rules jig cannot grade today — honest gaps, not oversights.
 | 9 | Tool count ≤30 comfort / 50 ceiling; split or Tool-Search | `jig check` (advisor · accuracy cliff) |
 | 10 | No tool >3× median cost; no top-3 majority | `jig budget --advise` / `jig check` |
 | 11 | Context budget ≤ median 1,679 tok; alarm past p90 14,401 | `jig budget --model gpt-4o` · `jig check` |
-| 12 | Descriptions are an attack surface — no hidden instructions | n/a (use Promptfoo / conformance suite) |
+| 12 | Descriptions are an attack surface — no hidden instructions | `jig check` (tool-poisoning lint · reported, not scored); semantic attacks are n/a (Promptfoo / conformance suite) |
 | 13 | stdout = only JSON-RPC; logs → stderr | `jig check` (protocol) · `jig inspect --tap` |
 | 14 | Advertise only negotiated-revision capabilities | `jig check` (protocol · off-spec) |
 | 15 | Back advertised capabilities with content | `jig inspect` (observed, not scored) |
@@ -791,8 +853,8 @@ marks rules jig cannot grade today — honest gaps, not oversights.
 | 22 | RFC 9728 metadata + proper 401 challenge (audience-bound) | `jig auth --http` |
 | 23 | PKCE `S256` mandatory; DCR + `iss` recommended | `jig auth --http` |
 | 24 | `npx`-runnable to handshake+list with no config | `jig info --probe` · `jig check` |
-| 25 | Budget cold start; small deps, no postinstall network | `jig check` (robustness) · `--tap`; install-time is n/a |
-| 26 | Document env vars; safe credential UX; never log secrets | `jig servers` (redacted); docs/logging are n/a |
+| 25 | Budget cold start; small deps, no postinstall network | `jig check` (robustness · `install X · boot Y`, boot scored, install reported) · `--tap` · `--no-prewarm` |
+| 26 | Document env vars; safe credential UX; never log secrets | `jig servers` (redacted) · `jig check` / `jig info --probe` (credential-failure UX graded); docs/logging are n/a |
 | 27 | stdio vs Streamable HTTP deliberately; plan sessions at scale | mostly n/a (jig follows session rules; scale is out of scope) |
 | 28 | Eval suites in git (`.jig/`); score by selection rate | `jig eval` · `jig bench --save-case` |
 | 29 | Gate CI on score **and** eval accuracy | `jig check --min-score` · `jig eval --gate` |
@@ -838,7 +900,8 @@ more than the claim it fixes.
   above but remain choices. A different, defensible grader could pick differently.
 - Which findings are *scored* vs *observed-only* is also a choice: description quality is
   labelled heuristic; robustness scores only what a single session observed; the tool-set
-  advisor and the auth dimension are **not** folded into the `rubric-v1.1` composite at all.
+  advisor, the tool-poisoning lint and the auth dimension are **not** folded into the
+  `rubric-v1.3` composite at all.
 
 **What will age.**
 - The **`2026-07-28` release candidate** is a moving target — final publication was
@@ -853,7 +916,7 @@ more than the claim it fixes.
 **What this guide could not evidence, and therefore does not claim.**
 - No universal "correct" tool count, token budget, or description length exists — only
   distributions and thresholds, presented as such.
-- jig does **not** detect tool-poisoning / prompt-injection content (SOP 12), verify that
-  your docs list your env vars (SOP 26), isolate npm-install time from server boot (SOP 25),
-  or grade horizontal-scale session persistence (SOP 27). Those are named as gaps, not
-  papered over.
+- jig still does **not** verify that your docs list your env vars, prove your server never
+  logs a secret (both SOP 26), catch a *semantic* prompt injection — one written in plain
+  English that carries none of the shapes the SOP 12 lint matches — or grade
+  horizontal-scale session persistence (SOP 27). Those are named as gaps, not papered over.

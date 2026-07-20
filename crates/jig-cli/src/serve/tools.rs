@@ -376,6 +376,7 @@ async fn check_server(args: &Value, defaults: Defaults) -> ToolOutcome {
         percentiles.as_ref(),
         timeout_of(args, defaults),
         defaults.max_message_bytes,
+        true, // no_prewarm: the MCP tool must not shell out to npx on the host
     )
     .await?;
 
