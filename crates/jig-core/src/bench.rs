@@ -800,7 +800,7 @@ fn classify_tool_call(name: String, arguments: Value, server_tools: &HashSet<Str
 }
 
 /// Concatenate an Anthropic response's `text` content blocks.
-fn anthropic_text(resp: &Value) -> String {
+pub(crate) fn anthropic_text(resp: &Value) -> String {
     resp.get("content")
         .and_then(Value::as_array)
         .into_iter()
@@ -811,14 +811,14 @@ fn anthropic_text(resp: &Value) -> String {
         .join(" ")
 }
 
-fn usage_u64(resp: &Value, obj: &str, key: &str) -> Option<u64> {
+pub(crate) fn usage_u64(resp: &Value, obj: &str, key: &str) -> Option<u64> {
     resp.get(obj)
         .and_then(|u| u.get(key))
         .and_then(Value::as_u64)
 }
 
 /// A short, single-line excerpt of a text answer.
-fn excerpt(text: &str) -> String {
+pub(crate) fn excerpt(text: &str) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= NO_TOOL_EXCERPT_CHARS {
         return flat;
@@ -1013,7 +1013,7 @@ pub fn redact(text: &str, secret: &str) -> String {
 }
 
 /// Redact `secret` from every string anywhere inside a JSON value.
-fn redact_value(value: Value, secret: &str) -> Value {
+pub(crate) fn redact_value(value: Value, secret: &str) -> Value {
     if secret.is_empty() {
         return value;
     }
@@ -1046,20 +1046,21 @@ pub async fn run_bench(tools: &[Tool], config: &BenchConfig) -> Result<BenchRepo
     let server_tools: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
     let rendered_request = render_request(provider, config, tools);
 
-    let mut builder = reqwest::Client::builder();
-    if let Some(dur) = config.timeout {
-        builder = builder.timeout(dur);
-    }
-    let client = builder
-        .build()
-        .map_err(|e| BenchError::Client(e.to_string()))?;
+    let client = build_provider_client(config.timeout)?;
 
     let endpoint = provider_endpoint(provider, config.base_url.as_deref());
 
     let mut results = Vec::with_capacity(config.runs);
     for index in 1..=config.runs {
         let started = Instant::now();
-        let sent = send_with_retry(&client, provider, &endpoint, &rendered_request, config).await;
+        let sent = send_provider_request(
+            &client,
+            provider,
+            &endpoint,
+            &rendered_request,
+            &config.api_key,
+        )
+        .await;
         let latency_ms = started.elapsed().as_millis();
 
         let result = match sent {
@@ -1151,14 +1152,44 @@ pub fn provider_endpoint(provider: Provider, base_url: Option<&str>) -> String {
     format!("{base}{path}")
 }
 
-/// One send with bounded retry. Returns the parsed JSON body on success, or a
-/// human-readable (unredacted here — the caller redacts) failure detail.
-async fn send_with_retry(
+/// Build the HTTP client every provider-backed feature sends through, with an
+/// optional per-request timeout.
+///
+/// Public so a consumer other than [`run_bench`] — `jig check --judge`, say —
+/// gets the *same* client construction and the same
+/// [`BenchError::Client`] failure mode rather than rolling its own.
+pub fn build_provider_client(timeout: Option<Duration>) -> Result<reqwest::Client, BenchError> {
+    let mut builder = reqwest::Client::builder();
+    if let Some(dur) = timeout {
+        builder = builder.timeout(dur);
+    }
+    builder
+        .build()
+        .map_err(|e| BenchError::Client(e.to_string()))
+}
+
+/// **The one provider send path.** POST `body` to `endpoint` in `provider`'s
+/// dialect with bounded retry, returning the parsed JSON body on success or a
+/// human-readable failure detail.
+///
+/// # Why this is public
+///
+/// Retry policy, keyless-mode header handling, the retryable-status rule and
+/// the `Retry-After` bound are *methodology*, not plumbing: two features that
+/// disagreed about when a 429 is fatal would produce two incomparable numbers.
+/// Every Jig feature that talks to a model provider — [`run_bench`], `jig eval`,
+/// and the opt-in description judge ([`crate::judge`]) — sends through this
+/// single function, so none of them can fork that policy.
+///
+/// `api_key` empty is the documented **keyless** mode: no credential header is
+/// sent at all. The returned detail is *unredacted*; the caller redacts it with
+/// [`redact`] (it holds the key, this function only borrows it).
+pub async fn send_provider_request(
     client: &reqwest::Client,
     provider: Provider,
     endpoint: &str,
     body: &Value,
-    config: &BenchConfig,
+    api_key: &str,
 ) -> Result<Value, String> {
     let mut last_detail = String::new();
     for attempt in 1..=MAX_ATTEMPTS {
@@ -1171,14 +1202,12 @@ async fn send_with_retry(
         // want no `Authorization`, and some reject a `Bearer ` with an empty
         // token outright — so omitting the header is the correct behaviour,
         // not a courtesy.
-        if !config.api_key.is_empty() {
+        if !api_key.is_empty() {
             req = match provider {
                 Provider::Anthropic => req
-                    .header("x-api-key", &config.api_key)
+                    .header("x-api-key", api_key)
                     .header("anthropic-version", "2023-06-01"),
-                Provider::OpenAI => {
-                    req.header("authorization", format!("Bearer {}", config.api_key))
-                }
+                Provider::OpenAI => req.header("authorization", format!("Bearer {api_key}")),
             };
         } else if provider == Provider::Anthropic {
             // The version header is not a credential and the Messages API
@@ -1381,7 +1410,7 @@ pub fn classify_sampling_text(text: &str, server_tools: &HashSet<String>) -> Out
 /// Pull the first balanced top-level JSON object out of `text`, tolerating the
 /// code fences and surrounding prose real models add despite instructions.
 /// `None` when nothing parses.
-fn extract_json_object(text: &str) -> Option<Map<String, Value>> {
+pub(crate) fn extract_json_object(text: &str) -> Option<Map<String, Value>> {
     // The common case: the whole (trimmed, de-fenced) text is the object.
     let trimmed = strip_code_fence(text.trim());
     if let Ok(Value::Object(m)) = serde_json::from_str::<Value>(trimmed) {

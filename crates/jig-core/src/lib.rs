@@ -56,10 +56,11 @@ pub use auth::{
     WwwAuthenticate, MCP_AUTH_SPEC_REVISION,
 };
 pub use bench::{
-    classify_sampling_text, distribution_of, finalize_args_check, host_models_of,
-    provider_endpoint, render_sampling_params, ArgCheck, BenchConfig, BenchError, BenchModel,
-    BenchReport, Distribution, Outcome, Provider, RunResult, SamplingBenchReport, Usage,
-    BENCH_SYSTEM_PROMPT, SAMPLING_MODEL_UNKNOWN, SAMPLING_RESPONSE_PROTOCOL,
+    build_provider_client, classify_sampling_text, distribution_of, finalize_args_check,
+    host_models_of, provider_endpoint, render_sampling_params, send_provider_request, ArgCheck,
+    BenchConfig, BenchError, BenchModel, BenchReport, Distribution, Outcome, Provider, RunResult,
+    SamplingBenchReport, Usage, BENCH_SYSTEM_PROMPT, SAMPLING_MODEL_UNKNOWN,
+    SAMPLING_RESPONSE_PROTOCOL,
 };
 pub use boot::{is_npx, npx_package, prewarm_args, Timing as BootTiming};
 pub use check::{
