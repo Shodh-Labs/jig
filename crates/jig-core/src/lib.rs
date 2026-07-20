@@ -31,14 +31,17 @@
 pub mod advisor;
 pub mod auth;
 pub mod bench;
+pub mod boot;
 pub mod check;
 pub mod client;
 pub mod context;
+pub mod credential;
 pub mod discovery;
 pub mod ecosystem;
 pub mod error;
 pub mod eval;
 pub mod http;
+pub mod injection;
 pub mod login;
 pub mod protocol;
 pub mod tap;
@@ -55,16 +58,20 @@ pub use bench::{
     ArgCheck, BenchConfig, BenchError, BenchModel, BenchReport, Distribution, Outcome, Provider,
     RunResult, Usage, BENCH_SYSTEM_PROMPT,
 };
+pub use boot::{is_npx, npx_package, prewarm_args, Timing as BootTiming};
 pub use check::{
     badge_color, bundled_percentiles, capability_offspec_note, evaluate, CheckInput, ContextCap,
     ContextProvenance, Dimension, DimensionScore, Finding, Observations, Percentiles,
-    PollutionSite, Report as CheckReport, Severity, UnknownMethodProbe, BUNDLED_PERCENTILES_JSON,
-    RATE_SCORE_FLOOR, RUBRIC_VERSION,
+    PollutionSite, ProtocolCap, Report as CheckReport, Severity, UnknownMethodProbe,
+    BUNDLED_PERCENTILES_JSON, RATE_SCORE_FLOOR, RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};
 pub use context::{
     build as build_context, schema_to_human_lines, ContextView, InstructionsSection, ToolContext,
     CONTEXT_TASK_PLACEHOLDER, CONTEXT_TEMPERATURE,
+};
+pub use credential::{
+    grade as grade_startup, named_variable, StartupObservation, Verdict as StartupVerdict,
 };
 pub use discovery::{
     discover, discover_from, DiscoveredTransport, Discovery, ResolveError, ServerEntry, Source,
@@ -80,6 +87,7 @@ pub use eval::{
     EvalConfig, EvalError, Expect, Matcher, RunReport, Suite, SuiteReport,
 };
 pub use http::{HttpTransport, ListenSummary};
+pub use injection::scan as scan_injection;
 pub use login::{
     login, AuthenticatedSession, CallbackParams, LoginConfig, LoginOutcome, LoginStep, Pkce,
     Secret, LOGIN_CLIENT_NAME,
