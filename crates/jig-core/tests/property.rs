@@ -19,10 +19,14 @@ use jig_core::auth::{
     auth_server_metadata_urls, canonical_resource_uri, protected_resource_metadata_urls,
     AuthServerMetadata, ProtectedResourceMetadata, WwwAuthenticate,
 };
-use jig_core::bench::{classify_anthropic, classify_openai, validate_args};
+use jig_core::bench::{classify_anthropic, classify_openai, validate_args, Provider};
 use jig_core::check::{MetricSamples, Percentiles};
 use jig_core::eval::{load_suite_str, Matcher};
 use jig_core::http::parse_sse;
+use jig_core::judge::{
+    judge_response_text, parse_judgements, render_judge_request, Answer, Question,
+    JUDGE_SYSTEM_PROMPT,
+};
 use jig_core::login::{
     build_authorization_url, parse_callback_query, query_from_request_line, s256_challenge,
 };
@@ -740,6 +744,100 @@ proptest! {
                 args.iter().any(|a| a.contains(&pkg)),
                 "invented a package not present in argv: {pkg}"
             );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The description judge: arbitrary provider output never panics, never guesses
+// ---------------------------------------------------------------------------
+
+proptest! {
+    /// **Arbitrary provider JSON never panics the judge.** The judge's whole
+    /// premise is that a model's reply is untrusted, so every step from a raw
+    /// response body to a per-tool verdict must be total: text extraction in
+    /// either dialect, then classification.
+    ///
+    /// It must also never *invent* coverage: the verdict list is exactly one
+    /// entry per tool the server exposed, in order, whatever the model said.
+    #[test]
+    fn judge_classification_is_total_over_arbitrary_provider_json(
+        resp in arb_json(),
+        names in prop::collection::vec("[a-z_]{1,12}", 0..6),
+    ) {
+        let mut unique: Vec<String> = Vec::new();
+        for n in names {
+            if !unique.contains(&n) {
+                unique.push(n);
+            }
+        }
+        for provider in [Provider::Anthropic, Provider::OpenAI] {
+            let text = judge_response_text(&resp, provider);
+            let verdicts = parse_judgements(&text, &unique);
+            prop_assert_eq!(verdicts.len(), unique.len());
+            for (verdict, expected) in verdicts.iter().zip(unique.iter()) {
+                // The tool name always comes from the server's surface.
+                prop_assert_eq!(&verdict.tool, expected);
+            }
+        }
+    }
+
+    /// The same totality over arbitrary *text*, which is the shape the failure
+    /// actually arrives in: a model that ignored the JSON instruction. Nothing
+    /// here may be classified as a real judgement, because no verdict word was
+    /// ever produced in the requested structure — but neither may it panic.
+    #[test]
+    fn judge_parsing_is_total_over_arbitrary_text(
+        text in ".*",
+        names in prop::collection::vec("[a-z_]{1,12}", 1..4),
+    ) {
+        let mut unique: Vec<String> = Vec::new();
+        for n in names {
+            if !unique.contains(&n) {
+                unique.push(n);
+            }
+        }
+        let verdicts = parse_judgements(&text, &unique);
+        prop_assert_eq!(verdicts.len(), unique.len());
+        // Every answer that *is* produced is one of the four known tags — the
+        // parser never surfaces an answer it made up.
+        for v in &verdicts {
+            for q in Question::all() {
+                if let Some(a) = v.verdict.answer(q) {
+                    prop_assert!(matches!(
+                        a.answer,
+                        Answer::Yes | Answer::No | Answer::Unclear | Answer::Unparseable
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Rendering the judge request is total over arbitrary tool surfaces, and
+    /// always carries the pinned prompt — a request that quietly lost its
+    /// system prompt would produce an unattributable verdict.
+    #[test]
+    fn judge_request_rendering_always_carries_the_pinned_prompt(
+        schema in arb_json(),
+        name in "[a-z_]{1,12}",
+        desc in prop::option::of(".*"),
+    ) {
+        let mut m = Map::new();
+        m.insert("name".to_string(), json!(name));
+        if let Some(d) = &desc {
+            m.insert("description".to_string(), json!(d));
+        }
+        m.insert("inputSchema".to_string(), schema);
+        let tool: Tool = serde_json::from_value(Value::Object(m)).unwrap();
+        for provider in [Provider::Anthropic, Provider::OpenAI] {
+            let req = render_judge_request(provider, std::slice::from_ref(&tool), "m", 0.0, 128);
+            let carries = match provider {
+                Provider::Anthropic => req["system"] == json!(JUDGE_SYSTEM_PROMPT),
+                Provider::OpenAI => req["messages"][0]["content"] == json!(JUDGE_SYSTEM_PROMPT),
+            };
+            prop_assert!(carries);
+            // The judge never offers a tools array: it reads, it does not select.
+            prop_assert!(req.get("tools").is_none());
         }
     }
 }

@@ -30,6 +30,16 @@
 //!   hit counter. This produces a deterministic *mixed* selection across runs so
 //!   the eval runner's rate-based/flaky scoring can be exercised end-to-end.
 //! * `error_500` — always `500` (exhausts retries → `provider_error`).
+//!
+//! Three further scenarios exist for the **description judge**
+//! (`jig check --judge`), which asks for a text answer rather than a tool call
+//! and so needs response shapes the bench scenarios never produce:
+//!
+//! * `judge_ok` — a well-formed judgement object covering all three mock tools.
+//! * `judge_prose` — prose instead of JSON, the failure real models actually
+//!   commit (the client must record `unparseable`, never panic or guess).
+//! * `judge_partial` — a well-formed object covering only `echo`, so the other
+//!   tools must come back `not_judged` rather than being invented.
 //! * `error_429` — always `429` (exhausts retries → `provider_error`).
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -145,6 +155,30 @@ fn error_scenario(state: &ProviderState, scenario: &str) -> Option<Response> {
     }
 }
 
+/// The judge's well-formed answer, covering every tool the mock MCP server
+/// exposes. Deliberately mixed (a yes, a no, an unclear) so a rendering test
+/// exercises all three verdicts.
+const JUDGE_OK_TEXT: &str = r#"{"judgements":[{"tool":"echo","states_purpose":{"verdict":"yes","rationale":"States that it returns the provided text unchanged."},"distinguishes_siblings":{"verdict":"no","rationale":"Never says when to use echo rather than always_fails."},"parameters_sufficient":{"verdict":"yes","rationale":"text is described as the text to echo."}},{"tool":"make_reservation","states_purpose":{"verdict":"unclear","rationale":"Book a table, but for what venue or system is unstated."},"distinguishes_siblings":{"verdict":"yes","rationale":"Booking is plainly distinct from echoing text."},"parameters_sufficient":{"verdict":"no","rationale":"party.seating enum values are undocumented."}},{"tool":"always_fails","states_purpose":{"verdict":"yes","rationale":"Says plainly that it always reports an error."},"distinguishes_siblings":{"verdict":"yes","rationale":"Named as a test-only error path."},"parameters_sufficient":{"verdict":"unclear","rationale":"It takes no parameters, so there is nothing to document."}}]}"#;
+
+/// Prose instead of the requested JSON — the single most common way a real
+/// model breaks a structured-output contract.
+const JUDGE_PROSE_TEXT: &str =
+    "Overall these descriptions look reasonable to me, though the reservation \
+     tool could be clearer about which venue it books.";
+
+/// A well-formed object that mentions only one of the three tools.
+const JUDGE_PARTIAL_TEXT: &str = r#"{"judgements":[{"tool":"echo","states_purpose":{"verdict":"yes","rationale":"States that it returns the provided text unchanged."},"distinguishes_siblings":{"verdict":"no","rationale":"No comparison to the other tools."},"parameters_sufficient":{"verdict":"yes","rationale":"text is described."}}]}"#;
+
+/// The judge text for a `judge_*` scenario, or `None` for a bench scenario.
+fn judge_text(scenario: &str) -> Option<&'static str> {
+    match scenario {
+        "judge_ok" => Some(JUDGE_OK_TEXT),
+        "judge_prose" => Some(JUDGE_PROSE_TEXT),
+        "judge_partial" => Some(JUDGE_PARTIAL_TEXT),
+        _ => None,
+    }
+}
+
 /// The Anthropic response body for a success scenario. Unknown scenarios default
 /// to `selected` so a typo fails loudly in the assertion, not the transport.
 ///
@@ -162,6 +196,12 @@ fn anthropic_body(scenario: &str, hit: u64) -> Value {
             "usage": usage,
         })
     };
+    if let Some(text) = judge_text(scenario) {
+        let mut v = base(json!([{ "type": "text", "text": text }]));
+        v["stop_reason"] = json!("end_turn");
+        v["model"] = json!("mock-judge-1");
+        return v;
+    }
     match scenario {
         "no_tool" => {
             let mut v = base(json!([
@@ -215,6 +255,11 @@ fn openai_body(scenario: &str, hit: u64) -> Value {
             "usage": usage,
         })
     };
+    if let Some(text) = judge_text(scenario) {
+        let mut v = base(json!({ "role": "assistant", "content": text }), "stop");
+        v["model"] = json!("mock-judge-1");
+        return v;
+    }
     match scenario {
         "no_tool" => base(
             json!({ "role": "assistant", "content": "No suitable tool; answering directly." }),

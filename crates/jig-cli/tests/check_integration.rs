@@ -550,3 +550,278 @@ fn a_clean_server_has_no_protocol_ceiling() {
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
     assert_eq!(v["protocolCap"], serde_json::Value::Null);
 }
+
+// ---------------------------------------------------------------------------
+// `--judge`: the opt-in description judge (jig-core::judge)
+//
+// Every test here drives the scripted mock provider — no live model call ever
+// runs in CI. The scenarios cover the four things a real provider does to us:
+// answer correctly, answer in prose, answer about only some tools, and fail.
+// ---------------------------------------------------------------------------
+
+/// Spawn the mock model provider on an OS-assigned port, returning a guard that
+/// kills it on drop plus the port it announced on stderr.
+fn spawn_provider() -> (ProviderGuard, u16) {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let mut cmd = Command::new(mock_bin());
+    cmd.arg("--provider").arg("0").stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn mock provider");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        let mut sent = false;
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if !sent {
+                        if let Some(i) = line.find("127.0.0.1:") {
+                            let digits: String = line[i + "127.0.0.1:".len()..]
+                                .chars()
+                                .take_while(char::is_ascii_digit)
+                                .collect();
+                            if let Ok(port) = digits.parse::<u16>() {
+                                let _ = tx.send(port);
+                                sent = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let port = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("mock provider never announced its port within 10s");
+    (ProviderGuard { child }, port)
+}
+
+struct ProviderGuard {
+    child: std::process::Child,
+}
+impl Drop for ProviderGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Run `jig check --judge` against the mock MCP server, pointing the judge at
+/// `scenario` on the mock provider. Keyless, so no key touches the test.
+fn run_judged(port: u16, scenario: &str, extra: &[&str]) -> Output {
+    let base = format!("http://127.0.0.1:{port}/{scenario}");
+    let mut args: Vec<&str> = vec![
+        "--no-report",
+        "--no-prewarm",
+        "--judge",
+        "--base-url",
+        &base,
+        "--no-auth",
+        "--api-model",
+        "mock-judge",
+    ];
+    args.extend_from_slice(extra);
+    run_check("", &args)
+}
+
+/// **The honesty guarantee, asserted end-to-end.** The deterministic document
+/// must be identical with and without `--judge` against the same server: same
+/// composite, same dimension scores, same grade, same findings. The only
+/// difference permitted anywhere in the output is the added `judged` key.
+#[test]
+fn judge_does_not_move_a_single_byte_of_the_deterministic_report() {
+    let (_guard, port) = spawn_provider();
+
+    let plain = run_check("", &["--json", "--no-report", "--no-prewarm"]);
+    let judged = run_judged(port, "judge_ok", &["--json"]);
+    assert!(plain.status.success() && judged.status.success());
+
+    let mut plain_doc: serde_json::Value =
+        serde_json::from_str(&stdout(&plain)).expect("valid JSON");
+    let mut judged_doc: serde_json::Value =
+        serde_json::from_str(&stdout(&judged)).expect("valid JSON");
+
+    // The judged run really did judge.
+    let judged_key = judged_doc
+        .as_object_mut()
+        .expect("object")
+        .remove("judged")
+        .expect("a --judge run must carry a `judged` key");
+    assert_eq!(judged_key["available"], true);
+    assert_eq!(judged_key["scored"], false);
+
+    // Wall-clock timings, and the latency woven into the robustness summary,
+    // are the only legitimately machine-dependent bytes; blank them in both.
+    for doc in [&mut plain_doc, &mut judged_doc] {
+        let obj = doc.as_object_mut().expect("object");
+        obj.insert("timing".to_string(), serde_json::Value::Null);
+        if let Some(dims) = obj.get_mut("dimensions").and_then(|d| d.as_array_mut()) {
+            for d in dims {
+                if let Some(m) = d.as_object_mut() {
+                    m.remove("summary");
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        serde_json::to_string(&plain_doc).unwrap(),
+        serde_json::to_string(&judged_doc).unwrap(),
+        "--judge must not alter one byte of the deterministic report"
+    );
+
+    // And the badge — which is the composite and nothing else — is identical.
+    let badge_plain = run_check("", &["--badge", "--no-report", "--no-prewarm"]);
+    let badge_judged = run_judged(port, "judge_ok", &["--badge"]);
+    assert_eq!(stdout(&badge_plain), stdout(&badge_judged));
+}
+
+/// Without `--judge` there is no `judged` key at all — the flag is genuinely
+/// opt-in, not merely defaulted off.
+#[test]
+fn without_the_flag_there_is_no_judged_key() {
+    let out = run_check("", &["--json", "--no-report", "--no-prewarm"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
+    assert!(
+        v.get("judged").is_none(),
+        "a default check must not carry a `judged` key"
+    );
+    assert!(!stdout(&out).contains("Description judge"));
+}
+
+/// A well-formed judgement renders every verdict and pins its provenance: the
+/// prompt version, the temperature, and the model **the provider reported**.
+#[test]
+fn a_well_formed_judgement_renders_and_records_its_provenance() {
+    let (_guard, port) = spawn_provider();
+    let out = run_judged(port, "judge_ok", &[]);
+    assert!(out.status.success());
+    let text = stdout(&out);
+    assert!(
+        text.contains("Description judge (opt-in · never scored)"),
+        "{text}"
+    );
+    assert!(text.contains("prompt judge-prompt-v1"), "{text}");
+    assert!(text.contains("temperature 0"), "{text}");
+    // The model id as the provider reported it, not the one we asked for.
+    assert!(text.contains("model mock-judge-1"), "{text}");
+    assert!(text.contains("(keyless)"), "{text}");
+    assert!(text.contains("outside rubric-v1.3"), "{text}");
+
+    let json = stdout(&run_judged(port, "judge_ok", &["--json"]));
+    let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let j = &v["judged"];
+    assert_eq!(j["promptVersion"], "judge-prompt-v1");
+    assert_eq!(j["reportedModel"], "mock-judge-1");
+    assert_eq!(j["requestedModel"], "mock-judge");
+    assert_eq!(j["temperature"], 0.0);
+    assert_eq!(j["keyless"], true);
+    // The exact prompt text is emitted, so the measurement is reproducible.
+    assert!(j["systemPrompt"]
+        .as_str()
+        .expect("systemPrompt")
+        .contains("states_purpose"));
+    assert!(j["renderedRequest"]["messages"].is_array());
+    assert_eq!(j["summary"]["toolsJudged"], 3);
+    assert_eq!(j["tools"][0]["tool"], "echo");
+    assert_eq!(j["tools"][0]["states_purpose"]["verdict"], "yes");
+    assert_eq!(j["tools"][0]["distinguishes_siblings"]["verdict"], "no");
+}
+
+/// Prose instead of JSON is recorded as `unparseable` — never guessed at, never
+/// a panic — and the check still exits 0.
+#[test]
+fn prose_instead_of_json_is_unparseable_and_check_still_succeeds() {
+    let (_guard, port) = spawn_provider();
+    let out = run_judged(port, "judge_prose", &[]);
+    assert!(out.status.success(), "a confused model must not fail check");
+    assert!(stdout(&out).contains("not the requested structure"));
+
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout(&run_judged(port, "judge_prose", &["--json"])))
+            .expect("valid JSON");
+    assert_eq!(v["judged"]["summary"]["toolsUnparseable"], 3);
+    assert_eq!(v["judged"]["summary"]["toolsJudged"], 0);
+    assert_eq!(v["judged"]["tools"][0]["verdict"], "unparseable");
+    // The score is untouched by the model's confusion.
+    assert!(v["composite"].as_f64().expect("composite") > 90.0);
+}
+
+/// A reply covering only some tools leaves the rest `not_judged`. A partial
+/// answer is partial data, never backfilled and never an error.
+#[test]
+fn a_partial_reply_leaves_the_uncovered_tools_not_judged() {
+    let (_guard, port) = spawn_provider();
+    let out = run_judged(port, "judge_partial", &[]);
+    assert!(out.status.success());
+    assert!(stdout(&out).contains("not judged"));
+
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout(&run_judged(port, "judge_partial", &["--json"])))
+            .expect("valid JSON");
+    assert_eq!(v["judged"]["summary"]["toolsJudged"], 1);
+    assert_eq!(v["judged"]["summary"]["toolsNotJudged"], 2);
+    let tools = v["judged"]["tools"].as_array().expect("tools");
+    assert_eq!(tools[0]["verdict"], "judged");
+    assert_eq!(tools[1]["verdict"], "not_judged");
+}
+
+/// A provider 500 (after the shared bounded retry) leaves the judge
+/// unavailable: one line saying so, the full deterministic report, exit 0.
+#[test]
+fn a_provider_500_leaves_the_judge_unavailable_and_the_check_intact() {
+    let (_guard, port) = spawn_provider();
+    let out = run_judged(port, "error_500", &[]);
+    assert!(
+        out.status.success(),
+        "an unavailable judge must never fail a check"
+    );
+    let text = stdout(&out);
+    assert!(text.contains("Description judge: unavailable"), "{text}");
+    assert!(text.contains("500"), "{text}");
+    assert!(text.contains("is unaffected"), "{text}");
+    // The deterministic report is all still there.
+    assert!(text.contains("grade A"));
+    assert!(text.contains("Protocol compliance"));
+
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout(&run_judged(port, "error_500", &["--json"])))
+            .expect("valid JSON");
+    assert_eq!(v["judged"]["available"], false);
+    assert_eq!(v["judged"]["scored"], false);
+    assert!(v["judged"]["reason"]
+        .as_str()
+        .expect("reason")
+        .contains("500"));
+}
+
+/// The `--min-score` gate is decided by the composite alone. A judged run, an
+/// unavailable-judge run and a plain run gate identically.
+#[test]
+fn the_min_score_gate_ignores_the_judge_entirely() {
+    let (_guard, port) = spawn_provider();
+    // A floor above any achievable score fails in all three modes.
+    let plain = run_check("", &["--min-score", "101", "--no-report", "--no-prewarm"]);
+    let judged = run_judged(port, "judge_ok", &["--min-score", "101"]);
+    let unavailable = run_judged(port, "error_500", &["--min-score", "101"]);
+    assert_eq!(plain.status.code(), Some(1));
+    assert_eq!(judged.status.code(), Some(1));
+    assert_eq!(unavailable.status.code(), Some(1));
+    // And a floor below it passes.
+    assert!(run_judged(port, "judge_ok", &["--min-score", "1"])
+        .status
+        .success());
+}
+
+/// `--no-auth` without `--base-url` is rejected: disabling the key requirement
+/// is a mode for an endpoint you host, not for a vendor API.
+#[test]
+fn no_auth_without_a_base_url_is_rejected() {
+    let out = run_check("", &["--judge", "--no-auth", "--no-report", "--no-prewarm"]);
+    assert!(!out.status.success());
+}
