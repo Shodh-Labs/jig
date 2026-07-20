@@ -55,8 +55,9 @@ pub use bench::{
     RunResult, Usage, BENCH_SYSTEM_PROMPT,
 };
 pub use check::{
-    badge_color, capability_offspec_note, evaluate, CheckInput, Dimension, DimensionScore, Finding,
-    Observations, Percentiles, PollutionSite, Report as CheckReport, Severity, UnknownMethodProbe,
+    badge_color, bundled_percentiles, capability_offspec_note, evaluate, CheckInput,
+    ContextProvenance, Dimension, DimensionScore, Finding, Observations, Percentiles,
+    PollutionSite, Report as CheckReport, Severity, UnknownMethodProbe, BUNDLED_PERCENTILES_JSON,
     RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};

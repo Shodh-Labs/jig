@@ -8,8 +8,10 @@
 //!
 //! Flags beyond the shared connection ones: `--min-score <n>` (exit nonzero when
 //! the composite is below `n` — the CI gate), `--badge` (emit shields.io
-//! endpoint JSON), and `--percentiles <file>` (override the ecosystem dataset
-//! path, default `data/percentiles.json`).
+//! endpoint JSON), `--percentiles <file>` (override the ecosystem dataset; the
+//! census is otherwise bundled into the binary, and `none` opts out to absolute
+//! bands), and `--report <file>`/`--no-report` (the HTML report card, written by
+//! default in human mode).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -24,8 +26,9 @@ use serde_json::{json, Value};
 
 use crate::{emit, emit_line, warn_non_protocol_output, write_tap_if_requested, Target};
 
-/// The default ecosystem-percentiles path, relative to the working directory.
-const DEFAULT_PERCENTILES_PATH: &str = "data/percentiles.json";
+/// The `--percentiles` sentinel that opts out of percentile scoring entirely,
+/// forcing the documented absolute bands (no ecosystem comparison).
+const PERCENTILES_NONE_SENTINEL: &str = "none";
 
 /// Run `jig check`.
 #[allow(clippy::too_many_arguments)]
@@ -35,13 +38,14 @@ pub async fn run(
     badge: bool,
     min_score: Option<f64>,
     percentiles_path: Option<PathBuf>,
+    report_path: Option<PathBuf>,
+    no_report: bool,
     tap_path: Option<&Path>,
     timeout_secs: u64,
     max_message_bytes: u64,
 ) -> Result<ExitCode, String> {
-    // Load the optional ecosystem dataset. An explicit --percentiles that does
-    // not exist is a user error; the default path silently falling back to
-    // absolute bands is the normal case.
+    // Load the ecosystem dataset. With no --percentiles the bundled census is
+    // used; `--percentiles none` opts out; an explicit missing file is an error.
     let percentiles = load_percentiles(percentiles_path.as_deref())?;
 
     let tap = ProtocolTap::new();
@@ -52,6 +56,8 @@ pub async fn run(
         as_json,
         badge,
         min_score,
+        report_path,
+        no_report,
         timeout_secs,
         max_message_bytes,
     )
@@ -62,10 +68,76 @@ pub async fn run(
     result
 }
 
-/// Resolve the percentiles dataset: an explicit path must exist and parse; the
-/// default path is best-effort (absent → `None` → absolute bands).
+/// Decide where the HTML report should be written, if anywhere.
+///
+/// * An explicit `--report <file>` always writes there (any output mode).
+/// * `--no-report` suppresses it.
+/// * Otherwise the human mode writes `./jig-report-<server>.html`; the machine
+///   modes (`--json`/`--badge`) write nothing unless a path was given.
+fn report_destination(
+    report_path: Option<PathBuf>,
+    no_report: bool,
+    as_json: bool,
+    badge: bool,
+    server_name: &str,
+) -> Option<PathBuf> {
+    if let Some(p) = report_path {
+        return Some(p);
+    }
+    if no_report || as_json || badge {
+        return None;
+    }
+    Some(PathBuf::from(crate::report::ReportMeta::default_filename(
+        server_name,
+    )))
+}
+
+/// Render and write the HTML report to `dest`, then announce it: a clean
+/// `report: <path>` line on stdout in human mode (so it reads as part of the
+/// terminal output), or a stderr note in machine mode (never corrupting the JSON
+/// on stdout). A write failure is a stderr warning, never a check failure.
+fn write_report(report: &CheckReport, target: &Target, dest: &Path, human: bool) {
+    let meta = crate::report::ReportMeta {
+        transport: target.transport_label().to_string(),
+        command_line: target.check_command_line(),
+        date: crate::report::today_utc(),
+        jig_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    let html = crate::report::render(report, &meta);
+    if let Err(e) = std::fs::write(dest, html) {
+        eprintln!(
+            "jig: warning: could not write report to {}: {e}",
+            dest.display()
+        );
+        return;
+    }
+    let shown = display_path(dest);
+    if human {
+        emit_line(&format!("report: {shown}"));
+    } else {
+        eprintln!("jig: wrote report to {shown}");
+    }
+}
+
+/// A friendly display path: a bare relative filename gets a `./` prefix so it is
+/// obviously a path, otherwise the path is shown as-is.
+fn display_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if path.is_relative() && !s.contains('/') && !s.contains('\\') {
+        format!("./{s}")
+    } else {
+        s.into_owned()
+    }
+}
+
+/// Resolve the percentiles dataset. With no `--percentiles`, the census bundled
+/// into the binary is used (so `npx`/installed runs still score against the
+/// ecosystem). `--percentiles none` opts out to absolute bands. An explicit file
+/// path must exist and parse — an explicit missing/unusable file is a hard error.
 fn load_percentiles(explicit: Option<&Path>) -> Result<Option<Percentiles>, String> {
     match explicit {
+        // The opt-out sentinel: force absolute bands, no ecosystem comparison.
+        Some(path) if path == Path::new(PERCENTILES_NONE_SENTINEL) => Ok(None),
         Some(path) => match Percentiles::load(path) {
             Ok(Some(p)) => Ok(Some(p)),
             Ok(None) => Err(format!(
@@ -77,7 +149,8 @@ fn load_percentiles(explicit: Option<&Path>) -> Result<Option<Percentiles>, Stri
                 path.display()
             )),
         },
-        None => Ok(Percentiles::load(DEFAULT_PERCENTILES_PATH).unwrap_or(None)),
+        // Default: the census embedded at compile time.
+        None => Ok(jig_core::bundled_percentiles()),
     }
 }
 
@@ -106,6 +179,8 @@ async fn run_inner(
     as_json: bool,
     badge: bool,
     min_score: Option<f64>,
+    report_path: Option<PathBuf>,
+    no_report: bool,
     timeout_secs: u64,
     max_message_bytes: u64,
 ) -> Result<ExitCode, String> {
@@ -188,6 +263,14 @@ async fn run_inner(
             let summary = crate::auth::check_summary(url, headers, &tap, timeout_secs).await;
             emit(&summary);
         }
+    }
+
+    // The shareable HTML report card: written by default in human mode (and on
+    // demand via --report in any mode). Announced after the terminal output.
+    if let Some(dest) =
+        report_destination(report_path, no_report, as_json, badge, &report.server_name)
+    {
+        write_report(&report, target, &dest, !as_json && !badge);
     }
 
     // The CI gate: exit nonzero when the composite is below the floor.
@@ -323,15 +406,25 @@ fn footer(report: &CheckReport) -> String {
             percentile,
             n,
             collected,
+            bundled,
         } => {
-            let when = collected
-                .as_deref()
-                .map(|c| format!(", collected {c}"))
-                .unwrap_or_default();
-            notes.push(format!(
-                "Context cost scored against {n} ecosystem servers{when} — {}th percentile.",
-                percentile
-            ));
+            if *bundled {
+                let when = collected
+                    .as_deref()
+                    .map(|c| format!(" {c}"))
+                    .unwrap_or_default();
+                notes.push(format!(
+                    "Context cost scored against the bundled census{when} (n={n}) — {percentile}th percentile."
+                ));
+            } else {
+                let when = collected
+                    .as_deref()
+                    .map(|c| format!(", collected {c}"))
+                    .unwrap_or_default();
+                notes.push(format!(
+                    "Context cost scored against {n} ecosystem servers{when} — {percentile}th percentile."
+                ));
+            }
         }
         ContextProvenance::AbsoluteBands => {
             notes.push(
@@ -422,11 +515,13 @@ fn provenance_json(p: &ContextProvenance) -> Value {
             percentile,
             n,
             collected,
+            bundled,
         } => json!({
             "type": "percentile",
             "percentile": percentile,
             "n": n,
             "collected": collected,
+            "bundled": bundled,
         }),
         ContextProvenance::AbsoluteBands => json!({ "type": "absolute_bands" }),
     }
@@ -650,6 +745,7 @@ mod tests {
             collected: Some("2026-07-19".to_string()),
             census_date: Some("2026-07-19".to_string()),
             startup_failure_rate: None,
+            bundled: false,
         };
         let report = evaluate(&mock_input(), Some(&p));
         insta::assert_snapshot!("check_human_percentile", render_human(&report));

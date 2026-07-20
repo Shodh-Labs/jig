@@ -460,8 +460,12 @@ pub enum ContextProvenance {
         percentile: u32,
         /// Number of samples in the dataset.
         n: usize,
-        /// The dataset's `collected` date, if provided.
+        /// The dataset's `collected` date (YYYY-MM-DD), if known.
         collected: Option<String>,
+        /// Whether the dataset was the census bundled into the binary (the
+        /// default) rather than a user-supplied `--percentiles` file. Drives the
+        /// "bundled census" provenance label so the number's age is visible.
+        bundled: bool,
     },
     /// Scored with the fixed absolute bands (no ecosystem dataset available).
     AbsoluteBands,
@@ -488,6 +492,11 @@ pub struct Report {
     pub rubric_version: &'static str,
     /// Number of tools observed.
     pub tool_count: usize,
+    /// Per-tool gpt-4o context-cost token counts, in server order, exactly as
+    /// the context-cost dimension measured them. Surfaced so a downstream
+    /// renderer (the HTML report card) can draw the per-tool token chart without
+    /// re-tokenizing. Empty when the server exposes no tools.
+    pub per_tool_tokens: Vec<(String, usize)>,
     /// Tool-set advisor findings (see [`crate::advisor`]), stably sorted. These
     /// are tagged [`Dimension::ToolSet`] and are **never** scored into the
     /// composite; they surface in a dedicated report section and may be ranked
@@ -713,6 +722,28 @@ pub struct Percentiles {
     /// Drives the one-line cohort context shown when a checked server fails to
     /// start. `None` when the dataset does not carry it (silent fallback).
     pub startup_failure_rate: Option<f64>,
+    /// Whether this dataset is the census bundled into the binary (see
+    /// [`bundled_percentiles`]) rather than one loaded from a user-supplied file.
+    /// Propagated into [`ContextProvenance::Percentile::bundled`] so the report
+    /// can label the default census as bundled and show its age.
+    pub bundled: bool,
+}
+
+/// The census dataset embedded into the binary at compile time — the same
+/// `data/percentiles.json` the repo ships — so an `npx`/installed `jig check`
+/// scores context cost against the ecosystem even with no dataset file on disk.
+/// A user-supplied `--percentiles <file>` still overrides it.
+pub const BUNDLED_PERCENTILES_JSON: &str = include_str!("../../../data/percentiles.json");
+
+/// Parse the [bundled census](BUNDLED_PERCENTILES_JSON) into a [`Percentiles`]
+/// with [`bundled`](Percentiles::bundled) set. `None` only if the embedded JSON
+/// ever fails to carry a usable `context_cost_tokens.samples` array (a
+/// compile-time-fixed asset, so this is effectively infallible).
+pub fn bundled_percentiles() -> Option<Percentiles> {
+    let v: Value = serde_json::from_str(BUNDLED_PERCENTILES_JSON).ok()?;
+    let mut p = Percentiles::from_json(&v)?;
+    p.bundled = true;
+    Some(p)
 }
 
 impl Percentiles {
@@ -763,6 +794,7 @@ impl Percentiles {
             collected,
             census_date,
             startup_failure_rate,
+            bundled: false,
         })
     }
 
@@ -875,6 +907,7 @@ pub fn evaluate(input: &CheckInput, percentiles: Option<&Percentiles>) -> Report
         context_provenance: provenance,
         rubric_version: RUBRIC_VERSION,
         tool_count: input.tools.len(),
+        per_tool_tokens: costs.per_tool.clone(),
         advisor,
     }
 }
@@ -1272,12 +1305,21 @@ fn score_context(
                     100 - pct_round.min(100)
                 )
             };
+            // Prefer the metric's own `collected` date; fall back to the
+            // dataset-level census date (the bundled census carries only the
+            // latter), truncated to YYYY-MM-DD so provenance always shows an age.
+            let collected = p.collected.clone().or_else(|| {
+                p.census_date
+                    .as_deref()
+                    .map(|d| d.get(0..10).unwrap_or(d).to_string())
+            });
             (
                 score,
                 ContextProvenance::Percentile {
                     percentile: pct_round,
                     n,
-                    collected: p.collected.clone(),
+                    collected,
+                    bundled: p.bundled,
                 },
                 label,
             )
@@ -2198,6 +2240,7 @@ mod tests {
             collected: None,
             census_date: Some("2026-07-19T17:56:54Z".to_string()),
             startup_failure_rate: Some(0.42),
+            bundled: false,
         };
         let note = p.startup_failure_note().unwrap();
         assert!(note.contains("42%"), "{note}");
@@ -2358,6 +2401,7 @@ mod tests {
             collected: Some("2026-07-19".to_string()),
             census_date: Some("2026-07-19".to_string()),
             startup_failure_rate: None,
+            bundled: false,
         };
         let report = evaluate(&clean_input(), Some(&p));
         match &report.context_provenance {
@@ -2418,6 +2462,31 @@ mod tests {
     fn percentile_from_json_missing_samples_is_none() {
         assert!(Percentiles::from_json(&json!({ "context_cost_tokens": {} })).is_none());
         assert!(Percentiles::from_json(&json!({})).is_none());
+    }
+
+    #[test]
+    fn bundled_percentiles_parse_and_are_marked_bundled() {
+        let p = bundled_percentiles().expect("the embedded census parses");
+        assert!(p.bundled, "the bundled dataset must be marked bundled");
+        assert!(
+            !p.context_cost_tokens.samples.is_empty(),
+            "the embedded census must carry samples"
+        );
+        // Scoring with the bundled dataset yields a percentile provenance whose
+        // `bundled` flag and census date reach the report.
+        let report = evaluate(&clean_input(), Some(&p));
+        match &report.context_provenance {
+            ContextProvenance::Percentile {
+                bundled, collected, ..
+            } => {
+                assert!(*bundled, "provenance must carry the bundled flag");
+                assert!(
+                    collected.as_deref().is_some_and(|d| d.starts_with("2026-")),
+                    "bundled census date should surface, got {collected:?}"
+                );
+            }
+            other => panic!("expected percentile provenance, got {other:?}"),
+        }
     }
 
     #[test]

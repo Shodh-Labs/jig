@@ -55,6 +55,7 @@ mod context;
 mod ecosystem;
 mod eval;
 mod render;
+mod report;
 mod servers;
 
 /// Write `s` to stdout, flushing, in a broken-pipe-safe way.
@@ -138,6 +139,11 @@ enum Command {
         /// exclusive with --stdio.
         #[arg(long, value_name = "URL", conflicts_with = "stdio")]
         http: Option<String>,
+        /// Connect to a server discovered from a local client config by name
+        /// (see `jig servers`). Use `source:name` to disambiguate. Mutually
+        /// exclusive with --stdio/--http.
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["stdio", "http"])]
+        server: Option<String>,
         /// Extra HTTP header for --http, "Name: Value" (repeatable).
         #[arg(long = "header", value_name = "NAME: VALUE")]
         header: Vec<String>,
@@ -153,9 +159,18 @@ enum Command {
         #[arg(long, value_name = "N")]
         min_score: Option<f64>,
         /// Path to the ecosystem percentiles dataset used to score context cost.
-        /// Defaults to `data/percentiles.json` (absent → absolute bands).
+        /// Defaults to the census bundled into the binary; pass `none` to force
+        /// absolute bands (no ecosystem comparison).
         #[arg(long, value_name = "FILE")]
         percentiles: Option<PathBuf>,
+        /// Write the self-contained HTML report card to this path (overrides the
+        /// default `./jig-report-<server>.html`). Enables the report even in
+        /// --json/--badge mode.
+        #[arg(long, value_name = "FILE", conflicts_with = "no_report")]
+        report: Option<PathBuf>,
+        /// Do not write the HTML report card (human mode writes one by default).
+        #[arg(long)]
+        no_report: bool,
         /// Write the raw protocol traffic to this file as JSONL.
         #[arg(long, value_name = "FILE")]
         tap: Option<PathBuf>,
@@ -679,22 +694,27 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Check {
             stdio,
             http,
+            server,
             header,
             json,
             badge,
             min_score,
             percentiles,
+            report,
+            no_report,
             tap,
             timeout,
             max_message_bytes,
         } => {
-            let target = Target::resolve(stdio, http, None, header)?;
+            let target = Target::resolve(stdio, http, server, header)?;
             check::run(
                 &target,
                 json,
                 badge,
                 min_score,
                 percentiles,
+                report,
+                no_report,
                 tap.as_deref(),
                 timeout,
                 max_message_bytes,
@@ -1044,6 +1064,31 @@ impl Target {
                 url: url.clone(),
                 headers: parse_headers(&header)?,
             }),
+        }
+    }
+
+    /// A short transport label for the report header (`stdio` / `streamable-http`).
+    pub(crate) fn transport_label(&self) -> &'static str {
+        match self {
+            Target::Stdio { .. } => "stdio",
+            Target::Http { .. } => "streamable-http",
+        }
+    }
+
+    /// Reconstruct the `jig check …` command line for this target, for the report
+    /// header. Headers/env are omitted (they can carry secrets); the transport
+    /// and endpoint are what a reader needs to reproduce the run.
+    pub(crate) fn check_command_line(&self) -> String {
+        match self {
+            Target::Stdio { program, args, .. } => {
+                let mut cmd = program.clone();
+                for a in args {
+                    cmd.push(' ');
+                    cmd.push_str(a);
+                }
+                format!("jig check --stdio \"{cmd}\"")
+            }
+            Target::Http { url, .. } => format!("jig check --http {url}"),
         }
     }
 

@@ -22,7 +22,7 @@ real model in the loop.
 
 | Command | The question it answers |
 |:--|:--|
-| [`jig check`](#jig-check--the-one-command-report-card) | Is my server well-built? One graded verdict + ranked fixes |
+| [`jig check`](#jig-check--the-one-command-report-card) | Is my server well-built? One graded verdict + a shareable HTML report card |
 | [`jig context`](#jig-context--see-exactly-what-the-model-sees) | What does the model actually see? The exact request body, token-priced — no API key needed |
 | [`jig budget`](#jig-budget--the-token-budget-engine) | What does my server cost, per tool, per model tokenizer? |
 | [`jig bench`](#jig-bench--the-model-in-the-loop-bench) | Which tool does a *real model* pick for a task? N-run distributions |
@@ -111,10 +111,13 @@ knows, then renders a **scored verdict with a to-do list** — Lighthouse for MC
 servers. Instruments require interpretation; a grade plus ranked fixes converts.
 
 ```sh
-jig check --stdio "npx -y @playwright/mcp@latest"     # human report card
+jig check --stdio "npx -y @playwright/mcp@latest"     # human report card + ./jig-report-<server>.html
 jig check --stdio "<cmd>" --json                       # full findings + per-dimension scores
 jig check --stdio "<cmd>" --badge                      # shields.io endpoint JSON for a README badge
 jig check --stdio "<cmd>" --min-score 80               # CI gate: exit nonzero below the floor
+jig check --stdio "<cmd>" --report card.html           # write the HTML report to a chosen path
+jig check --stdio "<cmd>" --no-report                  # skip the HTML report
+jig check --server "playwright"                        # a server discovered by `jig servers`, by name
 jig check --http "https://example.com/mcp" --header "Authorization: Bearer $TOKEN"
 ```
 
@@ -155,15 +158,25 @@ Description quality is heuristic (deterministic, no LLM).
 Context cost scored with absolute bands (no ecosystem dataset available).
 ```
 
+**A shareable report card.** Human runs also write a self-contained HTML report —
+`./jig-report-<server>.html` by default — a single file with inline styles and
+**no JavaScript**: the score hero, the five dimension bars, a context-bill
+callout, a per-tool token chart with a median marker, the advisor findings, and
+the ranked fixes, all rendered from the same session's data. It is light/dark
+theme-aware and every server-supplied string is HTML-escaped, so it is safe to
+open and safe to share. `--report <file>` sets the path (and enables it in
+`--json`/`--badge` mode); `--no-report` skips it.
+
 **Honest scoring.** Context cost is graded against an ecosystem percentile
-dataset when `data/percentiles.json` is present (the report then says e.g.
-`94th percentile of n=29 measured servers — heavier than 94%`, always naming the
-sample size); absent, it uses documented absolute bands and
-says so. Description quality is deterministic heuristics — labelled "heuristic",
-never an LLM verdict — and robustness scores only what was actually observed in
-the session, never assumed. `--min-score <n>` is the CI gate: wire
-`jig check --stdio "<cmd>" --min-score 80` into a pipeline and a regression that
-drops the grade fails the build. See
+dataset — the census bundled into the binary by default, so even an `npx`/installed
+run scores against the ecosystem (the report then says e.g. `bundled census
+2026-07-19 (n=29) — 7th percentile`, always naming the sample size and its age).
+Pass `--percentiles <file>` to use your own dataset, or `--percentiles none` to
+fall back to the documented absolute bands. Description quality is deterministic
+heuristics — labelled "heuristic", never an LLM verdict — and robustness scores
+only what was actually observed in the session, never assumed. `--min-score <n>`
+is the CI gate: wire `jig check --stdio "<cmd>" --min-score 80` into a pipeline
+and a regression that drops the grade fails the build. See
 [`docs/percentiles-schema.md`](docs/percentiles-schema.md) for the dataset
 format.
 

@@ -9,6 +9,9 @@ dist/
 # Tauri
 src-tauri/target/
 
+# jig check writes its HTML report card to the cwd by default
+jig-report-*.html
+
 # OS
 .DS_Store
 Thumbs.db

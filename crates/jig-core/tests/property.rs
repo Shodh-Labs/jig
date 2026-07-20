@@ -296,6 +296,7 @@ proptest! {
                 collected: None,
                 census_date: None,
                 startup_failure_rate: None,
+                bundled: false,
             })
         };
 
