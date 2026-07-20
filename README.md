@@ -59,9 +59,9 @@ it (and an honest label where none can yet).
 
 🚧 **Early development, building in public.** Open an issue and tell us how you test
 your MCP server today — we read everything. Roadmap: `.jig` eval suites in CI with
-PR annotations; the full OAuth authorization-code + PKCE login flow (`jig auth`
-grades the discoverable surface today); the desktop workbench (in design —
-prototype exists, CLI ships today).
+PR annotations; refresh-token rotation and the device-authorization grant for
+`jig auth --login` (the authorization-code + PKCE flow ships today); the desktop
+workbench (in design — prototype exists, CLI ships today).
 
 ## Development
 
@@ -229,7 +229,7 @@ can appear in Top fixes.
 
 The same block is available after the token table with
 [`jig budget --advise`](#jig-budget--the-token-budget-engine).
-### `jig auth` — probe OAuth conformance (no login required)
+### `jig auth` — grade the OAuth surface, or actually log in
 
 Authorization is MCP's number-one integration pain: across the public ecosystem
 only ~8.5% of servers implement the OAuth 2.1 flow the spec calls for, and the
@@ -239,11 +239,12 @@ server that never advertises PKCE. `jig auth` grades exactly that surface.
 
 ![jig auth conformance table — 13 spec-cited checks across 4 probes, verdict CONFORMANT](docs/media/auth-report.png)
 
-It is **not a login tool.** V1 performs no authorization flow, opens no browser,
-and needs no credentials: it sends one unauthenticated `initialize`, follows the
-`401` challenge to the RFC 9728 / RFC 8414 metadata, and renders a conformance
-table with a spec citation on every line. Everything checkable, nothing
-probabilistic — the house style.
+By default it performs no authorization flow, opens no browser, and needs no
+credentials: it sends one unauthenticated `initialize`, follows the `401`
+challenge to the RFC 9728 / RFC 8414 metadata, and renders a conformance table
+with a spec citation on every line. Everything checkable, nothing probabilistic —
+the house style. Add `--login` and it runs the flow for real; see
+[`--login`](#jig-auth---login--the-real-authorization-code-flow) below.
 
 ```sh
 jig auth --http "https://mcp.example.com/mcp"                 # the conformance table
@@ -282,11 +283,88 @@ stdio target gets a clear error). Every HTTP exchange is captured to the tap
 surfaces a compact, informational auth line — the auth dimension is **not** scored
 into `rubric-v1` in this milestone.
 
-> **Scope (honest framing).** `jig auth` probes the *discoverable* auth surface.
-> It does **not** perform the authorization-code + PKCE login flow, exchange a
-> code for a token, or exercise dynamic client registration — those are on the
-> roadmap. What it grades today is precisely the surface that most real servers
-> get wrong.
+#### `jig auth --login` — the real authorization-code flow
+
+Grading the surface tells you whether a server *should* work. `--login` tells you
+whether it *does*: Jig runs the whole OAuth 2.1 authorization-code flow and then
+proves the token by opening an authenticated MCP session with it.
+
+```sh
+jig auth --http "https://mcp.example.com/mcp" --login             # register, PKCE, browser, token, prove
+jig auth --http "https://mcp.example.com/mcp" --login --no-browser  # print the URL instead of opening one
+jig auth --http "https://mcp.example.com/mcp" --login \
+    --client-id "$CLIENT_ID"                                      # for an AS without RFC 7591 DCR
+jig auth --http "https://mcp.example.com/mcp" --login \
+    --scope "mcp:tools" --timeout 300 --token-out ./token.json
+```
+
+Ten numbered steps, each with the clause that requires it:
+
+| # | Step | Spec |
+|---|:-----|:-----|
+| 1 | Unauthenticated `initialize` → `401` + `WWW-Authenticate` | MCP 2025-06-18 · RFC 9728 §5.1 |
+| 2 | Protected Resource Metadata → `authorization_servers` | RFC 9728 §3 |
+| 3 | Authorization Server Metadata | RFC 8414 §3 |
+| 4 | PKCE: 256-bit CSPRNG verifier + `S256` challenge | RFC 7636 §4.1–§4.2 |
+| 5 | Loopback redirect bound on `127.0.0.1:0` | RFC 8252 §7.3 |
+| 6 | Dynamic Client Registration, else `--client-id` | RFC 7591 §3.1 |
+| 7 | Authorization request (`resource`, `state`, `code_challenge`) + browser | OAuth 2.1 §4.1.1 · RFC 8707 §2 |
+| 8 | Callback validation: `state` (constant-time), then `iss` | OAuth 2.1 §7.12 · RFC 9207 §2.4 |
+| 9 | Token exchange with the verifier | OAuth 2.1 §4.1.3 · RFC 7636 §4.5 |
+| 10 | **Authenticated `initialize` + `tools/list`** | MCP 2025-06-18 |
+
+```
+jig auth --login · https://mcp.example.com/mcp
+resource https://mcp.example.com/mcp · MCP auth spec 2025-06-18
+
+  result: AUTHENTICATED — the OAuth 2.1 authorization-code flow completed and the token opens an MCP session
+
+Flow trace
+   4 ✓ PASS  PKCE S256                      generated a 43-character code verifier from the system CSPRNG and its S256 challenge; `state` is an independent 256-bit nonce  [RFC 7636 §4.1–§4.2]
+   6 ✓ PASS  Client identity                registered dynamically at https://as.example.com/register as a public native client (token_endpoint_auth_method=none, …) → client_id `c_9f2…`  [RFC 7591 §3.1–§3.2.1]
+   8 ✓ PASS  Authorization response         received an authorization code on the loopback redirect; its `state` matches the generated nonce (constant-time) and its `iss` matches the metadata issuer (RFC 9207)  [OAuth 2.1 §4.1.2 · §7.12 · RFC 9207 §2.4]
+  10 ✓ PASS  Authenticated MCP session      authenticated session established with acme-mcp 2.1.0 (protocol 2025-06-18): 14 tool(s) visible  [MCP 2025-06-18 (Access Token Usage)]
+
+Authenticated probe
+  server    acme-mcp 2.1.0 (protocol 2025-06-18)
+  tools     14 visible — search, create_issue, …
+```
+
+Any step that fails stops the flow and exits nonzero — there is no "proceed
+anyway", because every check here is a security property. A mismatched `state` is
+CSRF; a mismatched `iss` is an authorization-server mix-up; a missing `S256` is
+authorization-code interception. Jig **never** falls back to PKCE `plain`: if the
+AS advertises only `plain`, the flow refuses to start rather than open a browser
+it cannot secure.
+
+**Secrets discipline.** The access token, refresh token, authorization code and
+PKCE verifier are never printed, never in `--json`, and redacted in the tap
+(`Authorization` header values and token-endpoint bodies both). In the type
+system the token lives behind a `Secret` whose `Debug` renders `<redacted>`, so
+even a stray `{:?}` cannot leak it. `--token-out <file>` is the only path to disk;
+it writes `0600` where the OS has mode bits and prints a `stderr` warning naming
+the file. There is a test that mints a token, reads its exact value back out of
+`--token-out`, and greps stdout, stderr, `--json` and the tap asserting the string
+is absent from all four.
+
+> **What `--login` still doesn't do (honest framing).**
+> * **No refresh.** If the AS issues a refresh token, Jig reports that it did and
+>   stops. There is no refresh-token rotation, no re-use detection, no token cache
+>   — one run mints one token and proves it. Re-run to get another.
+> * **No device-authorization grant** (RFC 8628). A headless box uses
+>   `--no-browser` and completes the redirect by hand; there is no `user_code`
+>   flow.
+> * **No client-credentials or any other grant.** Authorization code + PKCE only.
+> * **No token storage or reuse.** Nothing is cached between runs, so nothing can
+>   go stale — and nothing is on disk unless you asked with `--token-out`.
+> * **Only the first advertised authorization server** is used when a
+>   protected-resource metadata document lists several; there is no AS picker.
+> * **`--timeout` governs both** the per-request HTTP timeout and how long the
+>   browser has to come back. The default (30s) is short for a human — pass
+>   `--timeout 300` for an interactive login.
+> * **The browser launch is best-effort** and untested in CI (`cmd /C start`,
+>   `open`, `xdg-open`). The URL is always printed first, so a failed launch is
+>   never fatal.
 
 ### `jig context` — see exactly what the model sees
 
