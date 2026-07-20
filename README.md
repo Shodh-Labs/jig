@@ -30,11 +30,12 @@ real model in the loop.
 | [`jig inspect` / `call` / `read` / `prompt`](#transports-stdio-and-streamable-http) | Poke the protocol directly — every byte captured in a raw JSONL tap |
 | [`jig servers` / `search` / `info`](#discovery-jig-servers-jig-search-jig-info) | What's configured on my machine? What exists? What is it *really*? |
 
-![Jig workbench — request/response spans from a live MCP session](docs/media/workbench-wire.png)
+![Jig workbench — request/response spans from a live MCP session](docs/media/workbench-app-wire.png)
 
-<p align="center"><em>A real session against <code>@modelcontextprotocol/server-everything</code>, rendered from jig's protocol tap:
-the 8-second npx cold start folded out of the way, an unsolicited mid-request notification caught on the wire,
-payload inspector open. This is an interactive design prototype — the workbench app is not built yet; the CLI ships today.</em></p>
+<p align="center"><em>The workbench, running. A real session against <code>@modelcontextprotocol/server-everything</code>,
+rendered from jig's protocol tap: the npx cold start folded out of the way, an unsolicited
+<code>notifications/tools/list_changed</code> caught on the wire, payload inspector open.
+See <a href="#the-workbench-desktop-app">The workbench</a>.</em></p>
 
 ## Why a grade?
 
@@ -60,8 +61,50 @@ it (and an honest label where none can yet).
 🚧 **Early development, building in public.** Open an issue and tell us how you test
 your MCP server today — we read everything. Roadmap: `.jig` eval suites in CI with
 PR annotations; refresh-token rotation and the device-authorization grant for
-`jig auth --login` (the authorization-code + PKCE flow ships today); the desktop
-workbench (in design — prototype exists, CLI ships today).
+`jig auth --login` (the authorization-code + PKCE flow ships today); packaging and
+code-signing for the desktop workbench (the app itself now builds and runs — see
+[The workbench](#the-workbench-desktop-app) — but there are no installers yet).
+
+## The workbench (desktop app)
+
+The workbench is the same instrument as the CLI, pointed at one server and made
+interactive. It adds **no protocol logic of its own**: every connection, grade,
+and token count comes from `jig-core`, so a number shown in the app is the same
+number `jig check --json` prints. The webview never speaks MCP — all of it
+happens in Rust behind Tauri commands.
+
+Four panes:
+
+| Pane | What it does |
+| --- | --- |
+| **Connect** | Servers discovered in your Claude Desktop / Claude Code / Cursor / VS Code configs, or a stdio command or HTTP URL you type. Shows the handshake result, server info, and advertised capabilities. |
+| **Wire** | The protocol tap as a live span timeline — one row per request with its round trip, server pushes marked distinctly, click a row for the raw JSON-RPC. |
+| **Report card** | `jig check`, rendered natively: score, dimension bars, findings with their fixes, and the advisor block. |
+| **Context & budget** | The token-annotated request body (`jig context`) and the per-tool cost chart. |
+
+Run it against any server:
+
+```sh
+cargo run -p jig-app          # or: ./target/debug/jig-workbench
+```
+
+Building it needs a webview: **WebView2** on Windows (preinstalled on Windows 11),
+**WebKitGTK** on Linux (`libwebkit2gtk-4.1-dev` and friends — see the `jig-app` job
+in `.github/workflows/ci.yml` for the exact package list), and nothing extra on
+macOS. The frontend is plain HTML/CSS/JS with no build step and no bundled
+framework, so `cargo build` is the whole story.
+
+![The workbench report card](docs/media/workbench-app-report.png)
+
+<p align="center"><em>The same rubric, the same bundled census, the same fixes — rendered natively.</em></p>
+
+**What is not in this milestone:** there are no installers. Packaging, code
+signing, notarization, and auto-update are a separate piece of work, and the app
+is deliberately absent from the release workflow until then — CI builds it on
+Windows and Linux on every push, but ships nothing. Also not present yet: the
+`bench` and `eval` panes, and calling a tool from the app (`jig call` remains
+CLI-only). The app makes no network call except to the MCP server you chose, and
+sends no telemetry — the same promise the CLI makes.
 
 ## Development
 
@@ -72,6 +115,7 @@ crates/
   jig-core         # library: stdio + Streamable HTTP transports, MCP handshake + ops, protocol tap
   jig-cli          # binary `jig`: check / inspect / call / read / prompt / context / budget / bench / eval / servers / search / info
   jig-mock-server  # binary: a minimal MCP server (stdio + HTTP) used as a test fixture
+  jig-app          # binary `jig-workbench`: the Tauri desktop workbench (Rust core + plain HTML/CSS/JS webview)
 ```
 
 Build and test the whole workspace:
