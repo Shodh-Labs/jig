@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Jig Workbench",
+  "version": "0.5.0",
+  "identifier": "dev.shodhlabs.jig.workbench",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "jig / workbench",
+        "width": 1440,
+        "height": 949,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "theme": "Dark",
+        "backgroundColor": "#0B0C0E"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "targets": "all"
+  }
+}

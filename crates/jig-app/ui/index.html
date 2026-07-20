@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>jig / workbench</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+  <header class="titlebar">
+    <div class="brandmark">
+      <svg width="20" height="20" viewBox="0 0 26 26" aria-hidden="true">
+        <rect x="2" y="4" width="4" height="18" rx="1.5" fill="var(--brass)"/>
+        <rect x="20" y="4" width="4" height="18" rx="1.5" fill="var(--brass)"/>
+        <rect x="6" y="11" width="5" height="4" rx="1" fill="var(--faint)"/>
+        <rect x="15" y="11" width="5" height="4" rx="1" fill="var(--faint)"/>
+        <circle cx="13" cy="13" r="2.2" fill="var(--jade)"/>
+      </svg>
+      jig <em>/</em> <span class="sub">workbench</span>
+    </div>
+    <div class="sessionmeta" id="sessionmeta">no session — pick a server in Connect</div>
+    <div class="lamp" id="lamp">idle</div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tab-connect" data-pane="connect" aria-selected="true">Connect</button>
+    <button class="tab" role="tab" id="tab-wire" data-pane="wire" aria-selected="false" disabled>Wire <span class="count" id="count-wire"></span></button>
+    <button class="tab" role="tab" id="tab-report" data-pane="report" aria-selected="false" disabled>Report card</button>
+    <button class="tab" role="tab" id="tab-context" data-pane="context" aria-selected="false" disabled>Context &amp; budget <span class="count" id="count-context"></span></button>
+  </nav>
+
+  <main>
+
+    <!-- ---------------------------------------------------------------- -->
+    <section class="pane active" id="pane-connect" role="tabpanel">
+      <div class="pane-inner">
+        <div class="fighead">
+          <div class="figno">Pane 01</div>
+          <div>
+            <h1 class="figtitle">Connect</h1>
+            <p class="figsub">Pick a server jig found in your editor configs, or point it at a
+              command or URL yourself. The handshake result is shown exactly as the server
+              reported it.</p>
+          </div>
+        </div>
+
+        <div id="connect-error"></div>
+
+        <div class="connect-grid">
+          <div class="card">
+            <span class="label">Discovered servers</span>
+            <div class="serverlist" id="serverlist">
+              <div class="empty">scanning…</div>
+            </div>
+            <div id="discovery-warnings"></div>
+          </div>
+
+          <div class="card">
+            <span class="label">Manual target</span>
+            <div class="field">
+              <input type="text" id="manual-stdio" placeholder="npx -y @modelcontextprotocol/server-everything" autocomplete="off">
+            </div>
+            <div class="field">
+              <input type="text" id="manual-http" placeholder="https://example.com/mcp" autocomplete="off">
+            </div>
+            <details class="advanced">
+              <summary>Advanced</summary>
+              <div class="advanced-grid">
+                <div>
+                  <span class="label">Timeout (s)</span>
+                  <input type="text" id="opt-timeout" value="30" autocomplete="off">
+                </div>
+                <div>
+                  <span class="label">Max message bytes</span>
+                  <input type="text" id="opt-maxbytes" value="67108864" autocomplete="off">
+                </div>
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:.7rem; margin-top:1.2rem; align-items:center;">
+          <button class="action" id="btn-connect">Connect</button>
+          <button class="ghost" id="btn-disconnect" disabled>Disconnect</button>
+          <button class="ghost" id="btn-rescan">Rescan</button>
+        </div>
+
+        <div id="handshake"></div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------------- -->
+    <section class="pane" id="pane-wire" role="tabpanel">
+      <div class="pane-inner">
+        <div class="fighead">
+          <div class="figno">Pane 02</div>
+          <div>
+            <h1 class="figtitle">Request / response spans</h1>
+            <p class="figsub">Every message jig exchanged with this server, correlated into spans
+              on a folded time axis. Quiet stretches longer than a second are elided so
+              millisecond traffic stays readable. Click a row to inspect the raw JSON-RPC.</p>
+          </div>
+        </div>
+        <div id="wire-body"><div class="empty">no traffic yet</div></div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------------- -->
+    <section class="pane" id="pane-report" role="tabpanel">
+      <div class="pane-inner">
+        <div class="fighead">
+          <div class="figno">Pane 03</div>
+          <div>
+            <h1 class="figtitle">Report card</h1>
+            <p class="figsub">The same graded verdict <code class="mono">jig check</code> writes,
+              scored by the same rubric against the same bundled census. Grading opens its own
+              session, because a clean shutdown is itself one of the things being measured.</p>
+          </div>
+        </div>
+        <div style="display:flex; gap:.7rem; margin-bottom:1.2rem;">
+          <button class="action" id="btn-check">Run check</button>
+        </div>
+        <div id="report-body"><div class="empty">not graded yet</div></div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------------- -->
+    <section class="pane" id="pane-context" role="tabpanel">
+      <div class="pane-inner">
+        <div class="fighead">
+          <div class="figno">Pane 04</div>
+          <div>
+            <h1 class="figtitle">Context &amp; budget</h1>
+            <p class="figsub">What this server costs before the user's first word: the
+              token-annotated request body, and where those tokens go tool by tool.</p>
+          </div>
+        </div>
+        <div class="ctx-head">
+          <div class="modelpick">
+            <span class="label">Model</span>
+            <select id="model-select"></select>
+          </div>
+        </div>
+        <div id="context-body"><div class="empty">connect to a server first</div></div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="provenance">
+    <span id="prov-left">jig workbench · every number came off the wire</span>
+    <span id="prov-right">no telemetry · no network call but the server you chose</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

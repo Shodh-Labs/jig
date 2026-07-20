@@ -29,6 +29,13 @@ jobs:
       - uses: actions/checkout@v7
       - name: Select stable toolchain
         run: rustup default stable
+      # `jig-app` (Tauri) links against WebKitGTK on Linux, so every job that
+      # compiles the whole workspace needs these. No-op on other runners.
+      - name: Install Linux webkit dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --all-targets
@@ -44,6 +51,12 @@ jobs:
         run: rustup default stable
       - name: Add rustfmt + clippy
         run: rustup component add rustfmt clippy
+      # `jig-app` (Tauri) links against WebKitGTK on Linux, and this job
+      # compiles the whole workspace.
+      - name: Install Linux webkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo fmt --check
         run: cargo fmt --all --check
@@ -60,9 +73,51 @@ jobs:
       - uses: actions/checkout@v7
       - name: Select stable toolchain
         run: rustup default stable
+      # `jig-app` (Tauri) links against WebKitGTK on Linux, and this job
+      # compiles the whole workspace.
+      - name: Install Linux webkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo doc
         run: cargo doc --workspace --no-deps
+
+  jig-app:
+    name: workbench build / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Windows is where our users are and where WebView2 lives; Linux is where
+      # the webkit stack differs most. Each must report its own verdict.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Select stable toolchain
+        run: rustup default stable
+      # Tauri's Linux backend is WebKitGTK; without these the crate cannot even
+      # compile. Windows needs nothing extra — the WebView2 runtime ships with
+      # the runner image.
+      - name: Install Linux webkit dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            patchelf
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Build the workbench
+        run: cargo build -p jig-app
+      - name: Test the workbench command layer
+        # The command layer is deliberately thin over pure functions (wire
+        # correlation, DTO mapping, target parsing), so these run headless —
+        # no webview and no display server required.
+        run: cargo test -p jig-app
 
   coverage:
     name: coverage (llvm-cov)
@@ -73,6 +128,12 @@ jobs:
         run: rustup default stable
       - name: Add llvm-tools-preview
         run: rustup component add llvm-tools-preview
+      # `jig-app` (Tauri) links against WebKitGTK on Linux, and this job
+      # compiles the whole workspace.
+      - name: Install Linux webkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
@@ -102,6 +163,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: Select stable toolchain
         run: rustup default stable
+      # `jig-app` (Tauri) links against WebKitGTK on Linux, and this job
+      # compiles the whole workspace.
+      - name: Install Linux webkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Build jig + mock server
         run: cargo build --workspace

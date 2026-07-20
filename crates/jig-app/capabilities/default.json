@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The workbench window. Jig's own commands only — no filesystem, shell, HTTP, or clipboard plugins are enabled, because the app makes no network call except to the MCP server the user chose.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
