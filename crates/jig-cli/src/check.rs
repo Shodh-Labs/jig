@@ -134,7 +134,7 @@ fn display_path(path: &Path) -> String {
 /// into the binary is used (so `npx`/installed runs still score against the
 /// ecosystem). `--percentiles none` opts out to absolute bands. An explicit file
 /// path must exist and parse — an explicit missing/unusable file is a hard error.
-fn load_percentiles(explicit: Option<&Path>) -> Result<Option<Percentiles>, String> {
+pub(crate) fn load_percentiles(explicit: Option<&Path>) -> Result<Option<Percentiles>, String> {
     match explicit {
         // The opt-out sentinel: force absolute bands, no ecosystem comparison.
         Some(path) if path == Path::new(PERCENTILES_NONE_SENTINEL) => Ok(None),
@@ -171,19 +171,21 @@ fn startup_failure_message(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_inner(
+/// Run the one check session against `target` and score it.
+///
+/// This is the whole of `jig check` minus presentation: connect, time the list,
+/// probe the unknown-method error code, read the surface, shut down cleanly,
+/// fold in whatever pollution the tap saw, and hand the result to the pure
+/// scoring engine. Factored out because `jig serve` exposes the very same
+/// measurement as the `check_server` MCP tool — the CLI verb and the MCP tool
+/// must grade identically or the score means nothing.
+pub(crate) async fn observe_and_evaluate(
     target: &Target,
-    tap: ProtocolTap,
+    tap: &ProtocolTap,
     percentiles: Option<&Percentiles>,
-    as_json: bool,
-    badge: bool,
-    min_score: Option<f64>,
-    report_path: Option<PathBuf>,
-    no_report: bool,
     timeout_secs: u64,
     max_message_bytes: u64,
-) -> Result<ExitCode, String> {
+) -> Result<CheckReport, String> {
     let client = match target
         .connect(tap.clone(), timeout_secs, max_message_bytes)
         .await
@@ -247,7 +249,24 @@ async fn run_inner(
         },
     };
 
-    let report = evaluate(&input, percentiles);
+    Ok(evaluate(&input, percentiles))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_inner(
+    target: &Target,
+    tap: ProtocolTap,
+    percentiles: Option<&Percentiles>,
+    as_json: bool,
+    badge: bool,
+    min_score: Option<f64>,
+    report_path: Option<PathBuf>,
+    no_report: bool,
+    timeout_secs: u64,
+    max_message_bytes: u64,
+) -> Result<ExitCode, String> {
+    let report =
+        observe_and_evaluate(target, &tap, percentiles, timeout_secs, max_message_bytes).await?;
 
     if badge {
         emit_line(&render_badge(&report));
@@ -470,7 +489,7 @@ fn render_badge(report: &CheckReport) -> String {
 
 /// Render the full machine-readable report: per-dimension scores + weights,
 /// every finding, the composite, the rubric version, and percentile provenance.
-fn render_json(report: &CheckReport) -> String {
+pub(crate) fn render_json(report: &CheckReport) -> String {
     let dimensions: Vec<Value> = report.dimensions.iter().map(dimension_json).collect();
     let top_fixes: Vec<Value> = report.top_fixes(3).into_iter().map(finding_json).collect();
 

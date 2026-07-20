@@ -17,7 +17,7 @@ use crate::{emit, warn_non_protocol_output, write_tap_if_requested, Target};
 /// Default models when the user passes no `--model`: one exact (OpenAI) column
 /// and one labelled-approximate (Anthropic) column — the headline "what does
 /// this cost in Claude context" answer, honestly labelled.
-const DEFAULT_MODELS: &[&str] = &["gpt-4o", "claude-sonnet"];
+pub(crate) const DEFAULT_MODELS: &[&str] = &["gpt-4o", "claude-sonnet"];
 
 /// Run `jig budget`.
 #[allow(clippy::too_many_arguments)]
@@ -205,7 +205,7 @@ fn tool_label(mb: &ModelBudget, name: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Render the default terminal table.
-fn render_table(server: &Implementation, budgets: &[ModelBudget]) -> String {
+pub(crate) fn render_table(server: &Implementation, budgets: &[ModelBudget]) -> String {
     let mut s = String::new();
     s.push_str(&format!("Server: {} v{}\n\n", server.name, server.version));
 
@@ -464,7 +464,11 @@ fn md_escape(s: &str) -> String {
 
 /// Render full machine-readable JSON, including exactness metadata and the
 /// canonical rendering that was counted.
-fn render_json(server: &Implementation, tools: &[Tool], budgets: &[ModelBudget]) -> String {
+pub(crate) fn render_json(
+    server: &Implementation,
+    tools: &[Tool],
+    budgets: &[ModelBudget],
+) -> String {
     let models: Vec<Value> = budgets
         .iter()
         .map(|mb| {

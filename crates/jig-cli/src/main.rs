@@ -16,6 +16,10 @@
 //! * `jig eval --stdio "<cmd>" [--suite <path>...]` — run a `.jig` eval suite:
 //!   replay `prompt → expected tool` cases and gate on the selection rate across
 //!   N runs (see [`mod@eval`]).
+//! * `jig serve` — run jig itself as an MCP server over stdio, so any MCP
+//!   client can call `check_server`/`budget_server`/`context_server`/
+//!   `inspect_server`/`bench_server`/`list_local_servers` as tools
+//!   (see [`mod@serve`]).
 //! * `jig servers` — discover the MCP servers already configured on this
 //!   machine (Claude Desktop/Code, Cursor, VS Code, project `.mcp.json`), merged
 //!   and labelled by source (see [`servers`]).
@@ -56,6 +60,7 @@ mod ecosystem;
 mod eval;
 mod render;
 mod report;
+mod serve;
 mod servers;
 
 /// Write `s` to stdout, flushing, in a broken-pipe-safe way.
@@ -610,6 +615,23 @@ enum Command {
         #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
         max_message_bytes: u64,
     },
+    /// Run Jig itself as an MCP server over stdio, exposing its own
+    /// capabilities as tools so any MCP client or agent can grade, price,
+    /// inspect and bench other servers without a shell.
+    ///
+    /// Speaks MCP 2025-06-18 and advertises `tools`. When the host advertises
+    /// the `sampling` capability, `bench_server` borrows the host's model via
+    /// `sampling/createMessage` — no API key is involved anywhere.
+    Serve {
+        /// Default per-request timeout in seconds when connecting to a target
+        /// server (0 = wait forever). A tool call may override it.
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
+        timeout: u64,
+        /// Maximum size in bytes of a single inbound message from a target
+        /// server (0 = no cap).
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
+        max_message_bytes: u64,
+    },
     /// List the MCP servers already configured on this machine, by source.
     Servers {
         /// Emit machine-readable JSON (env values redacted) instead of a table.
@@ -1030,6 +1052,10 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             )
             .await
         }
+        Command::Serve {
+            timeout,
+            max_message_bytes,
+        } => serve::run(timeout, max_message_bytes).await,
         Command::Servers { json } => servers::run(json),
         Command::Search {
             query,
