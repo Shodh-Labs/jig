@@ -43,6 +43,7 @@ pub mod error;
 pub mod eval;
 pub mod http;
 pub mod injection;
+pub mod judge;
 pub mod login;
 pub mod protocol;
 pub mod tap;
@@ -97,6 +98,11 @@ pub use eval::{
 };
 pub use http::{HttpTransport, ListenSummary};
 pub use injection::scan as scan_injection;
+pub use judge::{
+    parse_judgements, render_judge_request, render_tool_surface, run_judge, Answer as JudgeAnswer,
+    JudgeConfig, JudgeError, JudgeReport, Judgement, Question as JudgeQuestion, ToolJudgement,
+    ToolVerdict, JUDGE_MAX_TOKENS, JUDGE_PROMPT_VERSION, JUDGE_SYSTEM_PROMPT, JUDGE_TEMPERATURE,
+};
 pub use login::{
     login, AuthenticatedSession, CallbackParams, LoginConfig, LoginOutcome, LoginStep, Pkce,
     Secret, LOGIN_CLIENT_NAME,
