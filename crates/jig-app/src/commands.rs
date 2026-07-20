@@ -13,7 +13,7 @@ use crate::dto;
 use crate::session::{self, ConnectOptions, Target};
 use crate::wire;
 use jig_core::check::{evaluate, CheckInput, Observations, PollutionSite};
-use jig_core::{BootTiming, StartupVerdict, Client, JigError, ProtocolTap, Tool};
+use jig_core::{BootTiming, Client, JigError, ProtocolTap, StartupVerdict, Tool};
 use serde::Serialize;
 use serde_json::Value;
 use std::time::Instant;

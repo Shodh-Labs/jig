@@ -325,9 +325,15 @@ async fn run_inner(
     max_message_bytes: u64,
     no_prewarm: bool,
 ) -> Result<ExitCode, String> {
-    let report =
-        observe_and_evaluate(target, &tap, percentiles, timeout_secs, max_message_bytes, no_prewarm)
-            .await?;
+    let report = observe_and_evaluate(
+        target,
+        &tap,
+        percentiles,
+        timeout_secs,
+        max_message_bytes,
+        no_prewarm,
+    )
+    .await?;
 
     if badge {
         emit_line(&render_badge(&report));
