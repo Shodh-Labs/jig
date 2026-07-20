@@ -1370,10 +1370,7 @@ pub fn classify_sampling_text(text: &str, server_tools: &HashSet<String>) -> Out
             classify_anthropic(&synthetic, server_tools).outcome
         }
         _ => {
-            let answer = obj
-                .get("answer")
-                .and_then(Value::as_str)
-                .unwrap_or(text);
+            let answer = obj.get("answer").and_then(Value::as_str).unwrap_or(text);
             Outcome::NoTool {
                 excerpt: excerpt(answer),
             }
