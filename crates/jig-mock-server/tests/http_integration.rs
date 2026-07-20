@@ -495,3 +495,23 @@ async fn http_resources_read_and_prompts_get() {
 
     client.shutdown().await.expect("clean shutdown");
 }
+
+/// **An unobservable stderr volume is `None`, never `0`.**
+///
+/// A remote server's stderr belongs to a process Jig never spawned, so there is
+/// nothing to count. Reporting `0` would assert the server logged nothing —
+/// a claim Jig has no basis for. The absence is modelled explicitly so callers
+/// (notably `jig check`'s informational finding) can omit the figure rather
+/// than publish a fabricated zero.
+#[tokio::test]
+async fn http_stderr_volume_is_unknown_not_zero() {
+    let (_guard, url) = spawn_http(&[]).await;
+    let client = Client::connect_http(&url).await.expect("handshake");
+
+    assert!(
+        client.stderr_volume().is_none(),
+        "an HTTP target has no child stderr to observe"
+    );
+
+    client.shutdown().await.expect("shutdown");
+}

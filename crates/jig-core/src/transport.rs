@@ -853,6 +853,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stderr_volume_counts_lines_with_their_newline() {
+        let c = StderrCounters::default();
+        assert!(c.snapshot().is_silent());
+
+        c.record(5); // a 5-byte line + its newline
+        c.record(0); // a bare newline
+        let v = c.snapshot();
+        assert_eq!(v.lines, 2);
+        assert_eq!(v.bytes, 7);
+        assert!(!v.is_silent());
+    }
+
+    #[test]
     fn parse_response_extracts_result() {
         let v = json!({ "jsonrpc": "2.0", "id": 1, "result": { "ok": true } });
         let out = parse_response(v).unwrap();
