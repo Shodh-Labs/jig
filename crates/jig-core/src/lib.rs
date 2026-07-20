@@ -86,8 +86,8 @@ pub use login::{
 };
 pub use protocol::{
     ContentBlock, Implementation, InitializeResult, Prompt, PromptArgument, PromptGetResult,
-    PromptMessage, Resource, ResourceContents, ResourceReadResult, Tool, ToolCallResult,
-    LATEST_PROTOCOL_VERSION,
+    PromptMessage, Resource, ResourceContents, ResourceReadResult, Tool, ToolAnnotations,
+    ToolCallResult, LATEST_PROTOCOL_VERSION,
 };
 pub use tap::{Direction, NonProtocolLine, ProtocolTap, TapEntry};
 pub use tokens::{
@@ -95,5 +95,5 @@ pub use tokens::{
     ToolBudget, CANONICAL_RENDERING_DOC,
 };
 pub use transport::{
-    StdioTransport, Transport, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_REQUEST_TIMEOUT,
+    StderrVolume, StdioTransport, Transport, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_REQUEST_TIMEOUT,
 };

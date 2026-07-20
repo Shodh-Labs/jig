@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -36,6 +36,56 @@ type ReadFault = Arc<Mutex<Option<JigError>>>;
 /// A bounded ring of the child's most recent stderr lines, kept so a spawn/
 /// handshake/request failure can quote the server's own diagnostics.
 type StderrTail = Arc<Mutex<VecDeque<String>>>;
+
+/// How much a child process wrote to its stderr over the whole session.
+///
+/// The [`StderrTail`] ring keeps only the last `STDERR_TAIL_LINES` lines for
+/// error context, so it cannot answer "how much did this server log?" — an
+/// evicted line is gone, and a truncated line under-reports. These counters are
+/// cumulative and are taken *before* the ring's truncation, so the figure
+/// reflects what the child actually wrote.
+///
+/// Volume is **informational**. The stdio transport spec designates stderr for
+/// logging, so a chatty server is a smell, never a defect: Jig reports this and
+/// does not score it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StderrVolume {
+    /// Total newline-terminated lines observed on the child's stderr.
+    pub lines: usize,
+    /// Total bytes observed: each line's UTF-8 byte length plus one for the
+    /// newline that terminated it.
+    pub bytes: usize,
+}
+
+impl StderrVolume {
+    /// Whether the child wrote nothing at all to stderr.
+    pub fn is_silent(&self) -> bool {
+        self.lines == 0 && self.bytes == 0
+    }
+}
+
+/// The shared cumulative stderr counters, written by the drain task and read by
+/// [`StdioTransport::stderr_volume`].
+#[derive(Debug, Default)]
+struct StderrCounters {
+    lines: AtomicUsize,
+    bytes: AtomicUsize,
+}
+
+impl StderrCounters {
+    fn record(&self, line_bytes: usize) {
+        self.lines.fetch_add(1, Ordering::Relaxed);
+        // +1 for the newline the line reader consumed.
+        self.bytes.fetch_add(line_bytes + 1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> StderrVolume {
+        StderrVolume {
+            lines: self.lines.load(Ordering::Relaxed),
+            bytes: self.bytes.load(Ordering::Relaxed),
+        }
+    }
+}
 
 /// Default per-request timeout: a server that accepts a request and never
 /// answers must not hang Jig forever. Overridable at spawn (`None` disables it).
@@ -80,6 +130,9 @@ pub struct StdioTransport {
     /// EOF and every line has been captured), so a disconnect diagnosis can wait
     /// for the full tail rather than guess at a fixed grace period.
     stderr_done: Arc<AtomicBool>,
+    /// Cumulative stderr volume, tracked separately from the bounded tail ring
+    /// so eviction and per-line truncation cannot distort the figure.
+    stderr_counters: Arc<StderrCounters>,
     reader: JoinHandle<()>,
     stderr_drain: JoinHandle<()>,
 }
@@ -185,6 +238,7 @@ impl StdioTransport {
         let read_fault: ReadFault = Arc::new(Mutex::new(None));
         let stderr_tail: StderrTail = Arc::new(Mutex::new(VecDeque::new()));
         let stderr_done = Arc::new(AtomicBool::new(false));
+        let stderr_counters: Arc<StderrCounters> = Arc::new(StderrCounters::default());
 
         let reader = tokio::spawn(read_loop(
             stdout,
@@ -197,6 +251,7 @@ impl StdioTransport {
             stderr,
             Arc::clone(&stderr_tail),
             Arc::clone(&stderr_done),
+            Arc::clone(&stderr_counters),
         ));
 
         Ok(StdioTransport {
@@ -209,6 +264,7 @@ impl StdioTransport {
             read_fault,
             stderr_tail,
             stderr_done,
+            stderr_counters,
             reader,
             stderr_drain,
         })
@@ -217,6 +273,16 @@ impl StdioTransport {
     /// Access the shared protocol tap for this connection.
     pub fn tap(&self) -> &ProtocolTap {
         &self.tap
+    }
+
+    /// How much the child has written to stderr so far this session.
+    ///
+    /// A live snapshot: the drain task runs concurrently, so calling this while
+    /// the server is still logging returns the volume observed *up to now*.
+    /// Call it after the operations you care about (and before shutdown) for a
+    /// figure covering the whole session.
+    pub fn stderr_volume(&self) -> StderrVolume {
+        self.stderr_counters.snapshot()
     }
 
     /// Send a JSON-RPC request and await its correlated response `result`.
@@ -466,6 +532,19 @@ impl Transport {
         match self {
             Transport::Stdio(t) => t.tap(),
             Transport::Http(t) => t.tap(),
+        }
+    }
+
+    /// How much the server has written to stderr this session, when the
+    /// transport has a child stderr at all.
+    ///
+    /// `None` for HTTP: a remote server's stderr belongs to a process Jig never
+    /// spawned and cannot observe. Reporting `0` there would be a claim Jig has
+    /// no basis for, so the absence is modelled explicitly.
+    pub fn stderr_volume(&self) -> Option<StderrVolume> {
+        match self {
+            Transport::Stdio(t) => Some(t.stderr_volume()),
+            Transport::Http(_) => None,
         }
     }
 
@@ -738,10 +817,14 @@ async fn drain_stderr(
     stderr: tokio::process::ChildStderr,
     tail: StderrTail,
     done: Arc<AtomicBool>,
+    counters: Arc<StderrCounters>,
 ) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let mut line = line;
+        // Count the line at full length, before the ring truncates it — the
+        // volume figure must describe what the server wrote, not what we kept.
+        counters.record(line.len());
         if line.chars().count() > STDERR_LINE_MAX {
             line = line.chars().take(STDERR_LINE_MAX).collect::<String>() + "…";
         }

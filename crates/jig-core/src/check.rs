@@ -2069,11 +2069,7 @@ fn score_schema(input: &CheckInput) -> DimensionScore {
     }
 
     // Missing annotations, as a single rolled-up finding over all tools.
-    let missing_annotations = input
-        .tools
-        .iter()
-        .filter(|t| !has_annotations(&t.input_schema, t))
-        .count();
+    let missing_annotations = input.tools.iter().filter(|t| !has_annotations(t)).count();
     if missing_annotations > 0 {
         findings.push(rates.record(
             SCHEMA_CLASS_ANNOTATIONS,
@@ -2175,24 +2171,22 @@ fn property_has_type(spec: &Value) -> bool {
     false
 }
 
-/// Whether a tool declares any annotations. MCP carries these in a top-level
-/// `annotations` object on the tool; some servers instead attach hints to the
-/// input schema, so both are accepted.
-fn has_annotations(schema: &Value, tool: &Tool) -> bool {
-    // The typed `Tool` keeps only fields Jig reads; annotations live in the raw
-    // input schema here (or would be added as a typed field later). Check the
-    // schema object for any *Hint key or an `annotations` object.
-    if let Some(obj) = schema.as_object() {
-        if obj.contains_key("annotations") {
-            return true;
-        }
-        if obj.keys().any(|k| k.ends_with("Hint")) {
-            return true;
-        }
-    }
-    // Defensive: a future typed annotations field would be checked here.
-    let _ = tool;
-    false
+/// Whether a tool declares any annotations, decided **exactly** from the typed
+/// [`Tool::annotations`] field.
+///
+/// Per MCP `2025-06-18` `annotations` is a sibling of `inputSchema` on the tool
+/// object. Jig used to sniff the input schema for an `annotations` key or any
+/// `*Hint` key, which was wrong in both directions: a tool with a legitimate
+/// argument named `readOnlyHint`, or with JSON-Schema `annotations`, scored as
+/// annotated when it declared nothing; and the shape servers actually send was
+/// invisible because the typed struct dropped it.
+///
+/// A bare `"annotations": {}` declares nothing and is not counted — the object
+/// is present but makes no claim about the tool.
+///
+/// [`Tool::annotations`]: crate::protocol::Tool::annotations
+fn has_annotations(tool: &Tool) -> bool {
+    tool.annotations.as_ref().is_some_and(|a| !a.is_empty())
 }
 
 fn schema_summary(findings: &[Finding], n_tools: usize) -> String {
@@ -2602,6 +2596,21 @@ mod tests {
         serde_json::from_value(Value::Object(m)).unwrap()
     }
 
+    /// Like [`tool`], but carrying a real behavioural annotation as a **sibling**
+    /// of `inputSchema` — the placement MCP `2025-06-18` specifies. Hints buried
+    /// inside the input schema annotate nothing and must not be mistaken for
+    /// these.
+    fn tool_annotated(name: &str, desc: Option<&str>, schema: Value) -> Tool {
+        let mut m = serde_json::Map::new();
+        m.insert("name".to_string(), json!(name));
+        if let Some(d) = desc {
+            m.insert("description".to_string(), json!(d));
+        }
+        m.insert("inputSchema".to_string(), schema);
+        m.insert("annotations".to_string(), json!({ "readOnlyHint": true }));
+        serde_json::from_value(Value::Object(m)).unwrap()
+    }
+
     /// A clean input over the three mock-server tools.
     fn clean_input() -> CheckInput {
         CheckInput {
@@ -2784,7 +2793,7 @@ mod tests {
             tools: vec![tool(
                 "bad name!",
                 Some("a reasonably sized tool description here"),
-                json!({ "type": "object", "properties": {}, "annotations": {} }),
+                json!({ "type": "object", "properties": {} }),
             )],
             ..clean_input()
         };
@@ -3025,7 +3034,7 @@ mod tests {
             tools: vec![tool(
                 "bad name",
                 Some("a reasonably sized description of the tool"),
-                json!({ "type": "object", "properties": {}, "annotations": {} }),
+                json!({ "type": "object", "properties": {} }),
             )],
             ..clean_input()
         };
@@ -3051,17 +3060,17 @@ mod tests {
                 tool(
                     "get_user",
                     Some("snake one two three"),
-                    json!({ "type": "object", "properties": {}, "annotations": {} }),
+                    json!({ "type": "object", "properties": {} }),
                 ),
                 tool(
                     "get_item",
                     Some("snake one two three"),
-                    json!({ "type": "object", "properties": {}, "annotations": {} }),
+                    json!({ "type": "object", "properties": {} }),
                 ),
                 tool(
                     "get-thing",
                     Some("kebab one two three"),
-                    json!({ "type": "object", "properties": {}, "annotations": {} }),
+                    json!({ "type": "object", "properties": {} }),
                 ),
             ],
             ..clean_input()
@@ -3082,12 +3091,12 @@ mod tests {
                 tool(
                     "t",
                     Some("go"),
-                    json!({ "type": "object", "properties": {}, "annotations": {} }),
+                    json!({ "type": "object", "properties": {} }),
                 ),
                 tool(
                     "v",
                     Some(long.trim()),
-                    json!({ "type": "object", "properties": {}, "annotations": {} }),
+                    json!({ "type": "object", "properties": {} }),
                 ),
             ],
             ..clean_input()
@@ -3205,12 +3214,12 @@ mod tests {
                 tool(
                     "giant",
                     Some(big.trim()),
-                    json!({ "type": "object", "properties": {}, "annotations": {} }),
+                    json!({ "type": "object", "properties": {} }),
                 ),
                 tool(
                     "small",
                     Some("a small helper tool here"),
-                    json!({ "type": "object", "properties": {}, "annotations": {} }),
+                    json!({ "type": "object", "properties": {} }),
                 ),
             ],
             ..clean_input()
@@ -3307,12 +3316,11 @@ mod tests {
                         json!({ "type": "object", "properties": { "arg": {} } }),
                     )
                 } else {
-                    tool(
+                    tool_annotated(
                         &format!("tool_{i}"),
                         Some("Does a specific, well-described thing for the caller."),
                         json!({
                             "type": "object",
-                            "annotations": { "readOnlyHint": true },
                             "properties": {
                                 "arg": { "type": "string", "description": "The argument." }
                             }

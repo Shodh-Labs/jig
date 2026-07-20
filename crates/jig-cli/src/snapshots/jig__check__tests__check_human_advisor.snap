@@ -5,10 +5,10 @@ expression: render_human(&report)
 jig check · jig-mock-server v0.1.0
 protocol 2025-06-18 · rubric-v1.2
 
-  ✓  98 / 100   grade A
+  ✓  99 / 100   grade A
 
   ✓  Protocol compliance  100   clean handshake, no stdout pollution, spec-valid capabilities
-  ✓  Context cost          94   1,268 tokens (no ecosystem data — absolute bands)
+  ✓  Context cost          94   1,144 tokens (no ecosystem data — absolute bands)
   ✓  Schema hygiene       100   31 tools — descriptions, types and params all present
   ✓  Description quality  100   heuristic · consistent names, well-sized descriptions
   ✓  Robustness           100   list 12ms, clean shutdown

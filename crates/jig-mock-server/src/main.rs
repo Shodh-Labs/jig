@@ -38,6 +38,11 @@
 //!   `login-bad-iss`, `login-no-s256`, `login-token-error`. See
 //!   [`http::AuthMode`].
 //! * `--pollute-stdout` / `--paginate` — (stdio mode) test fixtures, see below.
+//! * `--noisy-stderr <n>` — (stdio mode) write `n` log lines to **stderr**
+//!   before the protocol loop starts. Not misbehaviour: the stdio transport
+//!   designates stderr for logging, and stdout framing is untouched. It exists
+//!   so Jig's informational stderr-volume plumbing has a deterministic,
+//!   non-zero quantity to observe.
 //! * `--chaos <mode[,mode...]>` — (stdio mode) the **hostile-server chaos
 //!   catalog**: deliberately misbehave in one specific way so Jig's degradation
 //!   can be asserted. Repeatable and/or comma-separated. See [`Chaos`].
@@ -54,6 +59,11 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// Size of the `giant-message` payload (~20 MiB of text in one response).
 const GIANT_BYTES: usize = 20 * 1024 * 1024;
+
+/// Prefix of each `--noisy-stderr` line. Named so the intent is legible; the
+/// stderr-volume integration test mirrors this literal (a binary crate exports
+/// nothing) to compute an expected byte total rather than hard-coding one.
+const NOISY_STDERR_PREFIX: &str = "jig-mock-server: noisy stderr line ";
 
 /// The hostile-server chaos catalog. Each mode makes the stdio server misbehave
 /// in exactly one way — never a panic, never an unbounded hang on the server's
@@ -130,6 +140,16 @@ fn main() {
         };
         http::serve(port, cfg);
         return;
+    }
+
+    // Test fixture: `--noisy-stderr <n>` writes `n` log lines to stderr before
+    // the protocol loop starts. Not misbehaviour — the stdio transport
+    // designates stderr for exactly this — but it gives Jig's stderr-volume
+    // plumbing a deterministic, non-zero quantity to observe.
+    if let Some(n) = flag_usize(&args, "--noisy-stderr") {
+        for i in 0..n {
+            eprintln!("{NOISY_STDERR_PREFIX}{i}");
+        }
     }
 
     let chaos = Chaos::parse(&args);

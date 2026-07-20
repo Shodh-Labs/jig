@@ -13,7 +13,7 @@ use crate::protocol::{
 };
 use crate::tap::ProtocolTap;
 use crate::transport::{
-    StdioTransport, Transport, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_REQUEST_TIMEOUT,
+    StderrVolume, StdioTransport, Transport, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_REQUEST_TIMEOUT,
 };
 
 /// Jig's identity, advertised to servers as `clientInfo`.
@@ -189,6 +189,20 @@ impl Client {
     /// The protocol tap capturing this session's traffic.
     pub fn tap(&self) -> &ProtocolTap {
         self.transport.tap()
+    }
+
+    /// How much the server has written to **stderr** so far this session.
+    ///
+    /// Returns `None` on the HTTP transport, where there is no child process
+    /// whose stderr Jig could observe — an unknown volume, not a zero one.
+    ///
+    /// This is a **smell metric, not a defect metric**: the stdio transport
+    /// designates stderr for logging, so a server writing there is behaving
+    /// correctly. Callers should report it as informational and must not score
+    /// it. It is a live snapshot — read it after the operations you care about
+    /// and before [`Client::shutdown`].
+    pub fn stderr_volume(&self) -> Option<StderrVolume> {
+        self.transport.stderr_volume()
     }
 
     /// The server's advertised identity.

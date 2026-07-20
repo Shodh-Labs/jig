@@ -214,6 +214,13 @@ async fn run_inner(
     let capabilities = client.capabilities().clone();
     let instructions = client.instructions().map(str::to_string);
 
+    // Child stderr volume, read *before* shutdown while the transport (and its
+    // drain task) still exist. `None` on HTTP, where there is no child stderr to
+    // observe — an unknown volume, never an assumed zero. Informational only:
+    // the stdio transport designates stderr for logging, so a server that writes
+    // there is behaving correctly and this is reported, never scored.
+    let stderr_noise_bytes = client.stderr_volume().map(|v| v.bytes);
+
     // Clean shutdown is itself an observed robustness signal.
     let clean_shutdown = client.shutdown().await.is_ok();
 
@@ -240,9 +247,7 @@ async fn run_inner(
             list_timed_out,
             list_latency,
             clean_shutdown,
-            // Child stderr volume is not plumbed through the client; left
-            // unobserved rather than assumed.
-            stderr_noise_bytes: None,
+            stderr_noise_bytes,
             unknown_method,
         },
     };
@@ -651,8 +656,11 @@ mod tests {
         m.insert("description".to_string(), json!(desc));
         m.insert(
             "inputSchema".to_string(),
-            json!({ "type": "object", "properties": {}, "annotations": {} }),
+            json!({ "type": "object", "properties": {} }),
         );
+        // A real annotation, as a *sibling* of `inputSchema` — where MCP puts
+        // it. A `readOnlyHint` inside the schema would not annotate anything.
+        m.insert("annotations".to_string(), json!({ "readOnlyHint": true }));
         serde_json::from_value(Value::Object(m)).unwrap()
     }
 

@@ -296,3 +296,69 @@ async fn tools_list_follows_cursor_pagination() {
 
     client.shutdown().await.expect("shutdown");
 }
+
+/// **Child stderr volume is observable and informational.**
+///
+/// The transport keeps only a bounded *ring* of recent stderr lines for error
+/// context, so the ring cannot answer "how much did this server log?". The
+/// cumulative counters can, and this asserts they survive ring eviction: 50
+/// lines is well past the 20-line tail, yet all 50 are counted.
+///
+/// Writing to stderr is correct MCP behaviour, so nothing here is a defect —
+/// the figure exists to be *reported*, never scored.
+#[tokio::test]
+async fn child_stderr_volume_is_counted_past_the_tail_ring() {
+    const LINES: usize = 50;
+
+    let client = Client::connect(
+        &mock_server(),
+        &["--noisy-stderr".to_string(), LINES.to_string()],
+    )
+    .await
+    .expect("handshake");
+
+    // The handshake alone does not guarantee the drain task has consumed every
+    // line yet, so poll briefly for the expected count rather than racing it.
+    let mut volume = client.stderr_volume().expect("stdio transport has stderr");
+    for _ in 0..200 {
+        if volume.lines >= LINES {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        volume = client.stderr_volume().expect("stdio transport has stderr");
+    }
+
+    assert_eq!(
+        volume.lines,
+        LINES,
+        "every line must be counted, including the {} evicted from the tail ring",
+        LINES.saturating_sub(20)
+    );
+    // Byte total is derived, not hand-copied: each line is the shared prefix
+    // plus its index, plus the newline that terminated it. The prefix must stay
+    // in step with `NOISY_STDERR_PREFIX` in the mock server's `main.rs` — a
+    // binary crate exports nothing, so it is mirrored rather than imported.
+    const PREFIX: &str = "jig-mock-server: noisy stderr line ";
+    let expected_bytes: usize = (0..LINES)
+        .map(|i| PREFIX.len() + i.to_string().len() + 1)
+        .sum();
+    assert_eq!(volume.bytes, expected_bytes);
+
+    // Stdout framing is untouched: stderr logging never corrupts the protocol.
+    assert!(client.tap().non_protocol_inbound_detailed().is_empty());
+    assert_eq!(client.list_tools().await.expect("tools/list").len(), 3);
+
+    client.shutdown().await.expect("shutdown");
+}
+
+/// A silent server reports zero volume, and an HTTP target reports `None` —
+/// "unknown", not "zero". Jig never invents an observation it cannot make.
+#[tokio::test]
+async fn a_quiet_server_reports_zero_volume() {
+    let client = Client::connect(&mock_server(), &[])
+        .await
+        .expect("handshake");
+    let volume = client.stderr_volume().expect("stdio transport has stderr");
+    assert!(volume.is_silent(), "unexpected stderr: {volume:?}");
+    client.shutdown().await.expect("shutdown");
+}
