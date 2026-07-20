@@ -58,6 +58,7 @@ mod check;
 mod context;
 mod ecosystem;
 mod eval;
+mod judge_view;
 mod render;
 mod report;
 mod serve;
@@ -192,6 +193,34 @@ enum Command {
         /// and boot still scored.
         #[arg(long)]
         no_prewarm: bool,
+        /// Additionally ask a model whether each description states its
+        /// purpose, distinguishes its siblings, and documents its parameters.
+        ///
+        /// OFF BY DEFAULT, and NEVER SCORED: the judged verdict appears in its
+        /// own report section and its own `judged` JSON key, and cannot move
+        /// the composite, any dimension, the badge, --min-score, or the report
+        /// card's grade. Needs a provider key, or --base-url (+ --no-auth) for
+        /// a local model. If the judge cannot run, check says so in one line
+        /// and exits exactly as it would have.
+        #[arg(long)]
+        judge: bool,
+        /// The model id --judge uses. Known: gpt-4o, gpt-4, claude-sonnet,
+        /// claude-opus. Default: claude-sonnet if ANTHROPIC_API_KEY is set,
+        /// else gpt-4o (always an OpenAI-dialect model behind --base-url).
+        #[arg(long, value_name = "ID", requires = "judge")]
+        judge_model: Option<String>,
+        /// Override the concrete API model string --judge sends on the wire.
+        #[arg(long, value_name = "STRING", requires = "judge")]
+        api_model: Option<String>,
+        /// Send --judge requests to an OpenAI-compatible endpoint instead of
+        /// the vendor API — Ollama (http://localhost:11434/v1), LM Studio,
+        /// llama.cpp, vLLM, or a company gateway.
+        #[arg(long, value_name = "URL", requires = "judge")]
+        base_url: Option<String>,
+        /// Send no credential at all with --judge, for a --base-url endpoint
+        /// that needs none (the usual case for a local model runtime).
+        #[arg(long, requires = "base_url")]
+        no_auth: bool,
     },
     /// Probe and grade a remote server's discoverable OAuth conformance
     /// (RFC 9728 / 8414 / 7591 / 8707 / 9207 / 6750), or — with `--login` —
@@ -795,6 +824,11 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             timeout,
             max_message_bytes,
             no_prewarm,
+            judge,
+            judge_model,
+            api_model,
+            base_url,
+            no_auth,
         } => {
             let target = Target::resolve(stdio, http, server, header)?;
             check::run(
@@ -809,6 +843,12 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 timeout,
                 max_message_bytes,
                 no_prewarm,
+                judge_view::JudgeOptions {
+                    enabled: judge,
+                    model: judge_model,
+                    api_model,
+                    endpoint: bench::Endpoint { base_url, no_auth },
+                },
             )
             .await
         }

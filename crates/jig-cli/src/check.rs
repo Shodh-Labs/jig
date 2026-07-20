@@ -24,6 +24,7 @@ use jig_core::{
 };
 use serde_json::{json, Value};
 
+use crate::judge_view::{JudgeOptions, JudgeOutcome};
 use crate::{emit, emit_line, warn_non_protocol_output, write_tap_if_requested, Target};
 
 /// The `--percentiles` sentinel that opts out of percentile scoring entirely,
@@ -44,6 +45,7 @@ pub async fn run(
     timeout_secs: u64,
     max_message_bytes: u64,
     no_prewarm: bool,
+    judge: JudgeOptions,
 ) -> Result<ExitCode, String> {
     // Load the ecosystem dataset. With no --percentiles the bundled census is
     // used; `--percentiles none` opts out; an explicit missing file is an error.
@@ -62,6 +64,7 @@ pub async fn run(
         timeout_secs,
         max_message_bytes,
         no_prewarm,
+        judge,
     )
     .await;
 
@@ -188,7 +191,7 @@ pub(crate) async fn observe_and_evaluate(
     timeout_secs: u64,
     max_message_bytes: u64,
     no_prewarm: bool,
-) -> Result<CheckReport, String> {
+) -> Result<(CheckReport, Vec<jig_core::Tool>), String> {
     // SOP 25: populate the npx cache *before* timing the launch, so the boot
     // number is the server's and not the registry's. Non-npx commands and
     // `--no-prewarm` skip straight through. See [`jig_core::boot`].
@@ -286,6 +289,11 @@ pub(crate) async fn observe_and_evaluate(
         line: l.raw.clone(),
     });
 
+    // The judge needs the surface the score was computed from — the *same*
+    // tools, not a second listing — so it is returned alongside the report.
+    // It is only ever read; nothing downstream can feed it back into scoring.
+    let judged_tools = tools.clone();
+
     let input = CheckInput {
         server_name: server.name.clone(),
         server_version: server.version.clone(),
@@ -308,7 +316,7 @@ pub(crate) async fn observe_and_evaluate(
         },
     };
 
-    Ok(evaluate(&input, percentiles))
+    Ok((evaluate(&input, percentiles), judged_tools))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -324,8 +332,9 @@ async fn run_inner(
     timeout_secs: u64,
     max_message_bytes: u64,
     no_prewarm: bool,
+    judge: JudgeOptions,
 ) -> Result<ExitCode, String> {
-    let report = observe_and_evaluate(
+    let (report, tools) = observe_and_evaluate(
         target,
         &tap,
         percentiles,
@@ -335,12 +344,30 @@ async fn run_inner(
     )
     .await?;
 
+    // Honesty rule 1: no judge call unless --judge was passed. The pass runs
+    // *after* the report is fully computed, and its result is only ever
+    // rendered — `report` is never rebuilt, re-scored, or consulted again.
+    let judged: Option<JudgeOutcome> = if judge.enabled {
+        Some(crate::judge_view::run(&tools, &judge, timeout_secs).await)
+    } else {
+        None
+    };
+
     if badge {
+        // The badge is the composite and nothing else; a judged run emits the
+        // identical badge, which is the point.
         emit_line(&render_badge(&report));
     } else if as_json {
-        emit(&render_json(&report));
+        emit(&render_json_with_judge(&report, judged.as_ref()));
     } else {
         emit(&render_human(&report));
+        if let Some(outcome) = &judged {
+            emit(&format!(
+                "
+{}",
+                crate::judge_view::render_section(outcome)
+            ));
+        }
         // For an HTTP target, surface a compact, informational OAuth-conformance
         // section. The auth dimension is NOT scored into the rubric-v1.2 composite
         // in this milestone; it is a heads-up only. The probe reuses the session
@@ -588,10 +615,48 @@ fn render_badge(report: &CheckReport) -> String {
 /// Render the full machine-readable report: per-dimension scores + weights,
 /// every finding, the composite, the rubric version, and percentile provenance.
 pub(crate) fn render_json(report: &CheckReport) -> String {
+    format!(
+        "{}\n",
+        serde_json::to_string_pretty(&check_doc(report)).unwrap_or_else(|_| "{}".to_string())
+    )
+}
+
+/// Render the machine-readable report with an optional `judged` key attached.
+///
+/// When `judged` is `None` — the default, no `--judge` — the emitted bytes are
+/// exactly [`render_json`]'s. When it is `Some`, a single top-level `judged`
+/// key is **added** and nothing else is touched: the composite, every dimension
+/// score, the grade and every finding are already fixed by the time this runs.
+pub(crate) fn render_json_with_judge(
+    report: &CheckReport,
+    judged: Option<&JudgeOutcome>,
+) -> String {
+    let mut doc = check_doc(report);
+    if let (Some(outcome), Some(map)) = (judged, doc.as_object_mut()) {
+        map.insert(
+            "judged".to_string(),
+            crate::judge_view::render_json(outcome),
+        );
+    }
+    format!(
+        "{}
+",
+        serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string())
+    )
+}
+
+/// The machine-readable check document, before any judged section is attached.
+///
+/// Split out from [`render_json`] so `--judge` can add its own top-level key
+/// without the deterministic document being re-derived (or re-ordered) on the
+/// judged path. Every byte here is a pure function of the [`CheckReport`], and
+/// the [`CheckReport`] is computed from observations the judge never touches —
+/// which is why `--judge` cannot move a single value in this object.
+fn check_doc(report: &CheckReport) -> Value {
     let dimensions: Vec<Value> = report.dimensions.iter().map(dimension_json).collect();
     let top_fixes: Vec<Value> = report.top_fixes(3).into_iter().map(finding_json).collect();
 
-    let doc = json!({
+    json!({
         "server": { "name": report.server_name, "version": report.server_version },
         "protocolVersion": report.protocol_version,
         "rubricVersion": report.rubric_version,
@@ -634,11 +699,7 @@ pub(crate) fn render_json(report: &CheckReport) -> String {
         // Tool-poisoning findings (`rubric-v1.3`). Reported, never scored.
         "injection": report.injection.iter().map(finding_json).collect::<Vec<_>>(),
         "topFixes": top_fixes,
-    });
-    format!(
-        "{}\n",
-        serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string())
-    )
+    })
 }
 
 fn dimension_json(d: &DimensionScore) -> Value {

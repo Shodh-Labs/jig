@@ -370,7 +370,7 @@ async fn check_server(args: &Value, defaults: Defaults) -> ToolOutcome {
     let percentiles = crate::check::load_percentiles(percentiles_path.map(std::path::Path::new))?;
 
     let tap = ProtocolTap::new();
-    let report = crate::check::observe_and_evaluate(
+    let (report, _tools) = crate::check::observe_and_evaluate(
         &target,
         &tap,
         percentiles.as_ref(),

@@ -1,0 +1,89 @@
+---
+source: crates/jig-cli/src/judge_view.rs
+expression: doc
+---
+{
+  "available": true,
+  "endpoint": "http://127.0.0.1:0/judge_ok/v1/chat/completions",
+  "keyless": true,
+  "promptVersion": "judge-prompt-v1",
+  "provider": "openai",
+  "rawResponse": {
+    "model": "mock-judge-1"
+  },
+  "renderedRequest": {
+    "model": "mock-judge-1"
+  },
+  "reportedModel": "mock-judge-1",
+  "requestedModel": "gpt-4o",
+  "responseText": "{…}",
+  "rubricNote": "Judged output is outside rubric-v1.3: it is reported, never scored, and changed nothing above.",
+  "scored": false,
+  "summary": {
+    "questions": [
+      {
+        "label": "states its purpose",
+        "no": 0,
+        "question": "states_purpose",
+        "unclear": 0,
+        "unparseable": 0,
+        "yes": 1
+      },
+      {
+        "label": "distinguishes siblings",
+        "no": 1,
+        "question": "distinguishes_siblings",
+        "unclear": 0,
+        "unparseable": 0,
+        "yes": 0
+      },
+      {
+        "label": "parameters sufficient",
+        "no": 0,
+        "question": "parameters_sufficient",
+        "unclear": 0,
+        "unparseable": 0,
+        "yes": 1
+      }
+    ],
+    "toolsJudged": 1,
+    "toolsNotJudged": 1,
+    "toolsUnparseable": 1
+  },
+  "systemPrompt": "You are auditing the tool descriptions of one MCP (Model Context Protocol) server. You are not calling the tools and you are not judging the server's implementation — only whether an agent reading these descriptions could choose and call the tools correctly.\n\nFor every tool in the list, answer exactly three questions:\n1. states_purpose — Does the description say what the tool actually does?\n2. distinguishes_siblings — Does it say when to use this tool rather than another tool in this same list? If the list has only one tool, answer \"unclear\" and say that there is no sibling to distinguish it from.\n3. parameters_sufficient — Are the parameter descriptions enough for a caller to fill every parameter correctly without guessing?\n\nAnswer each question with a verdict of exactly \"yes\", \"no\", or \"unclear\", plus one sentence of rationale (at most 160 characters). Use \"unclear\" when the description is ambiguous rather than plainly good or plainly bad. Judge only what the text says; do not assume undocumented behaviour.\n\nReply with a single JSON object and nothing else, in this exact shape:\n{\"judgements\": [{\"tool\": \"<name>\", \"states_purpose\": {\"verdict\": \"yes\", \"rationale\": \"...\"}, \"distinguishes_siblings\": {\"verdict\": \"no\", \"rationale\": \"...\"}, \"parameters_sufficient\": {\"verdict\": \"unclear\", \"rationale\": \"...\"}}]}\n\nInclude exactly one entry per tool, in the order given. Do not wrap the object in prose or code fences.",
+  "temperature": 0.0,
+  "tools": [
+    {
+      "distinguishes_siblings": {
+        "rationale": "Never contrasts with make_reservation.",
+        "verdict": "no"
+      },
+      "parameters_sufficient": {
+        "rationale": "`text` is described.",
+        "verdict": "yes"
+      },
+      "states_purpose": {
+        "rationale": "Says it returns the input text verbatim.",
+        "verdict": "yes"
+      },
+      "tool": "echo",
+      "verdict": "judged"
+    },
+    {
+      "detail": "the model's reply did not cover this tool",
+      "tool": "make_reservation",
+      "verdict": "not_judged"
+    },
+    {
+      "detail": "the entry did not carry all three questions as {verdict, rationale}: {\"states_purpose\":{\"rationale\":\"Says it fails, not what it would do.\",\"verdict\":\"unclear\"},\"tool\":\"always_fails\"}",
+      "tool": "always_fails",
+      "verdict": "unparseable"
+    }
+  ],
+  "usage": {
+    "inputTokens": 42,
+    "outputTokens": 7,
+    "totalTokens": 49
+  },
+  "userPrompt": "Tools (3): […]"
+}

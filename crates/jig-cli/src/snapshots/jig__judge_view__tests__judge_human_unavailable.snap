@@ -1,0 +1,6 @@
+---
+source: crates/jig-cli/src/judge_view.rs
+expression: "render_section(&Err(\"ANTHROPIC_API_KEY is not set (pass --base-url + --no-auth for a local model)\".to_string()))"
+---
+Description judge: unavailable — ANTHROPIC_API_KEY is not set (pass --base-url + --no-auth for a local model).
+  The report above is the deterministic score and is unaffected.

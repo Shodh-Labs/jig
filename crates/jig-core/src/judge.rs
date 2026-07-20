@@ -40,7 +40,7 @@
 //!
 //! The judge does not own an HTTP client, a retry policy, a redaction rule or a
 //! keyless-mode branch. It sends through
-//! [`bench::send_provider_request`](crate::bench::send_provider_request) — the
+//! [`bench::send_provider_request`] — the
 //! same function `jig bench` and `jig eval` send through — so a `--base-url`
 //! (Ollama, LM Studio, a gateway) with `--no-auth` judges exactly as well as a
 //! vendor key, by the same code.
@@ -197,7 +197,7 @@ impl Question {
 /// A model's answer to one question. [`Answer::Unparseable`] is what an
 /// unrecognized verdict string becomes — Jig never maps an answer it does not
 /// recognize onto one it does.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
     /// The model said yes.
     Yes,
@@ -448,7 +448,7 @@ pub fn render_tool_surface(tools: &[Tool]) -> String {
 ///
 /// Note there is no `tools` array: the judge is asked to *read* descriptions
 /// and answer in text, not to select a tool. That is the whole difference from
-/// a [`bench`](crate::bench) request.
+/// a [`crate::bench`] request.
 pub fn render_judge_request(
     provider: Provider,
     tools: &[Tool],

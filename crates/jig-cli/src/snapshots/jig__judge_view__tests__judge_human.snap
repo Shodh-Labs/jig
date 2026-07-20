@@ -1,0 +1,19 @@
+---
+source: crates/jig-cli/src/judge_view.rs
+expression: render_section(&Ok(fixture()))
+---
+Description judge (opt-in · never scored)
+  model mock-judge-1 · prompt judge-prompt-v1 · temperature 0 · http://127.0.0.1:0/judge_ok/v1/chat/completions (keyless)
+
+  echo
+    ✓ states its purpose      yes      Says it returns the input text verbatim.
+    ✗ distinguishes siblings  no       Never contrasts with make_reservation.
+    ✓ parameters sufficient   yes      `text` is described.
+
+  make_reservation
+    · not judged — the model's reply did not cover this tool
+
+  always_fails
+    ! unparseable — the entry did not carry all three questions as {verdict, rationale}: {"states_purpose":{"rationale":"Says it fails, not what it would do.","verdict":"unclear"},"tool":"always_fails"}
+
+  Judged output is outside rubric-v1.3: it is reported, never scored, and changed nothing above.
