@@ -5,178 +5,528 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jig — grade your MCP server in one command</title>
 <meta name="description" content="Jig grades an MCP server in one command: protocol compliance, context cost, schema hygiene, tool-selection behaviour. Writes a shareable HTML report card. Apache-2.0, no account, no telemetry.">
+<meta property="og:title" content="Jig — grade your MCP server in one command">
+<meta property="og:description" content="One command. One graded verdict. A report card you can send to someone.">
+<meta property="og:image" content="https://raw.githubusercontent.com/Shodh-Labs/jig/main/docs/media/check-report.png">
 <style>
   :root {
-    --surface:#FAFAF8; --panel:#FFFFFF; --sunk:#16171A; --ink:#1D1B18; --muted:#6E6A63;
-    --faint:#9A958C; --hairline:#E5E2DC; --grid:#EFEDE8; --brand:#8A6B2D;
-    --ok:#0D9488; --warn:#B45309; --shadow:0 1px 3px rgb(0 0 0 / .07);
+    --void:#0B0C0E; --panel:#14161A; --panel-2:#1A1D22; --sunk:#08090A;
+    --rule:#23262C; --rule-soft:#191C21;
+    --ink:#EAE7E1; --muted:#8E8A82; --faint:#5E5B55;
+    --brass:#D0A548; --brass-dim:#8A6B2D;
+    --jade:#35C4A8; --ember:#E2703A;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   }
-  @media (prefers-color-scheme: dark) {
-    :root { --surface:#141518; --panel:#1B1D21; --sunk:#0F1012; --ink:#E9E7E2; --muted:#9B968D;
-      --faint:#6A665F; --hairline:#2B2E34; --grid:#25282E; --brand:#C79A4B;
-      --ok:#0FA793; --warn:#D97706; --shadow:none; }
+
+  *,*::before,*::after { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } }
+
+  body {
+    margin:0; background:var(--void); color:var(--ink);
+    font-family:var(--sans); line-height:1.62; -webkit-font-smoothing:antialiased;
+    /* graph-paper ground: two hairline grids, barely there */
+    background-image:
+      linear-gradient(to right, var(--rule-soft) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--rule-soft) 1px, transparent 1px);
+    background-size: 96px 96px, 96px 96px;
   }
-  :root[data-theme="light"] { --surface:#FAFAF8; --panel:#FFFFFF; --sunk:#16171A; --ink:#1D1B18; --muted:#6E6A63;
-    --faint:#9A958C; --hairline:#E5E2DC; --grid:#EFEDE8; --brand:#8A6B2D; --ok:#0D9488; --warn:#B45309; --shadow:0 1px 3px rgb(0 0 0 / .07); }
-  :root[data-theme="dark"] { --surface:#141518; --panel:#1B1D21; --sunk:#0F1012; --ink:#E9E7E2; --muted:#9B968D;
-    --faint:#6A665F; --hairline:#2B2E34; --grid:#25282E; --brand:#C79A4B; --ok:#0FA793; --warn:#D97706; --shadow:none; }
+  ::selection { background:var(--brass); color:var(--void); }
+  a { color:var(--brass); text-underline-offset:3px; }
+  :focus-visible { outline:2px solid var(--brass); outline-offset:3px; border-radius:2px; }
 
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--surface); color:var(--ink); line-height:1.6;
-    font-family: system-ui, "Segoe UI", sans-serif; }
-  .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
-  main { max-width: 62rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
-  a { color: var(--brand); }
+  .wrap { max-width:74rem; margin:0 auto; padding:0 1.4rem; }
+  .mono { font-family:var(--mono); }
 
-  /* nav */
-  nav { display:flex; align-items:center; gap:1.2rem; flex-wrap:wrap; margin-bottom:3rem; }
-  nav .mark { display:flex; align-items:center; gap:.55rem; font-family:ui-monospace,Consolas,monospace;
-    font-weight:700; font-size:1.05rem; }
-  nav .mark em { font-style:normal; color:var(--brand); }
-  nav .sp { flex:1; }
-  nav a.n { color:var(--muted); text-decoration:none; font-size:.9rem; }
-  nav a.n:hover { color:var(--ink); }
+  /* ── top bar ─────────────────────────────────────────────── */
+  .topbar { position:sticky; top:0; z-index:20; background:rgba(11,12,14,.82);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--rule); }
+  .topbar .row { display:flex; align-items:center; gap:1.4rem; height:56px; }
+  .brandmark { display:flex; align-items:center; gap:.6rem; font-family:var(--mono);
+    font-weight:700; font-size:.95rem; letter-spacing:.01em; text-decoration:none; color:var(--ink); }
+  .brandmark em { font-style:normal; color:var(--brass); }
+  .topbar .sp { flex:1; }
+  .topbar a.nav { font-family:var(--mono); font-size:.78rem; color:var(--muted);
+    text-decoration:none; letter-spacing:.02em; }
+  .topbar a.nav:hover { color:var(--ink); }
+  .verchip { font-family:var(--mono); font-size:.68rem; color:var(--brass);
+    border:1px solid var(--brass-dim); border-radius:3px; padding:.08rem .4rem; }
+  @media (max-width:760px){ .topbar a.nav.hide-sm { display:none; } }
 
-  /* hero */
-  .hero h1 { font-size: clamp(1.9rem, 5vw, 2.9rem); line-height:1.15; margin:0 0 .8rem; text-wrap:balance; letter-spacing:-.02em; }
-  .hero p.lede { font-size:1.08rem; color:var(--muted); max-width:44rem; margin:0 0 1.6rem; }
-  .cmd { display:flex; align-items:center; gap:.75rem; background:var(--sunk); color:#E9E7E2;
-    border-radius:10px; padding:.85rem 1.1rem; font-family:ui-monospace,Consolas,monospace;
-    font-size:.95rem; overflow-x:auto; box-shadow:var(--shadow); }
-  .cmd .pr { color:#6A665F; }
-  .cta { display:flex; gap:.7rem; flex-wrap:wrap; margin-top:1rem; align-items:center; }
-  .btn { display:inline-block; text-decoration:none; border-radius:8px; padding:.55rem 1.05rem;
-    font-size:.92rem; font-weight:600; border:1px solid var(--hairline); color:var(--ink); background:var(--panel); }
-  .btn.primary { background:var(--brand); border-color:var(--brand); color:var(--surface); }
-  .cta .note { color:var(--faint); font-size:.82rem; }
+  /* ── figure rail (engineering-drawing structure) ─────────── */
+  .fig { position:relative; padding:5.5rem 0 0; }
+  .fig-head { display:grid; grid-template-columns:5.5rem 1fr; gap:1.4rem; align-items:start; }
+  .fig-no { font-family:var(--mono); font-size:.7rem; letter-spacing:.16em; color:var(--faint);
+    text-transform:uppercase; padding-top:.55rem; border-top:2px solid var(--brass-dim); }
+  .fig-title { margin:0; font-size:clamp(1.35rem,2.6vw,1.85rem); font-weight:800;
+    letter-spacing:-.022em; line-height:1.18; text-wrap:balance; }
+  .fig-sub { grid-column:2; margin:.55rem 0 0; color:var(--muted); max-width:52ch; font-size:.96rem; }
+  .fig-body { margin-top:1.8rem; }
+  @media (max-width:760px){
+    .fig-head { grid-template-columns:1fr; gap:.5rem; }
+    .fig-sub { grid-column:1; }
+    .fig-no { border-top:none; padding-top:0; }
+  }
 
-  figure { margin: 2.2rem 0 0; }
-  figure img { width:100%; height:auto; border-radius:12px; border:1px solid var(--hairline); display:block; }
-  figcaption { color:var(--faint); font-size:.82rem; margin-top:.6rem; text-align:center; }
+  /* ── hero ────────────────────────────────────────────────── */
+  .hero { padding:4.5rem 0 1rem; display:grid; grid-template-columns:1.15fr .85fr;
+    gap:3.5rem; align-items:center; }
+  @media (max-width:900px){ .hero { grid-template-columns:1fr; gap:2.5rem; padding-top:3rem; } }
+  .eyebrow { font-family:var(--mono); font-size:.72rem; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--brass); display:flex; align-items:center; gap:.6rem; margin-bottom:1.1rem; }
+  .eyebrow::after { content:""; flex:1; height:1px; background:linear-gradient(90deg,var(--brass-dim),transparent); }
+  h1 { margin:0 0 1.1rem; font-size:clamp(2.1rem,5.6vw,3.5rem); font-weight:820;
+    letter-spacing:-.035em; line-height:1.04; text-wrap:balance; }
+  h1 .grade-word { color:var(--brass); }
+  .lede { margin:0 0 1.9rem; font-size:1.06rem; color:var(--muted); max-width:40ch; }
+  .lede b { color:var(--ink); font-weight:600; }
 
-  section { margin-top: 3.4rem; }
-  section > h2 { font-size:1.3rem; margin:0 0 .4rem; letter-spacing:-.01em; }
-  section > p.sub { color:var(--muted); margin:0 0 1.4rem; max-width:46rem; }
+  .cmdbox { display:flex; align-items:stretch; border:1px solid var(--rule);
+    border-radius:6px; background:var(--sunk); overflow:hidden; box-shadow:0 10px 30px rgb(0 0 0/.4); }
+  .cmdbox code { flex:1; font-family:var(--mono); font-size:.87rem; color:var(--ink);
+    padding:.85rem 1rem; overflow-x:auto; white-space:nowrap; }
+  .cmdbox code .pr { color:var(--faint); }
+  .cmdbox code .flag { color:var(--jade); }
+  .copy { border:none; border-left:1px solid var(--rule); background:var(--panel);
+    color:var(--muted); font-family:var(--mono); font-size:.74rem; letter-spacing:.08em;
+    padding:0 1rem; cursor:pointer; text-transform:uppercase; }
+  .copy:hover { color:var(--brass); background:var(--panel-2); }
+  .copy[data-done="1"] { color:var(--jade); }
 
-  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:.9rem; }
-  .card { background:var(--panel); border:1px solid var(--hairline); border-radius:10px; padding:1rem 1.1rem; box-shadow:var(--shadow); }
-  .card h3 { margin:0 0 .25rem; font-size:.95rem; font-family:ui-monospace,Consolas,monospace; }
-  .card p { margin:0; font-size:.87rem; color:var(--muted); }
+  .herometa { display:flex; gap:1.4rem; flex-wrap:wrap; margin-top:1.1rem;
+    font-family:var(--mono); font-size:.74rem; color:var(--faint); }
+  .herometa span { display:flex; align-items:center; gap:.4rem; }
+  .herometa i { width:5px; height:5px; border-radius:50%; background:var(--jade); display:inline-block; }
 
-  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(11rem,1fr)); gap:.9rem; }
-  .stat { background:var(--panel); border:1px solid var(--hairline); border-left:4px solid var(--warn);
-    border-radius:10px; padding:.9rem 1.05rem; box-shadow:var(--shadow); }
-  .stat .n { font-family:ui-monospace,Consolas,monospace; font-size:1.5rem; font-weight:700; }
-  .stat .l { font-size:.8rem; color:var(--muted); }
+  /* ── gauge instrument ────────────────────────────────────── */
+  .gauge { background:linear-gradient(180deg,var(--panel),var(--panel-2));
+    border:1px solid var(--rule); border-radius:10px; padding:1.5rem 1.6rem 1.3rem;
+    box-shadow:0 24px 60px rgb(0 0 0/.5), inset 0 1px 0 rgb(255 255 255/.03); }
+  .gauge-top { display:flex; align-items:baseline; justify-content:space-between;
+    font-family:var(--mono); font-size:.7rem; color:var(--faint); letter-spacing:.12em;
+    text-transform:uppercase; margin-bottom:.4rem; }
+  .gauge-arc { position:relative; display:flex; justify-content:center; }
+  .gauge-arc svg { width:100%; max-width:250px; height:auto; display:block; }
+  .arc-bg { fill:none; stroke:var(--rule); stroke-width:9; stroke-linecap:round; }
+  .arc-fg { fill:none; stroke:var(--jade); stroke-width:9; stroke-linecap:round;
+    stroke-dasharray:1 1; transition:stroke-dashoffset 1.6s cubic-bezier(.16,1,.3,1); }
+  .gauge-read { position:absolute; inset:auto 0 4px; text-align:center; }
+  .gauge-read .score { font-family:var(--mono); font-size:2.9rem; font-weight:750;
+    line-height:1; letter-spacing:-.03em; }
+  .gauge-read .letter { display:inline-block; margin-top:.35rem; font-family:var(--mono);
+    font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--void);
+    background:var(--jade); border-radius:3px; padding:.12rem .5rem; font-weight:700; }
+  .gauge-name { text-align:center; font-family:var(--mono); font-size:.76rem; color:var(--muted); margin-top:.5rem; }
+  .dims { margin-top:1.1rem; padding-top:1rem; border-top:1px solid var(--rule);
+    display:flex; flex-direction:column; gap:.42rem; }
+  .drow { display:grid; grid-template-columns:8.6rem 1fr 2rem; gap:.6rem; align-items:center;
+    font-family:var(--mono); font-size:.72rem; color:var(--muted); }
+  .drow .dbar { height:6px; border-radius:3px; background:var(--rule); overflow:hidden; }
+  .drow .dbar i { display:block; height:100%; width:0; border-radius:3px; background:var(--jade);
+    transition:width 1.1s cubic-bezier(.16,1,.3,1); }
+  .drow .dv { text-align:right; color:var(--ink); font-variant-numeric:tabular-nums; }
+  @media (prefers-reduced-motion: reduce){
+    .arc-fg, .drow .dbar i { transition:none; }
+  }
 
-  .honest { background:var(--panel); border:1px solid var(--hairline); border-radius:10px;
-    padding:1rem 1.15rem; box-shadow:var(--shadow); font-size:.88rem; color:var(--muted); }
-  .honest b { color:var(--ink); }
+  /* ── readouts (evidence) ─────────────────────────────────── */
+  .readouts { display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:0;
+    border:1px solid var(--rule); border-radius:8px; overflow:hidden; background:var(--panel); }
+  .ro { padding:1.25rem 1.35rem; border-right:1px solid var(--rule); position:relative; }
+  .ro:last-child { border-right:none; }
+  @media (max-width:820px){ .ro { border-right:none; border-bottom:1px solid var(--rule); } .ro:last-child{border-bottom:none;} }
+  .ro::before { content:""; position:absolute; top:0; left:1.35rem; width:26px; height:2px; background:var(--ember); }
+  .ro .n { font-family:var(--mono); font-size:1.85rem; font-weight:750; letter-spacing:-.02em; line-height:1.1; }
+  .ro .l { font-size:.83rem; color:var(--muted); margin-top:.3rem; }
+  .ro .src { font-family:var(--mono); font-size:.68rem; color:var(--faint); margin-top:.5rem; display:block; }
 
-  footer { margin-top:4rem; padding-top:1.4rem; border-top:1px solid var(--hairline);
-    color:var(--faint); font-size:.82rem; display:flex; gap:1.2rem; flex-wrap:wrap; align-items:center; }
+  /* ── figure images ───────────────────────────────────────── */
+  .shot { border:1px solid var(--rule); border-radius:8px; overflow:hidden; background:var(--sunk);
+    box-shadow:0 18px 50px rgb(0 0 0/.45); }
+  .shot img { display:block; width:100%; height:auto; }
+  .cap { font-family:var(--mono); font-size:.73rem; color:var(--faint); margin-top:.7rem; }
+  .split { display:grid; grid-template-columns:1fr 1fr; gap:1.4rem; align-items:start; }
+  @media (max-width:900px){ .split { grid-template-columns:1fr; } }
+
+  /* ── command index ───────────────────────────────────────── */
+  .index { border-top:1px solid var(--rule); }
+  .irow { display:grid; grid-template-columns:2.6rem 11rem 1fr; gap:1.2rem; align-items:baseline;
+    padding:1.05rem .4rem; border-bottom:1px solid var(--rule); }
+  .irow:hover { background:var(--panel); }
+  .irow .ix { font-family:var(--mono); font-size:.7rem; color:var(--faint); letter-spacing:.1em; }
+  .irow .icmd { font-family:var(--mono); font-size:.94rem; font-weight:650; color:var(--brass); }
+  .irow .idesc { color:var(--muted); font-size:.92rem; }
+  .irow .idesc b { color:var(--ink); font-weight:600; }
+  @media (max-width:700px){
+    .irow { grid-template-columns:2.4rem 1fr; row-gap:.3rem; }
+    .irow .idesc { grid-column:2; }
+  }
+
+  /* ── credibility band ────────────────────────────────────── */
+  .creds { display:grid; grid-template-columns:repeat(auto-fit,minmax(16rem,1fr)); gap:1rem; }
+  .cred { border:1px solid var(--rule); border-radius:8px; padding:1.15rem 1.25rem; background:var(--panel); }
+  .cred h3 { margin:0 0 .35rem; font-family:var(--mono); font-size:.86rem; letter-spacing:.02em; }
+  .cred p { margin:0; font-size:.88rem; color:var(--muted); }
+  .cred a { font-family:var(--mono); font-size:.78rem; display:inline-block; margin-top:.6rem; }
+
+  /* ── honesty ─────────────────────────────────────────────── */
+  .honest { border:1px solid var(--brass-dim); border-radius:8px; background:linear-gradient(180deg,rgba(208,165,72,.05),transparent);
+    padding:1.3rem 1.45rem; }
+  .honest h3 { margin:0 0 .7rem; font-family:var(--mono); font-size:.78rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--brass); }
+  .honest ul { margin:0; padding-left:1.1rem; display:flex; flex-direction:column; gap:.45rem;
+    font-size:.9rem; color:var(--muted); }
+  .honest ul b { color:var(--ink); font-weight:600; }
+
+  /* ── closing cta ─────────────────────────────────────────── */
+  .closer { margin-top:5.5rem; border:1px solid var(--rule); border-radius:10px;
+    background:linear-gradient(180deg,var(--panel),var(--void)); padding:2.6rem 1.6rem;
+    text-align:center; }
+  .closer h2 { margin:0 0 .5rem; font-size:clamp(1.5rem,3.4vw,2.1rem); font-weight:800; letter-spacing:-.03em; }
+  .closer p { margin:0 auto 1.5rem; color:var(--muted); max-width:44ch; }
+  .closer .cmdbox { max-width:38rem; margin:0 auto; text-align:left; }
+
+  footer { margin-top:4rem; border-top:1px solid var(--rule); padding:1.6rem 0 3.5rem;
+    display:flex; gap:1.3rem; flex-wrap:wrap; align-items:center;
+    font-family:var(--mono); font-size:.75rem; color:var(--faint); }
+  footer a { color:var(--muted); text-decoration:none; }
+  footer a:hover { color:var(--brass); }
   footer .sp { flex:1; }
 </style>
 </head>
 <body>
-<main>
-  <nav>
-    <span class="mark" aria-hidden="true">
-      <svg width="24" height="24" viewBox="0 0 26 26" aria-hidden="true">
-        <rect x="2" y="4" width="4" height="18" rx="1.5" fill="var(--brand)"/>
-        <rect x="20" y="4" width="4" height="18" rx="1.5" fill="var(--brand)"/>
-        <rect x="6" y="11" width="5" height="4" rx="1" fill="var(--muted)"/>
-        <rect x="15" y="11" width="5" height="4" rx="1" fill="var(--muted)"/>
-        <circle cx="13" cy="13" r="2.2" fill="var(--ok)"/>
+
+<div class="topbar">
+  <div class="wrap row">
+    <a class="brandmark" href="/jig/">
+      <svg width="22" height="22" viewBox="0 0 26 26" aria-hidden="true">
+        <rect x="2" y="4" width="4" height="18" rx="1.5" fill="var(--brass)"/>
+        <rect x="20" y="4" width="4" height="18" rx="1.5" fill="var(--brass)"/>
+        <rect x="6" y="11" width="5" height="4" rx="1" fill="var(--faint)"/>
+        <rect x="15" y="11" width="5" height="4" rx="1" fill="var(--faint)"/>
+        <circle cx="13" cy="13" r="2.2" fill="var(--jade)"/>
       </svg>
       jig <em>/</em> shodh labs
-    </span>
+    </a>
+    <span class="verchip">v0.5.0</span>
     <span class="sp"></span>
-    <a class="n" href="https://github.com/Shodh-Labs/jig#readme">Docs</a>
-    <a class="n" href="https://github.com/Shodh-Labs/jig/blob/main/docs/sop/mcp-server-design-and-deployment.md">SOPs</a>
-    <a class="n" href="https://github.com/Shodh-Labs/jig/blob/main/docs/census/2026-07-19-state-of-mcp-servers.md">Census</a>
-    <a class="n" href="https://www.npmjs.com/package/@shodh/jig">npm</a>
-    <a class="n" href="https://github.com/Shodh-Labs/jig">GitHub</a>
-  </nav>
+    <a class="nav" href="#commands">Commands</a>
+    <a class="nav hide-sm" href="#standards">Standards</a>
+    <a class="nav hide-sm" href="https://github.com/Shodh-Labs/jig#readme">Docs</a>
+    <a class="nav" href="https://github.com/Shodh-Labs/jig">GitHub</a>
+  </div>
+</div>
 
+<div class="wrap">
+
+  <!-- HERO -->
   <div class="hero">
-    <h1>Grade your MCP server in one command.</h1>
-    <p class="lede">Models pick the wrong tools, token bills balloon, and servers break their own
-    protocol — none of it visible from your server's code. Jig makes it visible, measurable and
-    regression-safe, then writes you a report card you can send to someone.</p>
+    <div>
+      <div class="eyebrow">Measurement instrument · Model Context Protocol</div>
+      <h1>Grade your MCP&nbsp;server<br>in one <span class="grade-word">command</span>.</h1>
+      <p class="lede">Models pick the wrong tools. Token bills balloon. Servers break their own
+      protocol. <b>None of it is visible from your server's code</b> — so jig measures it on the
+      wire and hands you a report card you can send to someone.</p>
 
-    <div class="cmd"><span class="pr">$</span> npx -y @shodh/jig check "npx -y your-mcp-server"</div>
+      <div class="cmdbox">
+        <code id="cmd1"><span class="pr">$</span> npx -y @shodh/jig <span class="flag">check</span> "npx -y your-mcp-server"</code>
+        <button class="copy" data-copy="npx -y @shodh/jig check &quot;npx -y your-mcp-server&quot;">Copy</button>
+      </div>
 
-    <div class="cta">
-      <a class="btn primary" href="https://github.com/Shodh-Labs/jig">Read the docs</a>
-      <a class="btn" href="https://www.npmjs.com/package/@shodh/jig">Install from npm</a>
-      <span class="note">Apache-2.0 · no account · no telemetry · keys only when you put a real model in the loop</span>
+      <div class="herometa">
+        <span><i></i>Apache-2.0</span>
+        <span><i></i>No account, no telemetry</span>
+        <span><i></i>Single checksummed binary</span>
+      </div>
     </div>
 
-    <figure>
-      <img src="https://raw.githubusercontent.com/Shodh-Labs/jig/main/docs/media/check-report.png"
-           alt="jig check grading Anthropic's reference MCP server 93 out of 100, grade A, with five dimension scores and ranked fixes">
-      <figcaption>Real output — Anthropic's own reference server, graded cold over <span class="mono">npx</span>.</figcaption>
-    </figure>
+    <div class="gauge" id="gauge">
+      <div class="gauge-top"><span>Report card</span><span>rubric-v1</span></div>
+      <div class="gauge-arc">
+        <svg viewBox="0 0 220 132" role="img" aria-label="Composite score 93 out of 100, grade A">
+          <path class="arc-bg" d="M18 118 A 92 92 0 0 1 202 118"/>
+          <path class="arc-fg" id="arcfg" d="M18 118 A 92 92 0 0 1 202 118"/>
+        </svg>
+        <div class="gauge-read">
+          <div class="score" id="scoreNum">0</div>
+          <span class="letter" id="scoreLetter">grade —</span>
+        </div>
+      </div>
+      <div class="gauge-name">mcp-servers/everything v2.0.0</div>
+      <div class="dims" id="dims">
+        <div class="drow"><span>Protocol</span><span class="dbar"><i data-w="90"></i></span><span class="dv">90</span></div>
+        <div class="drow"><span>Context cost</span><span class="dbar"><i data-w="92"></i></span><span class="dv">92</span></div>
+        <div class="drow"><span>Schema hygiene</span><span class="dbar"><i data-w="87"></i></span><span class="dv">87</span></div>
+        <div class="drow"><span>Descriptions</span><span class="dbar"><i data-w="100"></i></span><span class="dv">100</span></div>
+        <div class="drow"><span>Robustness</span><span class="dbar"><i data-w="100"></i></span><span class="dv">100</span></div>
+      </div>
+    </div>
   </div>
 
-  <section>
-    <h2>Why a grade?</h2>
-    <p class="sub">An MCP server "works" only if a <em>model</em> understands its tools, picks the
-    right one and fills the arguments. That surface is probabilistic — and the ecosystem's numbers
-    show how often it goes wrong.</p>
-    <div class="stats">
-      <div class="stat"><div class="n">50k+</div><div class="l">tokens burned before the first prompt with 5–10 servers installed <span class="mono">(independent 2026 measurements)</span></div></div>
-      <div class="stat"><div class="n">~30</div><div class="l">tools before selection accuracy starts falling off measurably</div></div>
-      <div class="stat"><div class="n">42%</div><div class="l">of 50 popular public servers failed at startup in <a href="https://github.com/Shodh-Labs/jig/blob/main/docs/census/2026-07-19-state-of-mcp-servers.md">our own census</a></div></div>
-      <div class="stat"><div class="n">97%</div><div class="l">of 856 surveyed tool descriptions carry at least one quality smell <span class="mono">(arXiv:2602.14878)</span></div></div>
+  <!-- FIG 01 — the artifact -->
+  <section class="fig" id="report">
+    <div class="fig-head">
+      <div class="fig-no">Fig. 01</div>
+      <h2 class="fig-title">Every run writes a report card.</h2>
+      <p class="fig-sub">Not a wall of terminal output that scrolls away — a self-contained HTML
+      document with the score, the ranked fixes, and where every token goes. It lands next to you
+      by default, and it survives being forwarded.</p>
+    </div>
+    <div class="fig-body">
+      <div class="shot">
+        <img loading="lazy" src="https://raw.githubusercontent.com/Shodh-Labs/jig/main/docs/media/report-page.png"
+             alt="The HTML report card jig writes by default: score hero with 93, five dimension bars, a context-bill callout, and a per-tool token chart">
+      </div>
+      <p class="cap">./jig-report-mcp-servers-everything.html — written by default, zero JavaScript, opens anywhere.</p>
     </div>
   </section>
 
-  <section>
-    <h2>What it does</h2>
-    <p class="sub">One session, many questions answered. Every number is exact or explicitly labelled
-    as an approximation — never silently wrong.</p>
-    <div class="cards">
-      <div class="card"><h3>jig check</h3><p>Is my server well-built? One graded verdict over five weighted dimensions, ranked fixes, and a self-contained HTML report card written by default.</p></div>
-      <div class="card"><h3>jig context</h3><p>What does the model actually see? The exact tool-use request body, token-annotated, per provider dialect. No API key needed — nothing is sent anywhere.</p></div>
-      <div class="card"><h3>jig budget</h3><p>What does the server cost in context, per tool, per model tokenizer — graded against a real ecosystem distribution.</p></div>
-      <div class="card"><h3>jig bench</h3><p>Which tool does a <em>real model</em> pick for a task? N-run selection distributions with argument validation. Bring your own key.</p></div>
-      <div class="card"><h3>jig eval</h3><p><span class="mono">.jig</span> regression suites in git: prompt → expected tool call, selection rates never single-run booleans, CI gates.</p></div>
-      <div class="card"><h3>jig auth</h3><p>OAuth conformance for HTTP servers — RFC-cited checks of metadata, challenge, PKCE and DCR. No login flow, no credentials.</p></div>
+  <!-- FIG 02 — evidence -->
+  <section class="fig">
+    <div class="fig-head">
+      <div class="fig-no">Fig. 02</div>
+      <h2 class="fig-title">The problem is measurable, and measured.</h2>
+      <p class="fig-sub">An MCP server "works" only if a <em>model</em> understands its tools, picks
+      the right one, and fills the arguments. That surface is probabilistic — here is how often it
+      goes wrong.</p>
+    </div>
+    <div class="fig-body">
+      <div class="readouts">
+        <div class="ro">
+          <div class="n">50k+</div>
+          <div class="l">tokens burned before the user's first word, with 5–10 servers installed</div>
+          <span class="src">independent 2026 measurements</span>
+        </div>
+        <div class="ro">
+          <div class="n">~30</div>
+          <div class="l">tools before a model's selection accuracy measurably falls off</div>
+          <span class="src">arXiv:2606.30317</span>
+        </div>
+        <div class="ro">
+          <div class="n">42%</div>
+          <div class="l">of 50 popular public servers failed at startup</div>
+          <span class="src">jig census, 2026-07-19</span>
+        </div>
+        <div class="ro">
+          <div class="n">97%</div>
+          <div class="l">of 856 surveyed tool descriptions carry at least one quality smell</div>
+          <span class="src">arXiv:2602.14878</span>
+        </div>
+      </div>
     </div>
   </section>
 
-  <section>
-    <h2>The standards behind the grade</h2>
-    <p class="sub">Every rule jig enforces is published, evidence-cited, and paired with the exact
-    command that verifies it — including honest labels where nothing can verify it yet.</p>
-    <div class="cards">
-      <div class="card"><h3>33 SOPs</h3><p><a href="https://github.com/Shodh-Labs/jig/blob/main/docs/sop/mcp-server-design-and-deployment.md">MCP server design &amp; deployment standards</a> — design, protocol discipline, auth, deployment, testing, remediation.</p></div>
-      <div class="card"><h3>The census</h3><p><a href="https://github.com/Shodh-Labs/jig/blob/main/docs/census/2026-07-19-state-of-mcp-servers.md">State of MCP servers</a> — 50 servers measured, the distribution jig grades against, and a public correction where we got it wrong.</p></div>
-      <div class="card"><h3>The rubric</h3><p><a href="https://github.com/Shodh-Labs/jig#jig-check--the-one-command-report-card">rubric-v1</a> — weights and penalty tables in the open. Arguable on purpose; tell us where it's wrong.</p></div>
+  <!-- FIG 03 — commands -->
+  <section class="fig" id="commands">
+    <div class="fig-head">
+      <div class="fig-no">Fig. 03</div>
+      <h2 class="fig-title">One session. Every question answered.</h2>
+      <p class="fig-sub">Fourteen commands over stdio and Streamable HTTP. Every number is exact, or
+      labelled as an approximation — never silently wrong.</p>
+    </div>
+    <div class="fig-body index">
+      <div class="irow"><span class="ix">01</span><span class="icmd">jig check</span><span class="idesc"><b>Is my server well-built?</b> One graded verdict over five weighted dimensions, ranked fixes, HTML report card.</span></div>
+      <div class="irow"><span class="ix">02</span><span class="icmd">jig context</span><span class="idesc"><b>What does the model actually see?</b> The exact tool-use request body, token-annotated, per provider dialect. No API key — nothing is sent anywhere.</span></div>
+      <div class="irow"><span class="ix">03</span><span class="icmd">jig budget</span><span class="idesc"><b>What does it cost?</b> Per tool, per model tokenizer, scored against a real ecosystem distribution.</span></div>
+      <div class="irow"><span class="ix">04</span><span class="icmd">jig bench</span><span class="idesc"><b>Which tool does a real model pick?</b> N-run selection distributions with argument validation. Bring your own key.</span></div>
+      <div class="irow"><span class="ix">05</span><span class="icmd">jig eval</span><span class="idesc"><b>Did my change regress selection?</b> <span class="mono">.jig</span> suites in git — selection rates, never single-run booleans — with CI gates.</span></div>
+      <div class="irow"><span class="ix">06</span><span class="icmd">jig auth</span><span class="idesc"><b>Is the OAuth surface conformant?</b> RFC-cited checks of metadata, challenge, PKCE and DCR. No login flow, no credentials.</span></div>
+      <div class="irow"><span class="ix">07</span><span class="icmd">jig servers</span><span class="idesc"><b>What's already configured here?</b> Claude Desktop, Claude Code, Cursor, VS Code and project configs — merged, with secrets redacted.</span></div>
+      <div class="irow"><span class="ix">08</span><span class="icmd">inspect · call · read · prompt</span><span class="idesc">Poke the protocol directly — every byte captured in a raw JSONL tap you can replay and assert on.</span></div>
     </div>
   </section>
 
-  <section>
-    <h2 id="honesty">What this doesn't do (yet)</h2>
-    <div class="honest">
-      <b>The desktop workbench is in design</b> — an interactive prototype exists; the CLI is what ships today.
-      <b>`jig auth` doesn't log in</b> — it grades the discoverable OAuth surface; the authorization-code + PKCE flow is on the roadmap.
-      <b>Description quality is deterministic heuristics</b>, never an LLM verdict, and it says so in every report.
-      <b>The ecosystem leaderboard is being generated</b> and will land at <span class="mono">/leaderboard/</span>.
-      We publish corrections as loudly as findings — see the census.
+  <!-- FIG 04 — see what the model sees -->
+  <section class="fig">
+    <div class="fig-head">
+      <div class="fig-no">Fig. 04</div>
+      <h2 class="fig-title">See exactly what the model sees.</h2>
+      <p class="fig-sub">Developers write tool descriptions blind. <span class="mono">jig context</span>
+      renders the precise request body a model API receives from your server — token-priced, section
+      by section — and sends nothing to anyone.</p>
+    </div>
+    <div class="fig-body">
+      <div class="shot">
+        <img loading="lazy" src="https://raw.githubusercontent.com/Shodh-Labs/jig/main/docs/media/context-card.png"
+             alt="jig context output showing the system prompt at 42 tokens, server instructions at 312 tokens, and 13 tools at 1,159 tokens with a per-tool breakdown">
+      </div>
+      <p class="cap">Anchored to what <span class="mono">jig bench</span> actually sends — proven byte-identical by a parity test.</p>
     </div>
   </section>
+
+  <!-- FIG 05 — behaviour -->
+  <section class="fig">
+    <div class="fig-head">
+      <div class="fig-no">Fig. 05</div>
+      <h2 class="fig-title">Measure behaviour, then regression-test it.</h2>
+      <p class="fig-sub">Selection is probabilistic, so jig reports distributions — never a bare
+      "pass". Promote any bench run into a versioned suite with one flag, then gate CI on the rate.</p>
+    </div>
+    <div class="fig-body split">
+      <div>
+        <div class="shot"><img loading="lazy" src="https://raw.githubusercontent.com/Shodh-Labs/jig/main/docs/media/bench-card.png" alt="jig bench showing make_reservation selected 5 of 5 runs with per-run latency and token usage"></div>
+        <p class="cap">jig bench — N runs, outcome taxonomy, argument validation.</p>
+      </div>
+      <div>
+        <div class="shot"><img loading="lazy" src="https://raw.githubusercontent.com/Shodh-Labs/jig/main/docs/media/eval-card.png" alt="jig eval showing four suite cases with pass, flaky, fail and errored verdicts and a failed CI gate"></div>
+        <p class="cap">jig eval — flakiness surfaced, gate exits non-zero.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- FIG 06 — auth -->
+  <section class="fig">
+    <div class="fig-head">
+      <div class="fig-no">Fig. 06</div>
+      <h2 class="fig-title">OAuth conformance, without logging in.</h2>
+      <p class="fig-sub">Authorization is the ecosystem's loudest unmet need — and roughly 8.5% of
+      public servers implement it. jig probes the discoverable surface and cites the clause behind
+      every verdict.</p>
+    </div>
+    <div class="fig-body">
+      <div class="shot">
+        <img loading="lazy" src="https://raw.githubusercontent.com/Shodh-Labs/jig/main/docs/media/auth-report.png"
+             alt="jig auth conformance table with thirteen passing checks, each citing an RFC clause, verdict CONFORMANT">
+      </div>
+      <p class="cap">RFC 9728 · 8414 · 7591 · 8707 · 9207 — no credentials sent, nothing installed on the server.</p>
+    </div>
+  </section>
+
+  <!-- STANDARDS -->
+  <section class="fig" id="standards">
+    <div class="fig-head">
+      <div class="fig-no">Fig. 07</div>
+      <h2 class="fig-title">The standards behind the grade are public.</h2>
+      <p class="fig-sub">Every rule jig enforces is written down, cited to primary sources, and
+      paired with the exact command that verifies it — including honest labels where nothing can
+      verify it yet.</p>
+    </div>
+    <div class="fig-body creds">
+      <div class="cred">
+        <h3>33 SOPs</h3>
+        <p>Design, protocol discipline, auth, deployment, testing, remediation — each with its rule, its evidence, and its verification command.</p>
+        <a href="https://github.com/Shodh-Labs/jig/blob/main/docs/sop/mcp-server-design-and-deployment.md">Read the standards →</a>
+      </div>
+      <div class="cred">
+        <h3>The census</h3>
+        <p>50 public servers measured: the distribution jig grades against — and a public correction where our own first reading was wrong.</p>
+        <a href="https://github.com/Shodh-Labs/jig/blob/main/docs/census/2026-07-19-state-of-mcp-servers.md">Read the census →</a>
+      </div>
+      <div class="cred">
+        <h3>rubric-v1</h3>
+        <p>Weights and penalty tables in the open. Deliberately arguable — if the rubric is wrong, that is a fixable, public thing.</p>
+        <a href="https://github.com/Shodh-Labs/jig#jig-check--the-one-command-report-card">Read the rubric →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- HONESTY -->
+  <section class="fig">
+    <div class="fig-head">
+      <div class="fig-no">Fig. 08</div>
+      <h2 class="fig-title">What this doesn't do yet.</h2>
+      <p class="fig-sub">A tool that grades honesty should be held to it.</p>
+    </div>
+    <div class="fig-body">
+      <div class="honest">
+        <h3>Known limits</h3>
+        <ul>
+          <li><b>The desktop workbench is in design.</b> An interactive prototype exists; the CLI is what ships today.</li>
+          <li><b>jig auth doesn't log in.</b> It grades the discoverable OAuth surface — the authorization-code + PKCE flow is on the roadmap.</li>
+          <li><b>Description quality is deterministic heuristics</b>, never an LLM verdict, and every report says so.</li>
+          <li><b>The ecosystem leaderboard is being generated</b> and will publish at <span class="mono">/leaderboard/</span>.</li>
+          <li><b>Corrections are published as loudly as findings</b> — see the census for the first one.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- CLOSER -->
+  <div class="closer">
+    <h2>What grade is yours?</h2>
+    <p>One command. No account, no signup, no data leaves your machine.</p>
+    <div class="cmdbox">
+      <code><span class="pr">$</span> npx -y @shodh/jig <span class="flag">check</span> "npx -y your-mcp-server"</code>
+      <button class="copy" data-copy="npx -y @shodh/jig check &quot;npx -y your-mcp-server&quot;">Copy</button>
+    </div>
+  </div>
 
   <footer>
-    <span>Jig — a testing workbench for MCP servers · Apache-2.0</span>
+    <span>Jig — a testing workbench for MCP servers</span>
     <span class="sp"></span>
     <a href="https://github.com/Shodh-Labs/jig">GitHub</a>
     <a href="https://www.npmjs.com/package/@shodh/jig">npm</a>
-    <a href="https://github.com/Shodh-Labs/jig/issues">Report an issue</a>
+    <a href="https://github.com/Shodh-Labs/jig/issues">Issues</a>
+    <a href="https://github.com/Shodh-Labs/jig/blob/main/LICENSE">Apache-2.0</a>
     <span>Shodh Labs</span>
   </footer>
-</main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* copy buttons */
+  document.querySelectorAll(".copy").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.getAttribute("data-copy") || "";
+      var done = function () {
+        btn.textContent = "Copied";
+        btn.setAttribute("data-done", "1");
+        setTimeout(function () { btn.textContent = "Copy"; btn.removeAttribute("data-done"); }, 1800);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () {});
+      } else {
+        var ta = document.createElement("textarea");
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); done(); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+    });
+  });
+
+  /* gauge instrument: arc + counting score + staggered dimension bars */
+  var TARGET = 93, LETTER = "grade A";
+  var arc = document.getElementById("arcfg");
+  var num = document.getElementById("scoreNum");
+  var letter = document.getElementById("scoreLetter");
+  var bars = document.querySelectorAll("#dims .dbar i");
+  var len = arc ? arc.getTotalLength() : 0;
+
+  if (arc) {
+    arc.style.strokeDasharray = len + " " + len;
+    arc.style.strokeDashoffset = len;
+  }
+
+  function settle() {
+    if (arc) arc.style.strokeDashoffset = len * (1 - TARGET / 100);
+    if (num) num.textContent = TARGET;
+    if (letter) letter.textContent = LETTER;
+    bars.forEach(function (b) { b.style.width = b.getAttribute("data-w") + "%"; });
+  }
+
+  function animate() {
+    if (arc) arc.style.strokeDashoffset = len * (1 - TARGET / 100);
+    if (letter) letter.textContent = LETTER;
+    var start = null, dur = 1500;
+    function step(ts) {
+      if (start === null) start = ts;
+      var p = Math.min((ts - start) / dur, 1);
+      var eased = 1 - Math.pow(1 - p, 3);
+      if (num) num.textContent = Math.round(eased * TARGET);
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+    bars.forEach(function (b, i) {
+      setTimeout(function () { b.style.width = b.getAttribute("data-w") + "%"; }, 260 + i * 110);
+    });
+  }
+
+  if (reduce) { settle(); } else { setTimeout(animate, 220); }
+})();
+</script>
 </body>
 </html>
