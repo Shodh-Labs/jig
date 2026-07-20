@@ -27,6 +27,7 @@ real model in the loop.
 | [`jig budget`](#jig-budget--the-token-budget-engine) | What does my server cost, per tool, per model tokenizer? |
 | [`jig bench`](#jig-bench--the-model-in-the-loop-bench) | Which tool does a *real model* pick for a task? N-run distributions |
 | [`jig eval`](#jig-eval--the-jig-eval-suite) | Did my change regress tool selection? Git-versioned suites, CI gates |
+| [`jig serve`](#jig-serve--jig-as-an-mcp-server) | Can my agent grade servers itself? Jig *as* an MCP server — its capabilities, as tools |
 | [`jig inspect` / `call` / `read` / `prompt`](#transports-stdio-and-streamable-http) | Poke the protocol directly — every byte captured in a raw JSONL tap |
 | [`jig servers` / `search` / `info`](#discovery-jig-servers-jig-search-jig-info) | What's configured on my machine? What exists? What is it *really*? |
 
@@ -104,10 +105,75 @@ cargo build
 ./target/debug/jig context --stdio "./target/debug/jig-mock-server"
 # what does this server cost in context tokens, per tool, per model?
 ./target/debug/jig budget --stdio "./target/debug/jig-mock-server"
-# which tool does a real model pick for a task? (needs ANTHROPIC_API_KEY / OPENAI_API_KEY)
+# which tool does a real model pick for a task?
+# ...with your own key (ANTHROPIC_API_KEY / OPENAI_API_KEY):
 ./target/debug/jig bench --stdio "./target/debug/jig-mock-server" \
     --task "Book a table for two tonight" --model gpt-4o --runs 5
+# ...or with a local model and no key at all:
+./target/debug/jig bench --stdio "./target/debug/jig-mock-server" \
+    --task "Book a table for two tonight" \
+    --base-url http://localhost:11434/v1 --no-auth --api-model llama3.1
+# run jig itself as an MCP server, so an agent can call all of the above
+./target/debug/jig serve
 ```
+
+### Model access
+
+Only two verbs ever need a model: `jig bench` and `jig eval`. Everything else —
+`check`, `context`, `budget`, `inspect`, `auth`, `servers`, `search`, `info` —
+has **never** needed a key and never will. They read the protocol, not a model.
+
+For the two that do, there are three ways to get a model, and one honest way to
+do without:
+
+| Option | How | Key? | Which model you get |
+|:--|:--|:--|:--|
+| **Host sampling** | Run [`jig serve`](#jig-serve--jig-as-an-mcp-server) in an MCP host that supports sampling, then call `bench_server` | No | Whatever the host picks — reported verbatim, never guessed |
+| **Local endpoint** | `--base-url <url> --no-auth` against Ollama, LM Studio, llama.cpp or vLLM | No | Exactly the model you name with `--api-model` |
+| **BYO key** | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the environment | Yes | Exactly the model you name with `--model` |
+| **None** | Skip `bench`/`eval` | No | — everything else still works in full |
+
+Whichever you pick, the report states the endpoint it actually talked to and
+whether a vendor key was used. A measurement that does not say where it sent its
+traffic is a rumour.
+
+#### Local and self-hosted endpoints (`--base-url`)
+
+`--base-url` points `bench`/`eval` at any endpoint speaking the **OpenAI**
+dialect — which is what all of these emulate. Add `--no-auth` when the endpoint
+needs no credential, and `--api-model` to name the model it serves. The base URL
+may include the trailing `/v1` or omit it; both reach the same endpoint.
+
+```sh
+# Ollama — `ollama serve`, then `ollama pull llama3.1`
+jig bench --stdio "./my-server" --task "book a table" \
+    --base-url http://localhost:11434/v1 --no-auth --api-model llama3.1
+
+# LM Studio — start the local server from the Developer tab
+jig bench --stdio "./my-server" --task "book a table" \
+    --base-url http://localhost:1234/v1 --no-auth --api-model qwen2.5-7b-instruct
+
+# llama.cpp — `llama-server -m model.gguf --port 8080 --jinja`
+jig bench --stdio "./my-server" --task "book a table" \
+    --base-url http://localhost:8080/v1 --no-auth --api-model local-model
+
+# vLLM — `vllm serve meta-llama/Llama-3.1-8B-Instruct`
+jig bench --stdio "./my-server" --task "book a table" \
+    --base-url http://localhost:8000/v1 --no-auth --api-model meta-llama/Llama-3.1-8B-Instruct
+
+# your company's gateway — usually authenticated, so no --no-auth
+OPENAI_API_KEY="$GATEWAY_TOKEN" jig bench --stdio "./my-server" --task "book a table" \
+    --base-url https://llm-gateway.corp.example/v1 --api-model gpt-4o
+
+# the same two flags work on `jig eval`
+jig eval --stdio "./my-server" --suite .jig/ \
+    --base-url http://localhost:11434/v1 --no-auth --api-model llama3.1
+```
+
+Tool-calling quality varies enormously between local models — which is precisely
+what `bench` exists to show you. A small model that never selects a tool is a
+finding about the model, not about your server; run the same task against a
+frontier model to tell the two apart.
 
 ### `jig check` — the one-command report card
 
@@ -683,14 +749,25 @@ Distribution:
 Takeaway: UNSTABLE: tool selection varied across runs (2 different tools) — see per-run detail
 ```
 
-**Bring your own key.** `jig bench` calls a real provider, so it needs a key
-read **from the environment only**: `ANTHROPIC_API_KEY` for `claude-*` models,
-`OPENAI_API_KEY` for `gpt-*`. A missing key fails fast with a clear message
-naming the variable, *before* connecting to the server. The key is never logged,
-never written to `--json`, never placed in an error message, and never in the
-rendered request (auth rides in a request header, not the body). The default
-model is `claude-sonnet` if `ANTHROPIC_API_KEY` is set, else `gpt-4o`; override
-the concrete API model string with `--api-model` (hardcoded mappings age).
+**Three ways to get a model** — see [Model access](#model-access) for the full
+table. `jig bench` needs *a* model, not *your vendor's* model:
+
+* **A key of your own.** Read **from the environment only**: `ANTHROPIC_API_KEY`
+  for `claude-*`, `OPENAI_API_KEY` for `gpt-*`. A missing key fails fast with a
+  message naming the variable, *before* connecting to the server. The key is
+  never logged, never written to `--json`, never placed in an error message, and
+  never in the rendered request (auth rides in a header, not the body). The
+  default model is `claude-sonnet` if `ANTHROPIC_API_KEY` is set, else `gpt-4o`;
+  override the concrete API model string with `--api-model` (mappings age).
+* **A local or self-hosted endpoint.** `--base-url <url> --no-auth` sends no
+  credential header at all. See the recipes above.
+* **The host's model, via MCP sampling.** Under
+  [`jig serve`](#jig-serve--jig-as-an-mcp-server), `bench_server` borrows the
+  model of whatever host is running it. No credential exists anywhere in the
+  path.
+
+Every report names the endpoint it used and whether a vendor key was involved,
+so a keyless run is never mistaken for a vendor-API one.
 
 **What it measures — and doesn't.** It measures how a specific model, at a
 specific temperature, maps *your* task onto *this* server's tool surface, and how
@@ -809,6 +886,99 @@ jig eval --stdio "<cmd>" --suite .jig/reservations.yaml
 
 Drafting is refused (nothing is written) when the majority outcome was not a tool
 selection — there is no selection to assert.
+
+### `jig serve` — Jig as an MCP server
+
+Every other verb is something a person types. `jig serve` hands the same
+capabilities to any MCP client or agent, over stdio:
+
+```sh
+jig serve
+```
+
+Register it with your host the way you would any other MCP server:
+
+```json
+{
+  "mcpServers": {
+    "jig": { "command": "jig", "args": ["serve"] }
+  }
+}
+```
+
+It implements the server side of MCP **2025-06-18** — `initialize` (with version
+negotiation), `notifications/initialized`, `ping`, `tools/list`, `tools/call` —
+and advertises exactly one capability, `tools`. Anything else gets a JSON-RPC
+`-32601`: a tool that grades other servers on unknown-method conformance does not
+get to fudge its own.
+
+| Tool | What it does | Needs a model? |
+|:--|:--|:--|
+| `check_server` | The full report card: composite score, per-dimension marks, ranked fixes | No |
+| `budget_server` | Context-token cost of a server's tool surface, per tool and per model | No |
+| `context_server` | The literal request body a model would receive, token-annotated | No |
+| `inspect_server` | Handshake and inventory: capabilities, tools, resources, prompts | No |
+| `bench_server` | Which tool a model picks for a task, across repeated runs | Yes — the **host's**, via sampling |
+| `list_local_servers` | MCP servers configured on this machine, env values redacted | No |
+
+Each returns both a human summary (as `content`) and the full machine-readable
+report (as `structuredContent`), and each calls the same code path its CLI verb
+does — `check_server` and `jig check` share one implementation, because a tool
+that graded differently from the command line would be worse than no tool.
+
+`list_local_servers` reports environment-variable **names** only; values are
+redacted before they leave the process. Jig will not become the hole a token
+escapes through.
+
+#### Dogfooding is a hard gate
+
+Jig grades MCP servers, so `jig serve` is graded by its own rubric — in CI, as a
+test that fails below 90:
+
+```console
+$ jig check --stdio "jig serve"
+jig check · jig v0.5.0
+protocol 2025-06-18 · rubric-v1.1
+
+  ✓  98 / 100   grade A
+
+  ✓  Protocol compliance  100   clean handshake, no stdout pollution, spec-valid capabilities
+  ✓  Context cost          91   1,556 tokens (45th percentile of n=29 measured servers)
+  ✓  Schema hygiene       100   6 tools — descriptions, types and params all present
+  ✓  Description quality  100   heuristic · consistent names, well-sized descriptions
+  ✓  Robustness           100   list 3ms, clean shutdown
+```
+
+If the people who wrote the rubric cannot earn an A against it with the rubric in
+front of them, then either the server is bad or the rubric is wrong — and both
+are our problem, not yours.
+
+#### Sampling-backed bench: a model with no credentials at all
+
+MCP lets a server ask its *client* for a model completion via
+`sampling/createMessage` — the spec's own framing is "with no server API keys
+necessary". When `jig serve` runs inside a host that advertises
+`capabilities.sampling`, `bench_server` measures tool selection using **the
+host's** model. Jig holds no key, sees no key, and needs no account.
+
+Two rules govern that path:
+
+* **No silent degradation.** A host that does not advertise `sampling` gets an
+  explicit failure naming all three alternatives (a sampling-capable host, a
+  local `--base-url` model, or your own key) — never an empty result dressed up
+  as a measurement. Every other tool keeps working.
+* **No overclaiming the model.** Sampling gives the server no say in which model
+  the host selects, so Jig sends no `modelPreferences.hints` at all — precisely
+  so it cannot later pretend it chose. The report records whatever identity the
+  host returns, or `unknown — host-selected` when it returns none, and labels the
+  run as host-selected either way. It will never name a model that was not
+  actually measured.
+
+Classification is not forked: a sampled reply goes through the same outcome
+taxonomy (`selected` / `no_tool` / `hallucinated_tool` / `provider_error`) and
+the same JSON-Schema argument validator as the direct-API path. An integration
+test feeds identical selections down both routes and asserts the distributions
+match.
 
 ## License
 
