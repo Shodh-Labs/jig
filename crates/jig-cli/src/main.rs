@@ -367,6 +367,13 @@ enum Command {
         /// registry provider. No key is needed to pick a dialect.
         #[arg(long, value_enum, value_name = "PROVIDER")]
         provider: Option<ProviderArg>,
+        /// Render the tool surface as a specific client presents it to the
+        /// model. Default `api`: the raw provider request `jig bench` sends.
+        /// `--client list` prints every client with its evidence level
+        /// (verified / approximated / unknown) and citation. A client whose
+        /// rendering no public source establishes is refused, never guessed.
+        #[arg(long, value_name = "NAME", default_value = jig_core::DEFAULT_CLIENT)]
+        client: String,
         /// Print the full JSON request body, pretty-printed, exactly as the API
         /// would receive it (minus auth).
         #[arg(long, conflicts_with = "json")]
@@ -849,18 +856,25 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             model,
             api_model,
             provider,
+            client,
             raw,
             json,
             tap,
             timeout,
             max_message_bytes,
         } => {
+            // `--client list` is a pure catalog query: it describes what jig
+            // can and cannot render, so it must not require a server target.
+            if context::is_client_list_request(&client) {
+                return Ok(context::run_client_list(json));
+            }
             let target = Target::resolve(stdio, http, server, header)?;
             context::run(
                 &target,
                 model,
                 api_model,
                 provider.map(Into::into),
+                client,
                 raw,
                 json,
                 tap.as_deref(),

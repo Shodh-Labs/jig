@@ -33,6 +33,7 @@ pub mod auth;
 pub mod bench;
 pub mod check;
 pub mod client;
+pub mod clients;
 pub mod context;
 pub mod discovery;
 pub mod ecosystem;
@@ -62,8 +63,13 @@ pub use check::{
     RATE_SCORE_FLOOR, RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};
+pub use clients::{
+    known_clients, ClientError, ClientRendering, ClientSpec, Evidence, RenderedName, CLIENTS,
+    DEFAULT_CLIENT,
+};
 pub use context::{
-    build as build_context, schema_to_human_lines, ContextView, InstructionsSection, ToolContext,
+    build as build_context, build_for_client as build_context_for_client, schema_to_human_lines,
+    ClientVariant, ContextBuildError, ContextView, InstructionsSection, ToolContext,
     CONTEXT_TASK_PLACEHOLDER, CONTEXT_TEMPERATURE,
 };
 pub use discovery::{

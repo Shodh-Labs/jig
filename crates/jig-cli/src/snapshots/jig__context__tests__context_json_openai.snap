@@ -6,6 +6,7 @@ expression: "render_json(&mock_server(), &v)"
   "note": "No API key is used; nothing is sent to any provider. This is the bench request body (system prompt + tools + placeholder task). Server instructions are shown but not sent by `jig bench`.",
   "provenance": {
     "apiModel": "gpt-4o",
+    "clientRendering": null,
     "dialect": "openai",
     "exactness": {
       "exact": true

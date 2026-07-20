@@ -1,0 +1,62 @@
+---
+source: crates/jig-cli/src/context.rs
+expression: render_client_list_human()
+---
+Client renderings — how each client reshapes the tool surface before the model
+sees it. Every implemented variant is derived from a citable public source; a
+client whose rendering no source establishes is listed as unknown and refused,
+never guessed.
+
+  ✓ api             verified      Raw provider API
+      tool names, descriptions and schemas exactly as the server sent them
+      source: jig's own request — the body `jig bench` sends, rendered by
+              jig_core::bench::render_request_parts
+
+  ~ claude-code     approximated  Claude Code
+      prefixes each tool name with `mcp__<server>__`
+      source: https://code.claude.com/docs/en/hooks — "MCP tools follow the naming pattern
+              `mcp__<server>__<tool>`"
+      not established: whether the description or input schema is rewritten, and what
+                       system-prompt framing is added — Claude Code is closed-source, so
+                       only the name format is citable
+
+  ✓ vscode          verified      VS Code / GitHub Copilot
+      prefixes names as `mcp_<server>_`, prefix capped at 18 chars and id at 64; description
+      and schema pass through unmodified
+      source: microsoft/vscode, src/vs/workbench/contrib/mcp/common/mcpTypes.ts
+              (McpToolName.Prefix='mcp_', MaxPrefixLen=18, MaxLength=64) and
+              mcpLanguageModelToolContribution.ts (modelDescription =
+              definition.description, inputSchema = definition.inputSchema)
+      not established: the final serialization into the provider HTTP payload happens in the
+                       Copilot extension layer, which is not open-source — the name
+                       transform and the description/schema pass-through are verified, the
+                       last hop is not
+
+  ✓ openai-agents   verified      OpenAI Agents SDK (Python)
+      no transformation by default — identical to the raw API rendering
+      source: openai/openai-agents-python, src/agents/mcp/util.py —
+              `include_server_in_tool_names` defaults to False, so `tool_public_name` is the
+              raw MCP tool name; description and schema are passed through
+      not established: the opt-in `include_server_in_tool_names=True` path yields
+                       `mcp_<server>__<tool>`; jig renders the documented default, not the
+                       opt-in
+
+  · claude-desktop  unknown       Claude Desktop
+      not established — no renderer implemented
+      source: checked https://modelcontextprotocol.io/docs/develop/connect-local-servers and
+              Anthropic's Claude Desktop documentation: both cover configuration, server
+              startup and the approval UI, and state nothing about tool naming or rendering.
+              Closed-source.
+      not established: the entire rendering
+
+  · cursor          unknown       Cursor
+      not established — no renderer implemented
+      source: checked https://cursor.com/docs/context/mcp and
+              https://cursor.com/docs/agent/tools: neither documents a name transformation
+              nor a tool-definition limit. The widely-repeated "40 tool limit" appears only
+              in community forum threads, which do not establish behaviour. Closed-source.
+      not established: the entire rendering
+
+`--client api` (the default) is the raw provider request `jig bench` sends.
+For any other client the reported delta covers only the cited transformation, so it
+is a lower bound on that client's true context cost.
