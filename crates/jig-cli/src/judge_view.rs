@@ -83,9 +83,16 @@ pub(crate) async fn run(
 }
 
 /// The sentence attached to every judged rendering, human and JSON alike.
+///
+/// The sibling caveat is not decoration. `distinguishes_siblings` is judged
+/// against *this server's* tools only, but a real client loads several servers
+/// at once — so a `yes` means "distinct here", never "safe from collision".
+/// Without that sentence the verdict is the feature's largest overclaim.
 pub(crate) const OUTSIDE_RUBRIC_NOTE: &str =
     "Judged output is outside rubric-v1.3: it is reported, never scored, and \
-     changed nothing above.";
+     changed nothing above. `distinguishes siblings` compares this server's \
+     tools only — a client loading several servers can still see collisions \
+     this judge cannot observe.";
 
 /// The one line printed when the judge could not run.
 fn unavailable_line(reason: &str) -> String {
