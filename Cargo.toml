@@ -40,6 +40,16 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",
 ] }
+# `jig auth --login` runs a real OAuth 2.1 authorization-code flow, which needs
+# exactly two primitives we refuse to hand-roll: a CSPRNG (the RFC 7636 code
+# verifier and the `state` nonce) and SHA-256 (the `S256` challenge). `ring`
+# already builds in this tree as rustls' crypto provider, so promoting it to a
+# direct dependency adds nothing to the binary — it just keeps us from writing
+# our own SHA-256, which is the last thing an instrument should do.
+ring = "0.17"
+# base64url-without-padding: the encoding RFC 7636 §4.1/§4.2 mandates for the
+# code verifier and its challenge. Already in the tree via reqwest/hyper-util.
+base64 = "0.22"
 # Dev-scoped: used only by `jig-mock-server` (a test fixture) to implement the
 # server side of the Streamable HTTP transport. Deliberately kept out of
 # `jig-core` and `jig-cli`.

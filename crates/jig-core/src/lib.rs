@@ -39,6 +39,7 @@ pub mod ecosystem;
 pub mod error;
 pub mod eval;
 pub mod http;
+pub mod login;
 pub mod protocol;
 pub mod tap;
 pub mod tokens;
@@ -79,6 +80,10 @@ pub use eval::{
     EvalConfig, EvalError, Expect, Matcher, RunReport, Suite, SuiteReport,
 };
 pub use http::{HttpTransport, ListenSummary};
+pub use login::{
+    login, AuthenticatedSession, CallbackParams, LoginConfig, LoginOutcome, LoginStep, Pkce,
+    Secret, LOGIN_CLIENT_NAME,
+};
 pub use protocol::{
     ContentBlock, Implementation, InitializeResult, Prompt, PromptArgument, PromptGetResult,
     PromptMessage, Resource, ResourceContents, ResourceReadResult, Tool, ToolCallResult,

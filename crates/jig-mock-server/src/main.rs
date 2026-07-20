@@ -32,7 +32,11 @@
 //!   `jig auth`: `well-configured` (401 + proper challenge + full RFC 9728/8414
 //!   metadata with S256+DCR), `no-challenge` (bare 401), `no-metadata`
 //!   (challenge points at a 404), `no-pkce` (metadata lacks S256), or `open`
-//!   (200, no auth). See [`http::AuthMode`].
+//!   (200, no auth). The `login-*` scenarios add a live authorization server
+//!   (`/register`, `/authorize`, `/token`) so `jig auth --login` can run the
+//!   whole authorization-code flow: `login-happy`, `login-bad-state`,
+//!   `login-bad-iss`, `login-no-s256`, `login-token-error`. See
+//!   [`http::AuthMode`].
 //! * `--pollute-stdout` / `--paginate` — (stdio mode) test fixtures, see below.
 //! * `--chaos <mode[,mode...]>` — (stdio mode) the **hostile-server chaos
 //!   catalog**: deliberately misbehave in one specific way so Jig's degradation

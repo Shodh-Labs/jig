@@ -16,6 +16,12 @@ serde_json.workspace = true
 # axum + tokio are pulled in only by this fixture crate, never by jig-core/cli.
 axum.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros"] }
+# The `--auth login-*` scenarios run a minimal but spec-shaped authorization
+# server, which must genuinely verify the RFC 7636 PKCE proof: SHA-256 the
+# verifier, base64url it, compare it against the stored challenge. A fixture
+# that only pretended to check would let a broken client pass its own tests.
+ring.workspace = true
+base64.workspace = true
 
 [dev-dependencies]
 jig-core = { path = "../jig-core" }
