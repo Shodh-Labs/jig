@@ -39,11 +39,11 @@ type StderrTail = Arc<Mutex<VecDeque<String>>>;
 
 /// How much a child process wrote to its stderr over the whole session.
 ///
-/// The [`StderrTail`] ring keeps only the last `STDERR_TAIL_LINES` lines for
-/// error context, so it cannot answer "how much did this server log?" — an
-/// evicted line is gone, and a truncated line under-reports. These counters are
-/// cumulative and are taken *before* the ring's truncation, so the figure
-/// reflects what the child actually wrote.
+/// The transport keeps a bounded ring of the child's most recent stderr lines
+/// for error context, so that ring cannot answer "how much did this server
+/// log?" — an evicted line is gone, and a truncated line under-reports. These
+/// counters are cumulative and are taken *before* the ring's truncation, so the
+/// figure reflects what the child actually wrote.
 ///
 /// Volume is **informational**. The stdio transport spec designates stderr for
 /// logging, so a chatty server is a smell, never a defect: Jig reports this and
