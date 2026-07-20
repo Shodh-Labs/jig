@@ -182,10 +182,14 @@ enum Command {
         max_message_bytes: u64,
     },
     /// Probe and grade a remote server's discoverable OAuth conformance
-    /// (RFC 9728 / 8414 / 7591 / 8707 / 9207 / 6750). Performs NO login flow,
-    /// opens no browser, and needs no credentials: it sends one unauthenticated
-    /// `initialize`, follows the challenge to the metadata, and renders a
-    /// conformance table + verdict. HTTP transport only.
+    /// (RFC 9728 / 8414 / 7591 / 8707 / 9207 / 6750), or — with `--login` —
+    /// run the real OAuth 2.1 authorization-code flow and prove the resulting
+    /// token opens an MCP session.
+    ///
+    /// Without `--login` this performs no authorization flow, opens no browser,
+    /// and needs no credentials: it sends one unauthenticated `initialize`,
+    /// follows the challenge to the metadata, and renders a conformance table
+    /// + verdict. HTTP transport only.
     Auth {
         /// A remote MCP endpoint URL to probe over Streamable HTTP, e.g.
         /// `https://example.com/mcp`.
@@ -200,6 +204,32 @@ enum Command {
         /// never fabricates a token.
         #[arg(long = "header", value_name = "NAME: VALUE")]
         header: Vec<String>,
+        /// Run the real OAuth 2.1 authorization-code flow: discover, register
+        /// (RFC 7591) or use --client-id, PKCE S256 (RFC 7636), open a browser,
+        /// receive the callback on a loopback port, exchange the code, and
+        /// prove the token by running initialize + tools/list with it.
+        #[arg(long)]
+        login: bool,
+        /// A pre-registered OAuth client id, for an authorization server that
+        /// does not offer Dynamic Client Registration. Requires --login.
+        #[arg(long, value_name = "ID", requires = "login")]
+        client_id: Option<String>,
+        /// The client secret for a confidential --client-id. Omit for a public
+        /// client (the usual case for a CLI). Requires --client-id.
+        #[arg(long, value_name = "SECRET", requires = "client_id")]
+        client_secret: Option<String>,
+        /// The OAuth scope to request, overriding the protected-resource
+        /// metadata's `scopes_supported`. Requires --login.
+        #[arg(long, value_name = "SCOPE", requires = "login")]
+        scope: Option<String>,
+        /// Print the authorization URL instead of opening a browser. Requires
+        /// --login.
+        #[arg(long, requires = "login")]
+        no_browser: bool,
+        /// Write the minted token to this file as JSON — the ONLY way a token
+        /// reaches disk. Created 0600 where the OS supports it. Requires --login.
+        #[arg(long, value_name = "FILE", requires = "login")]
+        token_out: Option<PathBuf>,
         /// Emit the full conformance report as JSON (every finding + every raw
         /// HTTP exchange, tokens redacted).
         #[arg(long)]
@@ -207,7 +237,8 @@ enum Command {
         /// Write the probe's HTTP traffic to this file as JSONL.
         #[arg(long, value_name = "FILE")]
         tap: Option<PathBuf>,
-        /// Per-request timeout in seconds (0 = wait forever).
+        /// Per-request timeout in seconds (0 = wait forever). Under --login this
+        /// is also how long the browser has to complete the authorization.
         #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_TIMEOUT_SECS)]
         timeout: u64,
     },
@@ -725,12 +756,35 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             http,
             stdio,
             header,
+            login,
+            client_id,
+            client_secret,
+            scope,
+            no_browser,
+            token_out,
             json,
             tap,
             timeout,
         } => {
             let target = Target::resolve(stdio, http, None, header)?;
-            auth::run(&target, json, tap.as_deref(), timeout).await
+            if login {
+                auth::run_login(
+                    &target,
+                    auth::LoginFlags {
+                        client_id,
+                        client_secret,
+                        scope,
+                        no_browser,
+                        token_out,
+                    },
+                    json,
+                    tap.as_deref(),
+                    timeout,
+                )
+                .await
+            } else {
+                auth::run(&target, json, tap.as_deref(), timeout).await
+            }
         }
         Command::Inspect {
             stdio,

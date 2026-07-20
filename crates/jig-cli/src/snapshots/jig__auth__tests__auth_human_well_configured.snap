@@ -19,4 +19,4 @@ Authorization Server Metadata
   ✓ PASS            advertises PKCE `S256` in code_challenge_methods_supported  [RFC 9728 §5.1]
 
 Pass --header "Authorization: Bearer <token>" to also test that a real token is accepted (header passthrough).
-jig auth probes discoverable auth surfaces; it performs no login flow (roadmap).
+This run probed the discoverable auth surface only. Add --login to run the OAuth 2.1 authorization-code flow for real and prove a token opens a session.

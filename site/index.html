@@ -331,7 +331,7 @@
       <div class="irow"><span class="ix">03</span><span class="icmd">jig budget</span><span class="idesc"><b>What does it cost?</b> Per tool, per model tokenizer, scored against a real ecosystem distribution.</span></div>
       <div class="irow"><span class="ix">04</span><span class="icmd">jig bench</span><span class="idesc"><b>Which tool does a real model pick?</b> N-run selection distributions with argument validation. Bring your own key.</span></div>
       <div class="irow"><span class="ix">05</span><span class="icmd">jig eval</span><span class="idesc"><b>Did my change regress selection?</b> <span class="mono">.jig</span> suites in git — selection rates, never single-run booleans — with CI gates.</span></div>
-      <div class="irow"><span class="ix">06</span><span class="icmd">jig auth</span><span class="idesc"><b>Is the OAuth surface conformant?</b> RFC-cited checks of metadata, challenge, PKCE and DCR. No login flow, no credentials.</span></div>
+      <div class="irow"><span class="ix">06</span><span class="icmd">jig auth</span><span class="idesc"><b>Is the OAuth surface conformant?</b> RFC-cited checks of metadata, challenge, PKCE and DCR &mdash; or <span class="mono">--login</span> to run the authorization-code flow for real.</span></div>
       <div class="irow"><span class="ix">07</span><span class="icmd">jig servers</span><span class="idesc"><b>What's already configured here?</b> Claude Desktop, Claude Code, Cursor, VS Code and project configs — merged, with secrets redacted.</span></div>
       <div class="irow"><span class="ix">08</span><span class="icmd">inspect · call · read · prompt</span><span class="idesc">Poke the protocol directly — every byte captured in a raw JSONL tap you can replay and assert on.</span></div>
     </div>
@@ -433,7 +433,7 @@
         <h3>Known limits</h3>
         <ul>
           <li><b>The desktop workbench is in design.</b> An interactive prototype exists; the CLI is what ships today.</li>
-          <li><b>jig auth doesn't log in.</b> It grades the discoverable OAuth surface — the authorization-code + PKCE flow is on the roadmap.</li>
+          <li><b>jig auth --login mints one token, then stops.</b> The authorization-code + PKCE flow ships and proves the token against a live session; refresh-token rotation and the device-code grant are still on the roadmap.</li>
           <li><b>Description quality is deterministic heuristics</b>, never an LLM verdict, and every report says so.</li>
           <li><b>The ecosystem leaderboard is being generated</b> and will publish at <span class="mono">/leaderboard/</span>.</li>
           <li><b>Corrections are published as loudly as findings</b> — see the census for the first one.</li>

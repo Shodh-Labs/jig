@@ -10,13 +10,20 @@ repository.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+# `net` on top of the workspace feature set: `jig auth --login` binds an
+# ephemeral loopback listener (RFC 8252 §7.3) to receive the OAuth callback.
+tokio = { workspace = true, features = ["net"] }
 tiktoken-rs.workspace = true
 # `reqwest` is now a core dependency: it powers the Streamable HTTP transport
 # (`HttpTransport`), which is first-class functionality, not an optional add-on.
 reqwest = { workspace = true }
 serde_yaml_ng.workspace = true
 regex.workspace = true
+# The two crypto primitives `jig auth --login` needs (see the workspace
+# manifest for why they are not hand-rolled): CSPRNG + SHA-256, and the
+# base64url encoding RFC 7636 defines the PKCE pair in.
+ring.workspace = true
+base64.workspace = true
 
 [features]
 default = []

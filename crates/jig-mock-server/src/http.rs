@@ -53,6 +53,14 @@ const PRM_PATH: &str = "/.well-known/oauth-protected-resource";
 const PRM_PATH_APPENDED: &str = "/.well-known/oauth-protected-resource/mcp";
 /// RFC 8414 Authorization Server Metadata well-known path.
 const ASM_PATH: &str = "/.well-known/oauth-authorization-server";
+/// RFC 7591 Dynamic Client Registration endpoint.
+const REGISTER_PATH: &str = "/register";
+/// OAuth 2.1 authorization endpoint.
+const AUTHORIZE_PATH: &str = "/authorize";
+/// OAuth 2.1 token endpoint.
+const TOKEN_PATH: &str = "/token";
+/// The scope the fixture AS grants, echoed on the token response.
+const GRANTED_SCOPE: &str = "mcp:tools mcp:resources";
 
 /// The OAuth conformance scenario the HTTP fixture plays, selected with
 /// `--auth <scenario>`. Each drives a specific, deterministic auth surface so an
@@ -76,6 +84,27 @@ pub enum AuthMode {
     /// `--auth no-pkce`: full metadata, but the auth-server metadata omits the
     /// REQUIRED `S256` PKCE method.
     NoPkce,
+    /// `--auth login-happy`: a working authorization server — `/register`,
+    /// `/authorize`, `/token` — plus an MCP endpoint that accepts only the
+    /// access token this server actually issued. The `jig auth --login` flow
+    /// runs end to end against it.
+    LoginHappy,
+    /// `--auth login-bad-state`: as `login-happy`, but the authorization
+    /// response echoes a `state` that is not the one the client sent — the CSRF
+    /// case a client MUST reject (OAuth 2.1 §7.12).
+    LoginBadState,
+    /// `--auth login-bad-iss`: as `login-happy`, but the authorization response
+    /// carries an `iss` naming a different issuer — the authorization-server
+    /// mix-up case a client MUST reject (RFC 9207 §2.4).
+    LoginBadIss,
+    /// `--auth login-no-s256`: the authorization server advertises only the
+    /// `plain` PKCE method, so a conforming client must refuse to start the
+    /// flow rather than downgrade.
+    LoginNoS256,
+    /// `--auth login-token-error`: authorization succeeds, but the token
+    /// endpoint answers `400 invalid_grant` — the client must surface the
+    /// server's own error verbatim.
+    LoginTokenError,
 }
 
 impl AuthMode {
@@ -91,6 +120,11 @@ impl AuthMode {
             Some("no-challenge") => AuthMode::NoChallenge,
             Some("no-metadata") => AuthMode::NoMetadata,
             Some("no-pkce") => AuthMode::NoPkce,
+            Some("login-happy") => AuthMode::LoginHappy,
+            Some("login-bad-state") => AuthMode::LoginBadState,
+            Some("login-bad-iss") => AuthMode::LoginBadIss,
+            Some("login-no-s256") => AuthMode::LoginNoS256,
+            Some("login-token-error") => AuthMode::LoginTokenError,
             _ => AuthMode::Off,
         }
     }
@@ -102,7 +136,26 @@ impl AuthMode {
 
     /// Whether this scenario serves RFC 9728 / RFC 8414 metadata documents.
     fn serves_metadata(self) -> bool {
-        matches!(self, AuthMode::WellConfigured | AuthMode::NoPkce)
+        matches!(self, AuthMode::WellConfigured | AuthMode::NoPkce) || self.is_login()
+    }
+
+    /// Whether this scenario runs the live authorization server (`/register`,
+    /// `/authorize`, `/token`).
+    fn is_login(self) -> bool {
+        matches!(
+            self,
+            AuthMode::LoginHappy
+                | AuthMode::LoginBadState
+                | AuthMode::LoginBadIss
+                | AuthMode::LoginNoS256
+                | AuthMode::LoginTokenError
+        )
+    }
+
+    /// Whether the authorization server advertises (and requires) PKCE `S256`.
+    /// `login-no-s256` advertises `plain` alone so a client must refuse.
+    fn advertises_s256(self) -> bool {
+        !matches!(self, AuthMode::NoPkce | AuthMode::LoginNoS256)
     }
 }
 
@@ -129,11 +182,32 @@ pub struct HttpConfig {
     pub auth: AuthMode,
 }
 
+/// An authorization code the fixture AS has issued but not yet redeemed, with
+/// everything RFC 7636 §4.5 and OAuth 2.1 §4.1.3 require it to be checked
+/// against at the token endpoint.
+struct PendingCode {
+    /// The `code_challenge` from the authorization request.
+    challenge: String,
+    /// The `redirect_uri` from the authorization request; the token request
+    /// MUST present the identical value.
+    redirect_uri: String,
+    /// The RFC 8707 `resource` the token will be audience-bound to.
+    resource: String,
+    /// The granted scope, echoed on the token response.
+    scope: String,
+}
+
 /// Shared server state.
 struct AppState {
     cfg: HttpConfig,
     /// The currently-issued session id (set on initialize, cleared on DELETE).
     session: Mutex<Option<String>>,
+    /// Authorization codes issued by `/authorize`, awaiting redemption.
+    codes: Mutex<std::collections::HashMap<String, PendingCode>>,
+    /// Access tokens `/token` has issued. The MCP endpoint accepts these and
+    /// nothing else under the `login-*` scenarios, so a passing test proves the
+    /// flow actually minted the token it is presenting.
+    issued_tokens: Mutex<std::collections::HashSet<String>>,
 }
 
 /// Run the HTTP server on `127.0.0.1:<port>` until the process is killed. Builds
@@ -151,6 +225,8 @@ pub fn serve(port: u16, cfg: HttpConfig) {
         let state = Arc::new(AppState {
             cfg,
             session: Mutex::new(None),
+            codes: Mutex::new(std::collections::HashMap::new()),
+            issued_tokens: Mutex::new(std::collections::HashSet::new()),
         });
         let app = Router::new()
             .route(
@@ -161,6 +237,10 @@ pub fn serve(port: u16, cfg: HttpConfig) {
             .route(PRM_PATH, get(handle_protected_resource_metadata))
             .route(PRM_PATH_APPENDED, get(handle_protected_resource_metadata))
             .route(ASM_PATH, get(handle_auth_server_metadata))
+            // The authorization server proper (served under --auth login-*).
+            .route(REGISTER_PATH, post(handle_register))
+            .route(AUTHORIZE_PATH, get(handle_authorize))
+            .route(TOKEN_PATH, post(handle_token))
             .with_state(state);
         // A diagnostic fixture must not panic-dump on a busy port: report the
         // failure cleanly and exit non-zero instead.
@@ -199,7 +279,7 @@ async fn handle_post(
     // carries a non-empty `Authorization: Bearer` header is treated as
     // authenticated and falls through to normal handling — this is what the
     // `jig auth` header-passthrough probe exercises.
-    if state.cfg.auth.requires_auth() && !has_bearer(&headers) {
+    if state.cfg.auth.requires_auth() && !is_authorized(&state, &headers) {
         return auth_challenge(&state, &headers);
     }
 
@@ -388,16 +468,29 @@ async fn handle_delete(State(state): State<Arc<AppState>>, headers: HeaderMap) -
 // OAuth conformance fixtures (--auth <scenario>)
 // ---------------------------------------------------------------------------
 
-/// Whether the request carries a non-empty `Authorization: Bearer <token>`.
-fn has_bearer(headers: &HeaderMap) -> bool {
-    headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| {
-            let v = v.trim();
-            v.len() > "Bearer ".len() && v[.."Bearer".len()].eq_ignore_ascii_case("Bearer")
-        })
-        .unwrap_or(false)
+/// The `Authorization: Bearer <token>` credential, if the header carries one.
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get("authorization")?.to_str().ok()?.trim();
+    let (scheme, token) = raw.split_once(char::is_whitespace)?;
+    scheme
+        .eq_ignore_ascii_case("Bearer")
+        .then(|| token.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+/// Whether a request may proceed past the auth gate.
+///
+/// Under the conformance scenarios any non-empty Bearer token is accepted —
+/// they exist to exercise the *challenge*, and `jig auth` never mints a token
+/// for them. Under the `login-*` scenarios the token must be one this server's
+/// own `/token` endpoint issued, so a green integration test is proof the flow
+/// really ran rather than proof a placeholder string was accepted (MCP
+/// 2025-06-18: a server MUST only accept tokens issued for it).
+fn is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
+    match bearer_token(headers) {
+        None => false,
+        Some(token) => !state.cfg.auth.is_login() || locked(&state.issued_tokens).contains(&token),
+    }
 }
 
 /// The `scheme://host` origin of this request, from the `Host` header.
@@ -463,22 +556,361 @@ async fn handle_auth_server_metadata(
         return text_status(StatusCode::NOT_FOUND, "no authorization-server metadata");
     }
     let origin = request_origin(&headers);
-    let pkce_methods: Vec<&str> = if state.cfg.auth == AuthMode::NoPkce {
-        vec!["plain"]
-    } else {
+    let pkce_methods: Vec<&str> = if state.cfg.auth.advertises_s256() {
         vec!["S256"]
+    } else {
+        vec!["plain"]
     };
     let doc = json!({
         "issuer": origin,
-        "authorization_endpoint": format!("{origin}/authorize"),
-        "token_endpoint": format!("{origin}/token"),
-        "registration_endpoint": format!("{origin}/register"),
+        "authorization_endpoint": format!("{origin}{AUTHORIZE_PATH}"),
+        "token_endpoint": format!("{origin}{TOKEN_PATH}"),
+        "registration_endpoint": format!("{origin}{REGISTER_PATH}"),
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": pkce_methods,
         "authorization_response_iss_parameter_supported": true
     });
     json_response(&doc)
+}
+
+// ---------------------------------------------------------------------------
+// The fixture authorization server (--auth login-*)
+// ---------------------------------------------------------------------------
+
+/// `POST /register` — RFC 7591 Dynamic Client Registration.
+///
+/// Accepts any well-formed metadata document and issues a public client id.
+/// The one thing it insists on is `redirect_uris`: an AS that registered a
+/// client without one could not later validate the redirect, which is the whole
+/// point of registration (MCP 2025-06-18, Open Redirection).
+async fn handle_register(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    if !state.cfg.auth.is_login() {
+        return text_status(StatusCode::NOT_FOUND, "no registration endpoint");
+    }
+    let doc: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return oauth_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_client_metadata",
+                "the registration request body is not JSON",
+            )
+        }
+    };
+    let redirect_uris = doc.get("redirect_uris").and_then(Value::as_array);
+    if redirect_uris.map(|a| a.is_empty()).unwrap_or(true) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_redirect_uri",
+            "redirect_uris is required and must be non-empty",
+        );
+    }
+    let client_id = format!("jig-dcr-client-{}", next_counter());
+    let mut out = json!({
+        "client_id": client_id,
+        "client_id_issued_at": 1_700_000_000,
+        "redirect_uris": redirect_uris,
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    });
+    if let Some(name) = doc.get("client_name") {
+        out["client_name"] = name.clone();
+    }
+    Response::builder()
+        .status(StatusCode::CREATED)
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::to_string(&out).unwrap_or_else(|_| "null".to_string()),
+        ))
+        .unwrap()
+}
+
+/// `GET /authorize` — the OAuth 2.1 authorization endpoint.
+///
+/// There is no user interaction to simulate, so consent is implicit; what the
+/// fixture *does* do is validate that the client sent a spec-shaped request
+/// (`response_type=code`, a `redirect_uri`, a CSRF `state`, and an S256 PKCE
+/// challenge) before redirecting. A client that forgot any of them gets a 400
+/// rather than a working flow.
+async fn handle_authorize(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Response {
+    if !state.cfg.auth.is_login() {
+        return text_status(StatusCode::NOT_FOUND, "no authorization endpoint");
+    }
+    let q = parse_form(&query.unwrap_or_default());
+    let get = |k: &str| q.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+
+    let Some(redirect_uri) = get("redirect_uri").filter(|s| !s.is_empty()) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "missing redirect_uri",
+        );
+    };
+    // Everything after this point can be reported *through* the redirect, per
+    // OAuth 2.1 §4.1.2.1, but the fixture keeps it simple: a malformed request
+    // is a 400 the test can read directly.
+    if get("response_type").as_deref() != Some("code") {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_response_type",
+            "response_type must be `code`",
+        );
+    }
+    if get("client_id").filter(|s| !s.is_empty()).is_none() {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "missing client_id",
+        );
+    }
+    let Some(client_state) = get("state").filter(|s| !s.is_empty()) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "missing state — this authorization server requires the CSRF nonce",
+        );
+    };
+    let Some(challenge) = get("code_challenge").filter(|s| !s.is_empty()) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "missing code_challenge — PKCE is required",
+        );
+    };
+    let method = get("code_challenge_method").unwrap_or_default();
+    if state.cfg.auth.advertises_s256() && method != "S256" {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "code_challenge_method must be S256",
+        );
+    }
+
+    let code = format!("jig-code-{}", next_counter());
+    let scope = get("scope").unwrap_or_else(|| GRANTED_SCOPE.to_string());
+    locked(&state.codes).insert(
+        code.clone(),
+        PendingCode {
+            challenge,
+            redirect_uri: redirect_uri.clone(),
+            resource: get("resource").unwrap_or_default(),
+            scope,
+        },
+    );
+
+    // The failure scenarios differ only here, in what the authorization
+    // *response* says — which is exactly where a client's validation lives.
+    let echoed_state = if state.cfg.auth == AuthMode::LoginBadState {
+        "not-the-state-you-sent".to_string()
+    } else {
+        client_state
+    };
+    let issuer = if state.cfg.auth == AuthMode::LoginBadIss {
+        "https://mixup.example.net".to_string()
+    } else {
+        request_origin(&headers)
+    };
+
+    let sep = if redirect_uri.contains('?') { '&' } else { '?' };
+    let location = format!(
+        "{redirect_uri}{sep}code={}&state={}&iss={}",
+        percent_encode(&code),
+        percent_encode(&echoed_state),
+        percent_encode(&issuer)
+    );
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header("Location", location)
+        .header("Cache-Control", "no-store")
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// `POST /token` — the OAuth 2.1 token endpoint.
+///
+/// Verifies the PKCE proof for real: SHA-256 the presented `code_verifier`,
+/// base64url it, and compare against the challenge stored at `/authorize`
+/// (RFC 7636 §4.6). A client that sent a `plain` verifier, reused a challenge,
+/// or skipped the verifier entirely is rejected with `invalid_grant`.
+async fn handle_token(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    if !state.cfg.auth.is_login() {
+        return text_status(StatusCode::NOT_FOUND, "no token endpoint");
+    }
+    let form = parse_form(&String::from_utf8_lossy(&body));
+    let get = |k: &str| form.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+
+    if get("grant_type").as_deref() != Some("authorization_code") {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_grant_type",
+            "only authorization_code is supported",
+        );
+    }
+    let code = get("code").unwrap_or_default();
+    // Codes are single-use (OAuth 2.1 §4.1.3): remove on redemption.
+    let Some(pending) = locked(&state.codes).remove(&code) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "unknown or already-redeemed authorization code",
+        );
+    };
+    if get("redirect_uri").as_deref() != Some(pending.redirect_uri.as_str()) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "redirect_uri does not match the authorization request",
+        );
+    }
+    let verifier = get("code_verifier").unwrap_or_default();
+    if verifier.len() < 43 || verifier.len() > 128 {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "code_verifier must be 43-128 characters (RFC 7636 §4.1)",
+        );
+    }
+    if s256(&verifier) != pending.challenge {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "the code_verifier does not hash to the code_challenge",
+        );
+    }
+
+    // The scenario whose whole point is a token-endpoint failure. Everything
+    // above still ran, so the client is proven to have reached a valid state
+    // before being told no.
+    if state.cfg.auth == AuthMode::LoginTokenError {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "this authorization code was issued to a different client",
+        );
+    }
+
+    let token = format!("jig-access-token-{}", next_counter());
+    locked(&state.issued_tokens).insert(token.clone());
+    let doc = json!({
+        "access_token": token,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "scope": pending.scope,
+        "refresh_token": format!("jig-refresh-token-{}", next_counter()),
+        // Echoed back so a test can confirm the RFC 8707 audience made the
+        // round trip.
+        "resource": pending.resource,
+    });
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .header("Cache-Control", "no-store")
+        .body(Body::from(
+            serde_json::to_string(&doc).unwrap_or_else(|_| "null".to_string()),
+        ))
+        .unwrap()
+}
+
+/// An RFC 6749 §5.2 / RFC 7591 §3.2.2 error object.
+fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
+    let doc = json!({ "error": error, "error_description": description });
+    Response::builder()
+        .status(status)
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::to_string(&doc).unwrap_or_else(|_| "null".to_string()),
+        ))
+        .unwrap()
+}
+
+/// `BASE64URL-ENCODE(SHA256(ASCII(verifier)))` — RFC 7636 §4.2, server side.
+fn s256(verifier: &str) -> String {
+    use base64::Engine as _;
+    let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest.as_ref())
+}
+
+/// Parse an `application/x-www-form-urlencoded` string (a query string or a
+/// form body) into ordered `(name, value)` pairs. Total over arbitrary input.
+fn parse_form(input: &str) -> Vec<(String, String)> {
+    input
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .map(|pair| match pair.split_once('=') {
+            Some((k, v)) => (form_decode(k), form_decode(v)),
+            None => (form_decode(pair), String::new()),
+        })
+        .collect()
+}
+
+/// Decode one form-encoded component (`+` → space, `%XX` → byte). A malformed
+/// escape is kept literally rather than dropped.
+fn form_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                match (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2])) {
+                    (Some(hi), Some(lo)) => {
+                        out.push((hi << 4) | lo);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// One ASCII hex digit as its value.
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Percent-encode a query-parameter value, escaping everything outside the
+/// unreserved set so the redirect `Location` is unambiguous.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*b as char);
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// A monotonically increasing counter for code/token/client ids.
+fn next_counter() -> u64 {
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 /// A `200 application/json` response carrying `doc`.
