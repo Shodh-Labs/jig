@@ -1,0 +1,31 @@
+[package]
+name = "jig-app"
+description = "Jig workbench: the desktop app for inspecting, grading, and budgeting MCP servers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The webview binary. Named `jig-workbench` so it never collides with the `jig`
+# CLI on a user's PATH — they are separate products sharing one engine.
+[[bin]]
+name = "jig-workbench"
+path = "src/main.rs"
+
+[lib]
+# The command layer lives in the lib so it is testable without a webview.
+name = "jig_app"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+jig-core = { path = "../jig-core" }
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
