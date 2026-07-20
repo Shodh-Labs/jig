@@ -204,6 +204,7 @@ fn finding(severity: Severity, message: String, fix: String) -> Finding {
         fix,
         points: points_for(severity),
         // Advisor findings are advisory by definition — never pinned.
+        rank_points: None,
         pinned: false,
     }
 }

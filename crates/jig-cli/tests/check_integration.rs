@@ -153,11 +153,17 @@ fn stdout_pollution_deducts_protocol_and_names_the_finding() {
 
 #[test]
 fn min_score_gate_fails_below_threshold() {
-    let out = run_check("", &["--min-score", "99", "--no-report"]);
+    // 101 is unreachable by construction, so this asserts the *gate*, not a
+    // particular mock-server score. Under `rubric-v1.1` the threshold was 99 and
+    // the mock scored 97; `rubric-v1.2` lifts the mock to exactly 99 (lighter
+    // rate weights on the near-universal title/annotation classes, plus
+    // small-surface shrinkage over its 3 tools), which would have made a
+    // threshold of 99 pass and silently stop testing the gate at all.
+    let out = run_check("", &["--min-score", "101", "--no-report"]);
     assert_eq!(
         out.status.code(),
         Some(1),
-        "score below --min-score 99 must exit 1"
+        "score below --min-score 101 must exit 1"
     );
     // A passing floor exits 0.
     let ok = run_check("", &["--min-score", "80", "--no-report"]);
@@ -188,7 +194,7 @@ fn json_output_has_dimensions_weights_and_rubric_version() {
     let out = run_check("", &["--json"]);
     assert!(out.status.success());
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON report");
-    assert_eq!(v["rubricVersion"], "rubric-v1.1");
+    assert_eq!(v["rubricVersion"], "rubric-v1.2");
     // The bundled census now engages by default (M7 #4), so context cost is
     // scored against the ecosystem and labelled bundled.
     assert_eq!(v["contextCost"]["provenance"]["type"], "percentile");
@@ -305,6 +311,6 @@ fn json_mode_with_report_flag_writes_file_and_keeps_json_clean() {
     // The announcement goes to stderr, so stdout is still parseable JSON.
     let v: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("stdout stays valid JSON");
-    assert_eq!(v["rubricVersion"], "rubric-v1.1");
+    assert_eq!(v["rubricVersion"], "rubric-v1.2");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -4,8 +4,8 @@ expression: render_json(&report)
 ---
 {
   "advisor": [],
-  "composite": 97,
-  "compositeExact": 97.19,
+  "composite": 99,
+  "compositeExact": 98.9,
   "contextCap": null,
   "contextCost": {
     "model": "gpt-4o",
@@ -45,21 +45,21 @@ expression: render_json(&report)
           "dimension": "schema_hygiene",
           "fix": "describe each parameter of `make_reservation` so the model can fill it correctly",
           "message": "`make_reservation`: parameter `party` missing a description",
-          "points": 5.0,
+          "points": 2.37,
           "severity": "medium"
         },
         {
           "dimension": "schema_hygiene",
           "fix": "add tool annotations so clients can reason about side effects",
           "message": "3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)",
-          "points": 5.0,
+          "points": 1.19,
           "severity": "low"
         }
       ],
       "heuristic": false,
       "label": "Schema hygiene",
-      "score": 90,
-      "scoreExact": 90.0,
+      "score": 96,
+      "scoreExact": 96.44,
       "summary": "`make_reservation`: parameter `party` missing a description (+1 more)",
       "weight": 20
     },
@@ -71,14 +71,14 @@ expression: render_json(&report)
           "dimension": "description_quality",
           "fix": "add a `title` to each tool for nicer client display",
           "message": "3 tool(s) have no human-facing title",
-          "points": 3.86,
+          "points": 1.09,
           "severity": "low"
         }
       ],
       "heuristic": true,
       "label": "Description quality",
-      "score": 96,
-      "scoreExact": 96.14,
+      "score": 99,
+      "scoreExact": 98.91,
       "summary": "heuristic · 3 tool(s) have no human-facing title",
       "weight": 15
     },
@@ -96,7 +96,7 @@ expression: render_json(&report)
   ],
   "grade": "A",
   "protocolVersion": "2025-06-18",
-  "rubricVersion": "rubric-v1.1",
+  "rubricVersion": "rubric-v1.2",
   "server": {
     "name": "jig-mock-server",
     "version": "0.1.0"
@@ -107,21 +107,21 @@ expression: render_json(&report)
       "dimension": "schema_hygiene",
       "fix": "describe each parameter of `make_reservation` so the model can fill it correctly",
       "message": "`make_reservation`: parameter `party` missing a description",
-      "points": 5.0,
+      "points": 2.37,
       "severity": "medium"
     },
     {
       "dimension": "schema_hygiene",
       "fix": "add tool annotations so clients can reason about side effects",
       "message": "3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)",
-      "points": 5.0,
+      "points": 1.19,
       "severity": "low"
     },
     {
       "dimension": "description_quality",
       "fix": "add a `title` to each tool for nicer client display",
       "message": "3 tool(s) have no human-facing title",
-      "points": 3.86,
+      "points": 1.09,
       "severity": "low"
     }
   ]

@@ -3,14 +3,14 @@ source: crates/jig-cli/src/check.rs
 expression: render_human(&report)
 ---
 jig check · jig-mock-server v0.1.0
-protocol 2025-06-18 · rubric-v1.1
+protocol 2025-06-18 · rubric-v1.2
 
-  ✓  97 / 100   grade A
+  ✓  99 / 100   grade A
 
   ✓  Protocol compliance  100   clean handshake, no stdout pollution, spec-valid capabilities
   ✓  Context cost          99   183 tokens (no ecosystem data — absolute bands)
-  ✓  Schema hygiene        90   `make_reservation`: parameter `party` missing a description (+1 more)
-  ✓  Description quality   96   heuristic · 3 tool(s) have no human-facing title
+  ✓  Schema hygiene        96   `make_reservation`: parameter `party` missing a description (+1 more)
+  ✓  Description quality   99   heuristic · 3 tool(s) have no human-facing title
   ✓  Robustness           100   list 12ms, clean shutdown
 
 Top fixes

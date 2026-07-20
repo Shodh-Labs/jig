@@ -287,7 +287,7 @@ fn render_hero(s: &mut String, report: &CheckReport, composite: u32, g: char) {
         "      <div class=\"g\" style=\"background:{gvar}\">grade {g}</div>\n"
     ));
     s.push_str("      <div class=\"sub\">out of 100 · composite of 5 weighted dimensions</div>\n");
-    // The context-cost cap (rubric-v1.1) is never silent: when the composite was
+    // The context-cost cap (rubric-v1.2) is never silent: when the composite was
     // bounded, the hero says so and shows what it would otherwise have been.
     if let Some(cap) = &report.context_cap {
         s.push_str(&format!(

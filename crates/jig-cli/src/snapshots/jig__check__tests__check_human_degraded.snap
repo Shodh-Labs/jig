@@ -3,14 +3,14 @@ source: crates/jig-cli/src/check.rs
 expression: render_human(&report)
 ---
 jig check · jig-mock-server v0.1.0
-protocol 2025-06-18 · rubric-v1.1
+protocol 2025-06-18 · rubric-v1.2
 
-  ✓  88 / 100   grade B
+  ✓  91 / 100   grade A
 
   ⚠  Protocol compliance   75   1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing (+1 more)
   ✓  Context cost          99   170 tokens (no ecosystem data — absolute bands)
-  ⚠  Schema hygiene        77   `echo`: parameter `text` missing a description (+3 more)
-  ✓  Description quality   96   heuristic · 3 tool(s) have no human-facing title
+  ✓  Schema hygiene        88   `echo`: parameter `text` missing a description (+3 more)
+  ✓  Description quality   99   heuristic · 3 tool(s) have no human-facing title
   ✓  Robustness           100   list 12ms, clean shutdown
 
 Top fixes

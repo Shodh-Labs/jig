@@ -14,7 +14,7 @@
 //! constructed fixtures and the whole report is snapshot-lockable. The CLI does
 //! the one live session, fills a [`CheckInput`], and calls [`evaluate`] once.
 //!
-//! # The rubric (`rubric-v1.1`)
+//! # The rubric (`rubric-v1.2`)
 //!
 //! | Dimension | Weight | What it measures | Scoring shape |
 //! | --- | --- | --- | --- |
@@ -34,7 +34,7 @@
 //! `PROTOCOL_*` constants), clamped to `0..=100`. These defects are per-server,
 //! not per-item, so their magnitude does not grow with the tool surface.
 //!
-//! ## Rate-based dimensions (`rubric-v1.1`)
+//! ## Rate-based dimensions (`rubric-v1.1`, re-tuned in `rubric-v1.2`)
 //!
 //! Schema hygiene and description quality grade *per-item* defects. Summing raw
 //! per-item penalties made these dimensions a function of **tool-surface size**
@@ -48,10 +48,52 @@
 //! deduction):
 //!
 //! ```text
-//! rate_c     = defective items in class c / total items in class c   (0.0 ..= 1.0)
+//! rate_c     = (defects_c + k * prior) / (items_c + k)               (0.0 ..= 1.0)
 //! deduction  = SCALE * Σ_c ( p_c * rate_c )
 //! score      = clamp(100 - deduction, RATE_SCORE_FLOOR, 100)
 //! ```
+//!
+//! ### Confidence shrinkage (`rubric-v1.2`)
+//!
+//! `rate_c` is not the raw defect rate: it is shrunk toward a neutral prior with
+//! strength `k` = `RATE_SHRINKAGE_K` (2) — see `shrunk_rate`. A raw rate is a
+//! point estimate whose variance explodes as the denominator shrinks, so under
+//! `rubric-v1.1` a 1-tool server with one flaw sat at a 100% defect rate and
+//! consumed a whole class weight, while a 40-tool server needed 40 flaws for the
+//! same score. That is a sample-size artefact, not a quality difference, and it
+//! is not rare: **5 of the 29 census servers expose exactly one tool**.
+//! Shrinkage converges on the raw rate as `n` grows (a 1/3 defect rate scores
+//! 83.0 at n=3, 72.3 at n=90, 71.7 at n=900 vs. a flat 71.7 under `v1.1`), so
+//! large surfaces are graded essentially as before.
+//!
+//! The prior is 0.0 — shrink toward "clean" — because the census records no
+//! per-class defect counts to derive a median from. That is a documented
+//! limitation with a known direction of bias; see `RATE_SHRINKAGE_PRIOR`.
+//!
+//! ### Class weights are *rate* weights (`rubric-v1.2`)
+//!
+//! The per-item weights below were inherited from the per-item regime, where
+//! they meant "how bad is one instance". Under rate scoring they mean something
+//! different — "how much of the dimension does this class command when it is
+//! violated at rate `r`" — and they do not transfer. Missing annotations carried
+//! a deliberately minor weight of 1, but because servers that omit annotations
+//! omit them on *every* tool, the class sat at rate ~1.0 and consumed its full
+//! share on nearly every server, while a genuinely serious defect at a 10% rate
+//! consumed almost nothing.
+//!
+//! `rubric-v1.2` re-tunes them on the discriminating principle: **a class that
+//! is near-universally violated carries less rate weight** (it separates nobody
+//! from anybody), **a rare-but-serious class more**. Missing annotations 1 →
+//! 0.5 and missing `title` 1 → 0.5; untyped parameter 5 → 8 and missing tool
+//! description 8 → 10; terse description 6 → 8. The sum-to-floor math is
+//! untouched — `SCALE` is still `(100 - floor) / Σ p_c` over the worst
+//! simultaneously-attainable class set, just over new sums (schema 21.5,
+//! description 23.5). Per-class reasoning is on each constant.
+//!
+//! These are **judgement weights informed by the census's shape, not fitted to
+//! measured defect rates** — `data/census-raw.json` carries no per-class schema
+//! or description defect counts, so no such fit is currently possible. See
+//! `RATE_SHRINKAGE_PRIOR` for the same gap and what closing it would need.
 //!
 //! The denominator is class-appropriate: tool-level classes (missing tool
 //! description, missing annotations) divide by the tool count; parameter-level
@@ -74,23 +116,61 @@
 //! (its share of the dimension deduction, used to rank "Top fixes") reflects the
 //! new math.
 //!
-//! ## The context-cost cap (`rubric-v1.1`)
+//! ## The context-cost cap (`rubric-v1.2`)
 //!
 //! Context cost is a *cost*, not a quality: a server that spends 42k tokens of
 //! every conversation cannot be redeemed by schema polish. Under `rubric-v1` the
 //! heaviest server measured outranked a much lighter one purely on the strength
 //! of its other dimensions, which contradicts the rubric's claim that context
-//! discipline matters. So when the context sub-score is catastrophic it now
-//! **bounds the composite**:
+//! discipline matters. So a heavy context sub-score **bounds the composite**.
 //!
-//! | Context sub-score | Composite capped at | Grade ceiling |
-//! | --- | --- | --- |
-//! | `< 10` | 55 (`CONTEXT_CAP_CATASTROPHIC_COMPOSITE`) | F |
-//! | `< 20` | 65 (`CONTEXT_CAP_SEVERE_COMPOSITE`) | D |
+//! `rubric-v1.1` did this with a two-step function (`< 20` → 65, `< 10` → 55)
+//! and thereby rebuilt, at the cap, the very cliff the release existed to
+//! remove: sub-score 20.1 kept a composite of 76 while 19.9 was forced to 65.
+//! `rubric-v1.2` replaces the steps with a **continuous, monotone ramp** (see
+//! `context_cap_ceiling`):
 //!
-//! The cap is never silent: it produces a [`Finding`] and populates
+//! ```text
+//! ceiling(sub) = clamp(55 + (sub - 5) / (22 - 5) * 45, 55, 100)
+//! ```
+//!
+//! There is no discontinuity anywhere on it, and it is non-decreasing in the
+//! sub-score, so a server can never gain grade by getting worse.
+//!
+//! Its anchors are **calibrated against the census, not asserted** — the second
+//! half of the fix. Percentile scoring maps `pct > 50` to `90 - (pct - 50)*1.7`,
+//! which inverts exactly:
+//!
+//! | Sub-score | Census percentile | `v1.2` ceiling | (`v1.1` ceiling) |
+//! | --- | --- | --- | --- |
+//! | 22 | **p90** | 100 — inert | none |
+//! | 16.7 | p93 | 86.0 | 65 |
+//! | 13.5 | p95 | 77.5 | 65 |
+//! | 9.9 | p97 | 68.0 | 55 |
+//! | 5 | **p100** | 55 | 55 |
+//!
+//! `rubric-v1.1` documented its 20/10 thresholds as "roughly p95" and "the
+//! extreme tail"; the arithmetic actually put them at p91.2 and p97.1. The ramp
+//! is anchored where the claim and the arithmetic agree: it is inert below p90,
+//! and reaches its harshest ceiling only at p100 — the heaviest server in the
+//! measured ecosystem, and the lowest sub-score percentile scoring can express.
+//!
+//! The cap is never silent: it produces a **pinned** [`Finding`] and populates
 //! [`Report::context_cap`], which every renderer surfaces as an explicit line
-//! naming the token count and the cap that was applied.
+//! naming the token count, the applied cap, and the sub-score that produced it.
+//! Because the ceiling is now continuous rather than one of two memorable
+//! constants, stating the sub-score is what makes the number checkable.
+//!
+//! ### Ranking vs. deducting
+//!
+//! The cap finding carries `points: 0.0` — the context sub-score already priced
+//! those tokens, and deducting again would double-count. Under `rubric-v1.1`
+//! that also silently excluded it from "Top fixes", so for precisely the servers
+//! whose grade was *most* determined by context cost, the reason never appeared
+//! in the ranked to-do list users read first. `rubric-v1.2` separates the two
+//! concerns: [`Finding::rank_points`] carries the ranking weight (the composite
+//! points the cap actually cost) independently of the score deduction, and the
+//! finding is pinned. See [defect 5](Finding::rank_points).
 //!
 //! ## Grade bands
 //!
@@ -121,7 +201,7 @@ fn context_counter() -> Option<&'static ModelCounter> {
 
 /// The rubric version string, emitted in `--json` so a score is always tied to
 /// the ruleset that produced it.
-pub const RUBRIC_VERSION: &str = "rubric-v1.1";
+pub const RUBRIC_VERSION: &str = "rubric-v1.2";
 
 /// The model whose exact tokenizer defines the context-cost metric.
 const CONTEXT_METRIC_MODEL: &str = "gpt-4o";
@@ -181,14 +261,28 @@ pub const RATE_SCORE_FLOOR: f64 = 15.0;
 /// class deducts exactly this much, landing the score on [`RATE_SCORE_FLOOR`].
 const RATE_DEDUCTION_SPAN: f64 = 100.0 - RATE_SCORE_FLOOR;
 
-/// Schema: relative weight of a tool missing a description.
-const SCHEMA_MISSING_TOOL_DESC: f64 = 8.0;
-/// Schema: relative weight of a parameter missing a description.
+/// Schema: relative weight of a tool missing a description. **8 → 10 in
+/// `rubric-v1.2`**: a tool with no description at all is uncommon and severe (a
+/// model cannot select it), so the class discriminates well and earns weight.
+const SCHEMA_MISSING_TOOL_DESC: f64 = 10.0;
+/// Schema: relative weight of a parameter missing a description. **Unchanged at
+/// 3**: moderately common, moderately serious — the reference point the other
+/// three were re-tuned against.
 const SCHEMA_PARAM_MISSING_DESC: f64 = 3.0;
 /// Schema: relative weight of a parameter missing a type (no enum/`$ref`/etc.).
-const SCHEMA_PARAM_MISSING_TYPE: f64 = 5.0;
+/// **5 → 8 in `rubric-v1.2`**: an untyped parameter is rare and directly breaks
+/// argument generation and validation — the rare-but-serious profile the rate
+/// regime should punish hardest.
+const SCHEMA_PARAM_MISSING_TYPE: f64 = 8.0;
 /// Schema: relative weight of a tool declaring no annotations (`readOnlyHint`, …).
-const SCHEMA_MISSING_ANNOTATIONS: f64 = 1.0;
+/// **1 → 0.5 in `rubric-v1.2`**: annotations are optional and recently
+/// standardized, and servers that omit them omit them on *every* tool, so the
+/// class sits at a defect rate of ~1.0 almost everywhere. A class that is
+/// near-universally violated separates nobody from anybody; under the rate
+/// regime it was nonetheless consuming its **full** weight on almost every
+/// server, which is precisely defect 2. It keeps a non-zero weight because the
+/// advice is still worth giving.
+const SCHEMA_MISSING_ANNOTATIONS: f64 = 0.5;
 
 /// The sum of schema hygiene's class weights — the deduction a server that is
 /// 100% defective in *every* class would take before scaling. All four classes
@@ -199,23 +293,37 @@ const SCHEMA_WEIGHT_SUM: f64 = SCHEMA_MISSING_TOOL_DESC
     + SCHEMA_MISSING_ANNOTATIONS;
 
 /// Schema hygiene's rate scale: maps a fully-defective server onto
-/// [`RATE_SCORE_FLOOR`] exactly. (85 / 17 = 5.0.)
+/// [`RATE_SCORE_FLOOR`]. (`rubric-v1.2`: 85 / 21.5 ≈ 3.95; was 85 / 17 = 5.0.)
 const SCHEMA_RATE_SCALE: f64 = RATE_DEDUCTION_SPAN / SCHEMA_WEIGHT_SUM;
 
 /// Description: relative weight of a tool name containing whitespace
-/// (uncallable).
+/// (uncallable). **Unchanged at 15**: vanishingly rare and categorically fatal —
+/// the archetype of a class that should dominate when it fires.
 const DQ_NAME_HAS_SPACE: f64 = 15.0;
 /// Description: relative weight of a tool name breaking the server's dominant
-/// naming convention (kebab vs snake).
-const DQ_NAME_INCONSISTENT: f64 = 5.0;
+/// naming convention (kebab vs snake). **5 → 4 in `rubric-v1.2`**: cosmetic
+/// relative to a description defect, and by construction it can only fire on a
+/// minority of a server's tools, so it never dominated — trimmed for consistency
+/// with the re-tune rather than to fix an observed problem.
+const DQ_NAME_INCONSISTENT: f64 = 4.0;
 /// Description: relative weight of a description that is present but too terse
 /// for a model to select on (see [`DQ_TERSE_TOKENS`]) or missing entirely.
-const DQ_DESC_TERSE: f64 = 6.0;
+/// **6 → 8 in `rubric-v1.2`**: this is the class that actually determines
+/// whether a model can pick the right tool, and it is far from universal —
+/// exactly what the rate regime should weight up.
+const DQ_DESC_TERSE: f64 = 8.0;
 /// Description: relative weight of a description long enough to waste context
-/// (see [`DQ_VERBOSE_TOKENS`]).
-const DQ_DESC_VERBOSE: f64 = 4.0;
+/// (see [`DQ_VERBOSE_TOKENS`]). **4 → 3 in `rubric-v1.2`**: verbosity is already
+/// priced directly, and much more precisely, by the context-cost dimension;
+/// carrying a heavy second weight here double-charged it.
+const DQ_DESC_VERBOSE: f64 = 3.0;
 /// Description: relative weight of a tool missing a human-facing `title`.
-const DQ_MISSING_TITLE: f64 = 1.0;
+/// **1 → 0.5 in `rubric-v1.2`**, for the same reason as
+/// [`SCHEMA_MISSING_ANNOTATIONS`]: `title` is optional and recently
+/// standardized, servers omit it on every tool or none, and a class pinned at a
+/// ~1.0 defect rate carries no information about quality while consuming its
+/// full share of the dimension.
+const DQ_MISSING_TITLE: f64 = 0.5;
 
 /// The sum of description quality's *simultaneously attainable* class weights.
 ///
@@ -223,12 +331,13 @@ const DQ_MISSING_TITLE: f64 = 1.0;
 /// name is whitespace-broken **or** convention-inconsistent (the whitespace
 /// check short-circuits), and a description is terse **or** verbose, never both.
 /// The worst attainable server therefore takes the heavier of each exclusive
-/// pair plus the title weight — 15 + 6 + 1 = 22 — and scaling by the naive sum
-/// of all five would make [`RATE_SCORE_FLOOR`] unreachable.
+/// pair plus the title weight — `rubric-v1.2`: 15 + 8 + 0.5 = 23.5 (was
+/// 15 + 6 + 1 = 22) — and scaling by the naive sum of all five would make
+/// [`RATE_SCORE_FLOOR`] unreachable.
 const DQ_WEIGHT_SUM: f64 = DQ_NAME_HAS_SPACE + DQ_DESC_TERSE + DQ_MISSING_TITLE;
 
 /// Description quality's rate scale: maps a fully-defective server onto
-/// [`RATE_SCORE_FLOOR`] exactly. (85 / 22.)
+/// [`RATE_SCORE_FLOOR`]. (`rubric-v1.2`: 85 / 23.5 ≈ 3.62; was 85 / 22.)
 const DQ_RATE_SCALE: f64 = RATE_DEDUCTION_SPAN / DQ_WEIGHT_SUM;
 /// A description at or below this token count is "terse".
 const DQ_TERSE_TOKENS: usize = 4;
@@ -237,17 +346,33 @@ const DQ_VERBOSE_TOKENS: usize = 160;
 
 // -- The context-cost composite cap (rubric-v1.1) ----------------------------
 
-/// Context sub-score below which the composite is capped at
-/// [`CONTEXT_CAP_SEVERE_COMPOSITE`]. Roughly the census p95 — a server heavier
-/// than 95% of the ecosystem.
-const CONTEXT_CAP_SEVERE_SUBSCORE: f64 = 20.0;
-/// The composite ceiling for a severely heavy server: the top of the D band.
-const CONTEXT_CAP_SEVERE_COMPOSITE: f64 = 65.0;
-/// Context sub-score below which the composite is capped at
-/// [`CONTEXT_CAP_CATASTROPHIC_COMPOSITE`] — the extreme tail of the census.
-const CONTEXT_CAP_CATASTROPHIC_SUBSCORE: f64 = 10.0;
-/// The composite ceiling for a catastrophically heavy server: inside the F band.
-const CONTEXT_CAP_CATASTROPHIC_COMPOSITE: f64 = 55.0;
+/// The context sub-score at or above which the cap is inert (ceiling 100).
+///
+/// **Calibrated, not asserted** (`rubric-v1.2`, defect 4). Percentile scoring
+/// maps a rank `pct > 50` to `90 - (pct - 50) * 1.7`, so a sub-score of 22 is
+/// *exactly* the census p90: `50 + (90 - 22) / 1.7 = 90.0`. Above p90 — a server
+/// heavier than nine in ten measured servers — the cap begins to bind, gently.
+///
+/// `rubric-v1.1` asserted its 20.0 threshold was "roughly p95"; the same
+/// arithmetic puts it at p91.2. This anchor states the percentile the ramp
+/// actually implements.
+const CONTEXT_CAP_RAMP_INERT_SUBSCORE: f64 = 22.0;
+
+/// The context sub-score at or below which the cap reaches its harshest ceiling,
+/// [`CONTEXT_CAP_FLOOR_COMPOSITE`].
+///
+/// 5.0 is the census p100: `50 + (90 - 5) / 1.7 = 100.0`. It is also the *lowest
+/// sub-score percentile scoring can produce* — the heaviest server in the
+/// ecosystem, and nothing worse is expressible against a census. Only there does
+/// the ramp bottom out, which is what "only genuinely extreme context cost
+/// bounds a grade" has to mean if it is to mean anything.
+///
+/// (Absolute-band scoring, used when no census is loaded, can reach below 5; the
+/// ramp clamps, so those land on the floor too.)
+const CONTEXT_CAP_FLOOR_SUBSCORE: f64 = 5.0;
+
+/// The harshest composite ceiling the ramp can impose: inside the F band.
+const CONTEXT_CAP_FLOOR_COMPOSITE: f64 = 55.0;
 
 /// Robustness: list latency at or below this is unremarkable (full sub-score).
 const ROBUST_LATENCY_FAST_MS: u128 = 1_000;
@@ -534,21 +659,41 @@ pub struct Finding {
     /// tokens".
     pub fix: String,
     /// Points deducted from the dimension's `0..=100` score by this finding.
-    /// `Info` findings carry `0.0`. Used to rank the "Top fixes" list by
-    /// composite impact (`points * weight`).
+    /// `Info` findings carry `0.0`.
     pub points: f64,
+    /// The weight used to **rank** this finding in "Top fixes", when that must
+    /// differ from the score deduction it caused (`rubric-v1.2`).
+    ///
+    /// Ranking weight and score deduction are separate concerns. Almost every
+    /// finding wants them equal — `None` means "rank on `points`". The exception
+    /// is the [context-cost cap](ContextCap) finding, whose deduction is applied
+    /// to the *composite* rather than to a dimension: it carries `points: 0.0`
+    /// so it cannot double-count against the context sub-score that already
+    /// priced those tokens, while ranking on the composite points the cap
+    /// actually cost. Expressed in dimension-local units so that
+    /// [`weighted_impact`](Self::weighted_impact) stays comparable across
+    /// dimensions.
+    pub rank_points: Option<f64>,
     /// Whether this finding is *pinned* into the "Top fixes" list regardless of
-    /// its numeric rank. Set for breaks-real-clients findings — chiefly stdout
-    /// pollution — so a heavy context-cost or many-tool server can never bury
-    /// the one problem that stops the server from working at all.
+    /// its numeric rank. Set for breaks-real-clients findings — stdout pollution
+    /// and the context-cost cap — so a heavy context-cost or many-tool server
+    /// can never bury the one problem that stops the server working, or the one
+    /// fact that is holding its grade down.
     pub pinned: bool,
 }
 
 impl Finding {
-    /// This finding's impact on the composite score: dimension-local `points`
-    /// scaled by the dimension weight. Higher = fixing it moves the grade more.
+    /// This finding's impact on the composite score: dimension-local ranking
+    /// points scaled by the dimension weight. Higher = fixing it moves the grade
+    /// more. Uses [`rank_points`](Self::rank_points) when set, else `points`.
     pub fn weighted_impact(&self) -> f64 {
-        self.points * self.dimension.weight() as f64
+        self.rank_weight() * self.dimension.weight() as f64
+    }
+
+    /// The dimension-local points this finding ranks on — its
+    /// [`rank_points`](Self::rank_points) override, or its score `points`.
+    fn rank_weight(&self) -> f64 {
+        self.rank_points.unwrap_or(self.points)
     }
 }
 
@@ -591,15 +736,17 @@ pub enum ContextProvenance {
     AbsoluteBands,
 }
 
-/// A composite ceiling imposed by catastrophic context cost (`rubric-v1.1`).
+/// A composite ceiling imposed by heavy context cost (`rubric-v1.2`).
 ///
 /// Recorded on the [`Report`] whenever the cap actually bound — i.e. the
 /// weighted composite exceeded the ceiling and was lowered to it — so no
 /// renderer ever shows an adjusted score without saying why. See the
-/// [module docs](self#the-context-cost-cap-rubric-v11).
+/// [module docs](self#the-context-cost-cap-rubric-v12).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextCap {
-    /// The ceiling applied (65 or 55).
+    /// The ceiling applied: any value in `55.0..100.0`, read off the continuous
+    /// ramp in `context_cap_ceiling`. (Under `rubric-v1.1` this was one of two
+    /// constants, 65 or 55; the step function was defect 1 of that release.)
     pub cap: f64,
     /// The weighted composite *before* the cap, so the cost of the cap is
     /// legible.
@@ -678,7 +825,10 @@ impl Report {
             .iter()
             .flat_map(|d| d.findings.iter())
             .chain(self.advisor.iter())
-            .filter(|f| f.points > 0.0 && f.severity != Severity::Info)
+            // Ranked on `rank_weight`, not `points`: a finding whose score
+            // deduction lives on the composite rather than on its dimension
+            // (the context-cost cap) still belongs in the list.
+            .filter(|f| f.rank_weight() > 0.0 && f.severity != Severity::Info)
             .collect();
         all.sort_by(|a, b| {
             b.weighted_impact()
@@ -1061,11 +1211,22 @@ pub fn evaluate(input: &CheckInput, percentiles: Option<&Percentiles>) -> Report
                     .to_string(),
                 // The cap is a composite ceiling, not a dimension-local
                 // deduction: the context sub-score already carries the full
-                // penalty for these tokens. Scoring it again here would
-                // double-count, so it ranks in "Top fixes" on the strength of
-                // the sibling context finding instead.
+                // penalty for these tokens, so deducting here would
+                // double-count. `points` therefore stays 0.
                 points: 0.0,
-                pinned: false,
+                // …but ranking weight and score deduction are separate concerns
+                // (`rubric-v1.2`, defect 5). Under `rubric-v1.1` the 0 points
+                // also kept the cap finding *out of* "Top fixes" — so for
+                // exactly the servers whose grade is most determined by context
+                // cost, the reason never appeared in the ranked to-do list read
+                // first. It now ranks on the composite points the cap actually
+                // cost, converted to dimension-local units so that
+                // `points * weight` stays comparable with every other finding,
+                // and is pinned so it can never be crowded out.
+                rank_points: Some(
+                    (cap.uncapped - cap.cap) * 100.0 / Dimension::ContextCost.weight() as f64,
+                ),
+                pinned: true,
             });
         });
 
@@ -1109,14 +1270,47 @@ fn advisor_costs(costs: &ToolCosts) -> Vec<crate::advisor::ToolTokenCost> {
         .collect()
 }
 
-/// The composite ceiling imposed by a catastrophic context sub-score, or `None`
-/// when no cap applies.
+/// The composite ceiling a given context sub-score imposes — a **continuous,
+/// monotone non-decreasing ramp** (`rubric-v1.2`, defect 1).
 ///
-/// Returns `None` when the context dimension is not applicable, when the
-/// sub-score is above [`CONTEXT_CAP_SEVERE_SUBSCORE`], or when the cap would not
-/// actually bind (the composite is already at or below the ceiling) — a cap that
-/// changes nothing is not reported, so a [`ContextCap`] on a [`Report`] always
-/// means the score really was lowered.
+/// ```text
+/// ceiling(sub) = clamp(55 + (sub - 5) / (22 - 5) * 45, 55, 100)
+/// ```
+///
+/// `rubric-v1.1` used a two-step function (`sub < 20` → 65, `sub < 10` → 55),
+/// which reintroduced at the cap the exact pathology the release existed to
+/// remove: a sub-score of 20.1 kept a composite of 76 while 19.9 was forced to
+/// 65 — an 11-point drop across a hair of difference. Worse, the steps meant a
+/// server could *gain* grade by getting worse in a neighbouring dimension.
+///
+/// The ramp has no discontinuity anywhere, and because it is non-decreasing in
+/// the sub-score, worsening context cost can never raise the ceiling. Anchors
+/// are census percentiles, not round numbers — see
+/// [`CONTEXT_CAP_RAMP_INERT_SUBSCORE`] and [`CONTEXT_CAP_FLOOR_SUBSCORE`]:
+///
+/// | Sub-score | Census percentile | Ceiling |
+/// | --- | --- | --- |
+/// | 22 (and above) | p90 | 100 — inert |
+/// | 16.7 | p93 | 86.0 |
+/// | 13.5 | p95 | 77.5 |
+/// | 9.9 | p97 | 68.0 |
+/// | 5 (and below) | p100 | 55 |
+fn context_cap_ceiling(context_score: f64) -> f64 {
+    let span = CONTEXT_CAP_RAMP_INERT_SUBSCORE - CONTEXT_CAP_FLOOR_SUBSCORE;
+    let t = (context_score - CONTEXT_CAP_FLOOR_SUBSCORE) / span;
+    (CONTEXT_CAP_FLOOR_COMPOSITE + t * (100.0 - CONTEXT_CAP_FLOOR_COMPOSITE))
+        .clamp(CONTEXT_CAP_FLOOR_COMPOSITE, 100.0)
+}
+
+/// The composite ceiling imposed by heavy context cost, or `None` when no cap
+/// applies.
+///
+/// Returns `None` when the context dimension is not applicable, when the ramp is
+/// inert (ceiling 100, i.e. sub-score at or above
+/// [`CONTEXT_CAP_RAMP_INERT_SUBSCORE`]), or when the cap would not actually bind
+/// (the composite is already at or below the ceiling) — a cap that changes
+/// nothing is not reported, so a [`ContextCap`] on a [`Report`] always means the
+/// score really was lowered.
 fn context_cost_cap(
     context_score: Option<f64>,
     uncapped: f64,
@@ -1124,14 +1318,8 @@ fn context_cost_cap(
     percentiles: Option<&Percentiles>,
 ) -> Option<ContextCap> {
     let context_score = context_score?;
-    let cap = if context_score < CONTEXT_CAP_CATASTROPHIC_SUBSCORE {
-        CONTEXT_CAP_CATASTROPHIC_COMPOSITE
-    } else if context_score < CONTEXT_CAP_SEVERE_SUBSCORE {
-        CONTEXT_CAP_SEVERE_COMPOSITE
-    } else {
-        return None;
-    };
-    if uncapped <= cap {
+    let cap = context_cap_ceiling(context_score);
+    if cap >= 100.0 || uncapped <= cap {
         return None;
     }
     let comparison = census_median(percentiles)
@@ -1142,9 +1330,15 @@ fn context_cost_cap(
         cap,
         uncapped,
         context_score,
+        // The applied cap *and* the sub-score that produced it: with a
+        // continuous ramp the ceiling is no longer one of two memorable
+        // constants, so a reader can only check the arithmetic if the report
+        // states its input as well as its output (`rubric-v1.2`, defect 1).
         explanation: format!(
-            "composite capped at {:.0} by context cost: {} tokens{comparison}",
+            "composite capped at {:.0} by context cost (context sub-score {:.0}): {} tokens\
+             {comparison}",
             cap,
+            context_score,
             commas(total_tokens)
         ),
     })
@@ -1183,6 +1377,80 @@ fn composite_score(dimensions: &[DimensionScore]) -> f64 {
 /// Clamp a running score into `0..=100`.
 fn clamp_score(s: f64) -> f64 {
     s.clamp(0.0, 100.0)
+}
+
+/// The shrinkage strength `k` — the number of *pseudo-items* the neutral prior
+/// contributes to every class denominator (`rubric-v1.2`, defect 3).
+///
+/// A raw defect rate is a point estimate whose variance explodes as the
+/// denominator shrinks: a 1-tool server with one flaw sits at a 100% defect rate
+/// and consumes a whole class weight, while a 40-tool server needs 40 flaws for
+/// the same. That is not a quality difference, it is a sample-size artefact, and
+/// it matters — **5 of the 29 servers in the census expose exactly one tool, and
+/// 11 of 29 expose five or fewer** (`data/percentiles.json`, `tool_count`).
+///
+/// `k = 2` is chosen against that distribution so the prior is decisive only
+/// where the evidence genuinely is thin, and negligible where it is not:
+///
+/// | Tools `n` | Census position | Prior weight `k/(n+k)` |
+/// | --- | --- | --- |
+/// | 1 | p17 | 67% |
+/// | 2 | — | 50% |
+/// | 5 | p38 | 29% |
+/// | 14 | median | 13% |
+/// | 26 | p76 | 7% |
+/// | 89 | p100 | 2% |
+///
+/// By the census median the prior moves a score by roughly a point; at the top
+/// of the distribution it is nearly invisible. Deliberately small: this corrects
+/// for uncertainty, it does not forgive defects.
+const RATE_SHRINKAGE_K: f64 = 2.0;
+
+/// The neutral prior defect rate a class is shrunk *toward*.
+///
+/// **0.0, and that is a documented limitation, not a considered choice.** The
+/// principled prior is the census median defect rate for the class, which would
+/// pull a thin observation toward what the ecosystem typically does. It is not
+/// derivable here: `data/census-raw.json` records `toolCount`,
+/// `contextCostTokens`, `capabilities`, `stdoutPollutionLines` and friends, but
+/// **no per-class schema or description defect counts at all** — the census
+/// never captured the fields these dimensions grade. Until the census is
+/// extended to carry them, 0 is the only prior that invents nothing.
+///
+/// The direction of the resulting bias is stated plainly: shrinking toward 0
+/// means a thin surface is treated as *probably clean*, so small servers are
+/// scored generously rather than harshly. That is the right way to be wrong when
+/// the evidence is thin and the grade is public, but it is a thumb on the scale
+/// and should be replaced with a measured prior as soon as one exists.
+const RATE_SHRINKAGE_PRIOR: f64 = 0.0;
+
+/// A class's **empirical-Bayes shrunk defect rate** (`rubric-v1.2`, defect 3):
+///
+/// ```text
+/// adjusted_rate = (defects + k * prior) / (n + k)
+/// ```
+///
+/// with `k` = [`RATE_SHRINKAGE_K`] and `prior` = [`RATE_SHRINKAGE_PRIOR`]. As
+/// `n` grows the prior washes out and this converges on the raw rate `d/n`, so
+/// large-surface grading is materially unchanged; as `n` shrinks the estimate is
+/// pulled toward the prior, so a single defect on a one-tool server no longer
+/// reads as a total, confident failure.
+///
+/// One deliberate consequence: a 100%-defective server no longer lands *exactly*
+/// on [`RATE_SCORE_FLOOR`] at finite `n`, approaching it from above as the
+/// surface grows (40 tools → 19.0, 900 → 15.2). That is the shrinkage working as
+/// intended — certainty that a defect rate really is 100% is itself a function
+/// of how many items were observed — and it is why the floor is a `clamp` bound
+/// rather than an asserted equality.
+fn shrunk_rate(defects: usize, denominator: usize) -> f64 {
+    if denominator == 0 {
+        return 0.0;
+    }
+    let adjusted = (defects as f64 + RATE_SHRINKAGE_K * RATE_SHRINKAGE_PRIOR)
+        / (denominator as f64 + RATE_SHRINKAGE_K);
+    // A class can never exceed a 100% defect rate, but clamp defensively so a
+    // miscounted denominator cannot inflate the deduction.
+    adjusted.clamp(0.0, 1.0)
 }
 
 /// Accumulator for a [rate-scored dimension](self#rate-based-dimensions-rubric-v11).
@@ -1242,9 +1510,7 @@ impl RateTally {
             if *denominator == 0 || defective[*class] == 0 {
                 continue;
             }
-            // A class can never exceed a 100% defect rate, but clamp defensively
-            // so a miscounted denominator cannot inflate the deduction.
-            let rate = (defective[*class] as f64 / *denominator as f64).min(1.0);
+            let rate = shrunk_rate(defective[*class], *denominator);
             let d = scale * weight * rate;
             deduction_per_class[*class] = d;
             total += d;
@@ -1286,6 +1552,7 @@ fn score_protocol(input: &CheckInput) -> DimensionScore {
             message,
             fix,
             points,
+            rank_points: None,
             pinned: true,
         });
     }
@@ -1309,6 +1576,7 @@ fn score_protocol(input: &CheckInput) -> DimensionScore {
             message,
             fix,
             points,
+            rank_points: None,
             pinned: false,
         });
     }
@@ -1333,6 +1601,7 @@ fn score_protocol(input: &CheckInput) -> DimensionScore {
                   serverInfo.version, and a capabilities object"
                 .to_string(),
             points,
+            rank_points: None,
             pinned: false,
         });
     }
@@ -1355,6 +1624,7 @@ fn score_protocol(input: &CheckInput) -> DimensionScore {
             fix: "rename to 1–64 chars matching ^[A-Za-z0-9_./-]+$ (no spaces or other symbols)"
                 .to_string(),
             points,
+            rank_points: None,
             pinned: false,
         });
     }
@@ -1376,6 +1646,7 @@ fn score_protocol(input: &CheckInput) -> DimensionScore {
                     "return error code {JSONRPC_METHOD_NOT_FOUND} for methods the server does not implement"
                 ),
                 points: PROTOCOL_UNKNOWN_METHOD_WRONG_CODE_PENALTY,
+                rank_points: None,
                 pinned: false,
             });
         }
@@ -1391,6 +1662,7 @@ fn score_protocol(input: &CheckInput) -> DimensionScore {
                     "reject unimplemented methods with JSON-RPC error {JSONRPC_METHOD_NOT_FOUND}"
                 ),
                 points: PROTOCOL_UNKNOWN_METHOD_ACCEPTED_PENALTY,
+                rank_points: None,
                 pinned: false,
             });
         }
@@ -1410,6 +1682,7 @@ fn score_protocol(input: &CheckInput) -> DimensionScore {
             fix: "ensure every request receives a response; check for a hang in the list handler"
                 .to_string(),
             points: PROTOCOL_LIST_TIMEOUT_PENALTY,
+            rank_points: None,
             pinned: false,
         });
     }
@@ -1672,6 +1945,7 @@ fn score_context(
                     commas(*toks)
                 ),
                 points,
+                rank_points: None,
                 pinned: false,
             });
         }
@@ -1738,6 +2012,7 @@ fn score_schema(input: &CheckInput) -> DimensionScore {
                     message: format!("`{}` has no description", tool.name),
                     fix: format!("add a one-line description to `{}`", tool.name),
                     points: 0.0,
+                    rank_points: None,
                     pinned: false,
                 },
             ));
@@ -1763,6 +2038,7 @@ fn score_schema(input: &CheckInput) -> DimensionScore {
                         tool.name
                     ),
                     points: 0.0,
+                    rank_points: None,
                     pinned: false,
                 },
             ));
@@ -1785,6 +2061,7 @@ fn score_schema(input: &CheckInput) -> DimensionScore {
                         tool.name
                     ),
                     points: 0.0,
+                    rank_points: None,
                     pinned: false,
                 },
             ));
@@ -1810,6 +2087,7 @@ fn score_schema(input: &CheckInput) -> DimensionScore {
                 ),
                 fix: "add tool annotations so clients can reason about side effects".to_string(),
                 points: 0.0,
+                rank_points: None,
                 pinned: false,
             },
         ));
@@ -1957,6 +2235,7 @@ fn score_description(input: &CheckInput) -> DimensionScore {
                         tool.name
                     ),
                     points: 0.0,
+                    rank_points: None,
                     pinned: false,
                 },
             ));
@@ -1980,6 +2259,7 @@ fn score_description(input: &CheckInput) -> DimensionScore {
                             dom.label()
                         ),
                         points: 0.0,
+                        rank_points: None,
                         pinned: false,
                     },
                 ));
@@ -2006,6 +2286,7 @@ fn score_description(input: &CheckInput) -> DimensionScore {
                         tool.name
                     ),
                     points: 0.0,
+                    rank_points: None,
                     pinned: false,
                 },
             ));
@@ -2025,6 +2306,7 @@ fn score_description(input: &CheckInput) -> DimensionScore {
                         tool.name
                     ),
                     points: 0.0,
+                    rank_points: None,
                     pinned: false,
                 },
             ));
@@ -2047,6 +2329,7 @@ fn score_description(input: &CheckInput) -> DimensionScore {
                 message: format!("{missing_titles} tool(s) have no human-facing title"),
                 fix: "add a `title` to each tool for nicer client display".to_string(),
                 points: 0.0,
+                rank_points: None,
                 pinned: false,
             },
         ));
@@ -2188,6 +2471,7 @@ fn score_robustness(input: &CheckInput) -> DimensionScore {
                 fix: "reduce list latency — avoid per-request cold starts or slow enumeration"
                     .to_string(),
                 points: 100.0 - sub,
+                rank_points: None,
                 pinned: false,
             });
         }
@@ -2205,6 +2489,7 @@ fn score_robustness(input: &CheckInput) -> DimensionScore {
             message: "the server did not shut down cleanly".to_string(),
             fix: "handle transport close / EOF and exit promptly on shutdown".to_string(),
             points: 100.0 - ROBUST_UNCLEAN_SHUTDOWN_SCORE,
+            rank_points: None,
             pinned: false,
         });
         ROBUST_UNCLEAN_SHUTDOWN_SCORE
@@ -2223,6 +2508,7 @@ fn score_robustness(input: &CheckInput) -> DimensionScore {
                 ),
                 fix: "no action needed — stderr logging is valid; noted for context".to_string(),
                 points: 0.0,
+                rank_points: None,
                 pinned: false,
             });
         }
@@ -2668,10 +2954,14 @@ mod tests {
         let report = evaluate(&input, None);
         let s = report.dimension(Dimension::SchemaHygiene).unwrap();
         // One tool, one parameter: `x` has neither a type nor a description and
-        // the tool declares no annotations, so three of the four classes sit at
-        // a 100% defect rate (the tool itself *is* described).
+        // the tool declares no annotations, so three of the four classes are
+        // fully defective (the tool itself *is* described). Each denominator is
+        // 1, so `rubric-v1.2` shrinkage puts every rate at 1/3 rather than 1 —
+        // one broken tool out of one is not yet evidence of a broken server.
+        let rate = shrunk_rate(1, 1);
         let expected = 100.0
             - SCHEMA_RATE_SCALE
+                * rate
                 * (SCHEMA_PARAM_MISSING_TYPE
                     + SCHEMA_PARAM_MISSING_DESC
                     + SCHEMA_MISSING_ANNOTATIONS);
@@ -2702,8 +2992,10 @@ mod tests {
         // classes are 100% defective. The tool declares no parameters at all, so
         // the two parameter classes have an empty denominator and contribute
         // nothing rather than counting as clean.
-        let expected =
-            100.0 - SCHEMA_RATE_SCALE * (SCHEMA_MISSING_TOOL_DESC + SCHEMA_MISSING_ANNOTATIONS);
+        let expected = 100.0
+            - SCHEMA_RATE_SCALE
+                * shrunk_rate(1, 1)
+                * (SCHEMA_MISSING_TOOL_DESC + SCHEMA_MISSING_ANNOTATIONS);
         assert_eq!(s.score, Some(expected));
     }
 
@@ -2720,10 +3012,10 @@ mod tests {
         };
         let report = evaluate(&input, None);
         let s = report.dimension(Dimension::SchemaHygiene).unwrap();
-        // Only the annotations nit, at a 100% rate over the single tool.
+        // Only the annotations nit, over a single tool (shrunk to a 1/3 rate).
         assert_eq!(
             s.score,
-            Some(100.0 - SCHEMA_RATE_SCALE * SCHEMA_MISSING_ANNOTATIONS)
+            Some(100.0 - SCHEMA_RATE_SCALE * shrunk_rate(1, 1) * SCHEMA_MISSING_ANNOTATIONS)
         );
     }
 
@@ -2741,11 +3033,14 @@ mod tests {
         let d = report.dimension(Dimension::DescriptionQuality).unwrap();
         assert!(d.findings.iter().any(|f| f.message.contains("whitespace")));
         assert!(d.heuristic);
-        // The single tool has a whitespace name and no title, both at a 100%
-        // rate; its description is neither terse nor verbose.
+        // The single tool has a whitespace name and no title, both fully
+        // defective over a denominator of 1 (shrunk to a 1/3 rate); its
+        // description is neither terse nor verbose.
         assert_eq!(
             d.score,
-            Some(100.0 - DQ_RATE_SCALE * (DQ_NAME_HAS_SPACE + DQ_MISSING_TITLE))
+            Some(
+                100.0 - DQ_RATE_SCALE * shrunk_rate(1, 1) * (DQ_NAME_HAS_SPACE + DQ_MISSING_TITLE)
+            )
         );
     }
 
@@ -3045,62 +3340,152 @@ mod tests {
             .unwrap()
     }
 
-    /// Defect **rate**, not defect count, sets the score: the same proportion of
-    /// broken tools scores identically on a 3-, 30- and 90-tool server. This is
-    /// the whole of defect 1 — under `rubric-v1` the 90-tool server saturated at
-    /// 0 while the 3-tool server scored well.
+    /// Defect **rate**, not defect count, sets the score — the whole of
+    /// `rubric-v1.1`'s defect 1, where the 90-tool server saturated at 0 while
+    /// the 3-tool server scored well.
+    ///
+    /// `rubric-v1.2` layers confidence shrinkage on top, so the scores are no
+    /// longer *identical* across sizes — a small surface is deliberately graded
+    /// more leniently, because one defect out of three is weak evidence. What
+    /// must hold is that the residual size-dependence is monotone, small, and
+    /// converging: the same rate scores no worse as the surface grows, and by
+    /// the census median tool count the gap is a point or two, not the 85-point
+    /// chasm `rubric-v1` produced.
     #[test]
-    fn schema_rate_is_independent_of_tool_surface_size() {
-        // Thirds, so every rate is exactly representable at all three sizes.
+    fn schema_rate_is_essentially_independent_of_tool_surface_size() {
+        // Thirds, so every rate is exactly representable at all sizes.
         for numerator in [0usize, 1, 2, 3] {
-            let scores: Vec<f64> = [3usize, 30, 90]
+            let sizes = [3usize, 30, 90, 900];
+            let scores: Vec<f64> = sizes
                 .into_iter()
                 .map(|n| schema_score(n, n * numerator / 3))
                 .collect();
+
+            // Monotone: shrinkage only ever *helps* the smaller surface, so the
+            // score falls (or holds) as n grows toward the raw rate.
             for w in scores.windows(2) {
                 assert!(
-                    (w[0] - w[1]).abs() < 1e-9,
-                    "a {numerator}/3 defect rate must score the same at every surface size, \
+                    w[0] >= w[1] - 1e-9,
+                    "a {numerator}/3 defect rate must not score better at a larger surface, \
                      got {scores:?}"
+                );
+            }
+            // Converging: by 90 tools the shrinkage is nearly spent, and the
+            // 90-vs-900 gap is under a point.
+            assert!(
+                (scores[2] - scores[3]).abs() < 2.0,
+                "shrinkage must be nearly spent by n=90 for rate {numerator}/3, got {scores:?}"
+            );
+            // Quantified: the leniency a small surface enjoys is exactly the
+            // shrinkage formula's own displacement,
+            // `SPAN * raw_rate * k / (n + k)`, and nothing more. Asserting the
+            // identity rather than a hand-picked bound keeps this test honest
+            // if `k` is ever re-tuned.
+            let raw_rate = numerator as f64 / 3.0;
+            for (i, n) in sizes.iter().enumerate() {
+                let limit = 100.0 - RATE_DEDUCTION_SPAN * raw_rate;
+                let expected_leniency = RATE_DEDUCTION_SPAN * raw_rate * RATE_SHRINKAGE_K
+                    / (*n as f64 + RATE_SHRINKAGE_K);
+                assert!(
+                    (scores[i] - limit - expected_leniency).abs() < 1e-9,
+                    "n={n}, rate {numerator}/3: leniency {} != {expected_leniency}",
+                    scores[i] - limit
                 );
             }
         }
     }
 
-    /// The documented formula: `score = 100 - 85 * rate`, floored at 15.
+    /// The documented formula: `score = 100 - 85 * (d + k*prior) / (n + k)`,
+    /// clamped to `15..=100`, with `k = 2` and `prior = 0`.
     #[test]
     fn schema_rate_matches_the_documented_formula() {
-        for n in [3usize, 30, 90] {
+        for n in [1usize, 3, 30, 90, 900] {
             for numerator in [0usize, 1, 2, 3] {
-                let rate = numerator as f64 / 3.0;
-                let expected = (100.0 - RATE_DEDUCTION_SPAN * rate).max(RATE_SCORE_FLOOR);
-                let got = schema_score(n, n * numerator / 3);
+                let defects = n * numerator / 3;
+                // Every class in this fixture shares the same denominator and
+                // the same defect count, so the whole dimension reduces to one
+                // shrunk rate times the full span.
+                let adjusted = defects as f64 / (n as f64 + RATE_SHRINKAGE_K);
+                let expected =
+                    (100.0 - RATE_DEDUCTION_SPAN * adjusted).clamp(RATE_SCORE_FLOOR, 100.0);
+                let got = schema_score(n, defects);
                 assert!(
                     (got - expected).abs() < 1e-9,
-                    "n={n}, rate={numerator}/3: expected {expected}, got {got}"
+                    "n={n}, {numerator}/3 defective: expected {expected}, got {got}"
                 );
             }
-            // Both ends of the scale are pinned exactly.
+            // A clean server is still pinned at exactly 100 — shrinkage toward a
+            // prior of 0 cannot penalise a surface with nothing wrong with it.
             assert!((schema_score(n, 0) - 100.0).abs() < 1e-9);
-            assert!((schema_score(n, n) - RATE_SCORE_FLOOR).abs() < 1e-9);
         }
-        // 50% specifically, at a size where it is representable.
-        assert!((schema_score(30, 15) - 57.5).abs() < 1e-9);
+        // The concrete numbers quoted in the module docs for a 1/3 defect rate.
+        for (n, expected) in [(3usize, 83.0), (90, 72.283), (900, 71.729)] {
+            assert!((schema_score(n, n / 3) - expected).abs() < 0.01, "n={n}");
+        }
+    }
+
+    /// **`rubric-v1.2`, defect 3.** A 1-tool server with its single tool broken
+    /// is at a raw 100% defect rate, exactly like a 40-tool server with all 40
+    /// broken — but one of those is a coin flip and the other is a verdict.
+    /// Shrinkage must separate them by a wide margin, while leaving the
+    /// large-`n` end where `rubric-v1.1` had it.
+    #[test]
+    fn small_surfaces_are_shrunk_toward_the_prior() {
+        let one = schema_score(1, 1);
+        let forty = schema_score(40, 40);
+
+        // Under rubric-v1.1 both of these were exactly RATE_SCORE_FLOOR (15.0).
+        assert!(
+            one > forty + 40.0,
+            "a 1-tool server with 1 defect ({one}) must score materially better than a \
+             40-tool server with 40 defects ({forty})"
+        );
+        assert!(
+            (one - 71.667).abs() < 0.01,
+            "1/1 -> 85*(1/3) deduction: {one}"
+        );
+        assert!(
+            (forty - 19.048).abs() < 0.01,
+            "40/40 -> 85*(40/42): {forty}"
+        );
+
+        // Large-n behaviour is unchanged in substance: a fully-defective large
+        // surface still lands within a few points of the floor, approaching it
+        // from above as the evidence accumulates.
+        assert!(forty < RATE_SCORE_FLOOR + 5.0);
+        assert!(schema_score(900, 900) < RATE_SCORE_FLOOR + 0.5);
+        // And an ordinary rate at an ordinary size barely moves at all.
+        for n in [30usize, 90] {
+            let v11 = 100.0 - RATE_DEDUCTION_SPAN * (1.0 / 3.0);
+            assert!(
+                (schema_score(n, n / 3) - v11).abs() < 2.0,
+                "n={n} must stay within 2 points of the rubric-v1.1 score"
+            );
+        }
     }
 
     /// The floor is 15, not 0 — a server that listed tools has done *something*
     /// right, and 0 stays reserved for genuinely absent structure.
+    ///
+    /// Under `rubric-v1.2` a fully-defective server *approaches* the floor from
+    /// above as its surface grows rather than landing on it exactly: shrinkage
+    /// means confidence that a 100% defect rate is real is itself a function of
+    /// how many items were observed. The floor is a bound, not an equality.
     #[test]
     fn rate_scored_dimensions_floor_at_15_not_zero() {
-        // 90 tools, every one defective in every class: the worst input the
-        // schema dimension can receive.
+        // 90 tools, every one defective in every class: the worst realistic
+        // input the schema dimension can receive.
         let report = evaluate(&input_with_tools(schema_rate_tools(90, 90)), None);
         let schema = report.dimension(Dimension::SchemaHygiene).unwrap();
-        assert_eq!(schema.score, Some(RATE_SCORE_FLOOR));
+        let score = schema.score.unwrap();
         assert!(
-            schema.score.unwrap() > 0.0,
-            "the floor must be strictly above 0"
+            (RATE_SCORE_FLOOR..RATE_SCORE_FLOOR + 3.0).contains(&score),
+            "a fully-defective 90-tool surface must sit just above the floor, got {score}"
         );
+        assert!(score > 0.0, "the floor must be strictly above 0");
+        // The clamp is real: an enormous surface converges onto the floor and
+        // never passes through it.
+        assert!(schema_score(100_000, 100_000) >= RATE_SCORE_FLOOR);
         // A server with no tools at all is `None` (excluded), never 0 — that is
         // the "genuinely absent structure" case the floor reserves 0 for.
         let empty = evaluate(&input_with_tools(Vec::new()), None);
@@ -3125,13 +3510,17 @@ mod tests {
             })
             .collect();
         let worst = evaluate(&input_with_tools(tools), None);
-        assert_eq!(
-            worst
-                .dimension(Dimension::DescriptionQuality)
-                .unwrap()
-                .score,
-            Some(RATE_SCORE_FLOOR),
-            "a 100%-defective description surface lands exactly on the floor"
+        let score = worst
+            .dimension(Dimension::DescriptionQuality)
+            .unwrap()
+            .score
+            .unwrap();
+        // 40 tools, every class at 40/42 after shrinkage: just above the floor,
+        // converging onto it as the surface grows (see
+        // `rate_scored_dimensions_floor_at_15_not_zero`).
+        assert!(
+            (RATE_SCORE_FLOOR..RATE_SCORE_FLOOR + 5.0).contains(&score),
+            "a 100%-defective description surface lands just above the floor, got {score}"
         );
     }
 
@@ -3161,30 +3550,109 @@ mod tests {
     // rubric-v1.1: the context-cost composite cap
     // -----------------------------------------------------------------------
 
-    /// The cap boundaries are exclusive at the top: a sub-score *of* 20 or 10 is
-    /// not capped, one just below it is.
+    /// The ramp hits its documented, census-calibrated anchor points.
     #[test]
-    fn context_cap_boundaries() {
-        // Uncapped composite of 90 so the cap always binds when it applies.
-        let cap_at = |sub: f64| context_cost_cap(Some(sub), 90.0, 40_000, None).map(|c| c.cap);
+    fn context_cap_ramp_matches_the_documented_anchors() {
+        // The two ends are pinned exactly.
+        assert!((context_cap_ceiling(CONTEXT_CAP_FLOOR_SUBSCORE) - 55.0).abs() < 1e-9);
+        assert!((context_cap_ceiling(CONTEXT_CAP_RAMP_INERT_SUBSCORE) - 100.0).abs() < 1e-9);
+        // Below/above the ends it clamps rather than running off the scale.
+        assert!((context_cap_ceiling(0.0) - 55.0).abs() < 1e-9);
+        assert!((context_cap_ceiling(100.0) - 100.0).abs() < 1e-9);
+        // The interior anchors quoted in the module docs, to 0.1.
+        for (sub, expected) in [(13.5, 77.5), (16.72, 86.0), (9.91, 68.0)] {
+            let got = context_cap_ceiling(sub);
+            assert!(
+                (got - expected).abs() < 0.1,
+                "sub {sub} should cap at ~{expected}, got {got}"
+            );
+        }
+    }
 
-        assert_eq!(cap_at(20.0), None, "sub-score 20 is not capped");
-        assert_eq!(
-            cap_at(19.0),
-            Some(CONTEXT_CAP_SEVERE_COMPOSITE),
-            "sub-score 19 caps at 65 (D)"
+    /// **Defect 1 of `rubric-v1.1`.** The cap must have no cliff: the step
+    /// function let a sub-score of 20.1 keep a composite of 76 while 19.9 was
+    /// forced to 65. Nothing like that survives on a continuous ramp.
+    #[test]
+    fn context_cap_has_no_discontinuity() {
+        // The old boundary: an arbitrarily small change in the sub-score may
+        // only produce an arbitrarily small change in the ceiling.
+        for boundary in [10.0f64, 20.0] {
+            let below = context_cap_ceiling(boundary - 0.05);
+            let above = context_cap_ceiling(boundary + 0.05);
+            assert!(
+                (above - below).abs() < 0.5,
+                "ceiling jumps {below} -> {above} across sub-score {boundary}"
+            );
+        }
+        // And globally: sweep the whole reachable range and bound the largest
+        // step the ramp ever takes over a 0.01 sub-score increment.
+        let mut prev = context_cap_ceiling(0.0);
+        let mut worst: f64 = 0.0;
+        for i in 1..=10_000 {
+            let cur = context_cap_ceiling(i as f64 / 100.0);
+            worst = worst.max((cur - prev).abs());
+            prev = cur;
+        }
+        assert!(
+            worst < 0.1,
+            "largest ceiling step over the sweep was {worst}"
         );
-        assert_eq!(
-            cap_at(10.0),
-            Some(CONTEXT_CAP_SEVERE_COMPOSITE),
-            "sub-score 10 takes the severe cap, not the catastrophic one"
-        );
-        assert_eq!(
-            cap_at(9.0),
-            Some(CONTEXT_CAP_CATASTROPHIC_COMPOSITE),
-            "sub-score 9 caps at 55 (F)"
-        );
-        assert_eq!(cap_at(100.0), None, "a light server is never capped");
+    }
+
+    /// **The monotonicity property.** For any two sub-scores, a worse one may
+    /// never produce a *higher* ceiling — so a server can never gain grade by
+    /// getting worse at context cost. Asserted over the full cross-product of a
+    /// dense sweep, plus the composite that is actually reported.
+    #[test]
+    fn context_cap_is_monotone_in_the_sub_score() {
+        let sweep: Vec<f64> = (0..=2_000).map(|i| i as f64 / 20.0).collect();
+
+        // 1. The ceiling itself is non-decreasing in the sub-score.
+        for w in sweep.windows(2) {
+            let (worse, better) = (context_cap_ceiling(w[0]), context_cap_ceiling(w[1]));
+            assert!(
+                worse <= better + 1e-9,
+                "ceiling({}) = {worse} > ceiling({}) = {better}",
+                w[0],
+                w[1]
+            );
+        }
+
+        // 2. The full cross-product, not just neighbours: worse context anywhere
+        //    on the scale never buys a higher ceiling than better context.
+        for (i, &a) in sweep.iter().enumerate().step_by(37) {
+            for &b in sweep.iter().skip(i) {
+                assert!(
+                    context_cap_ceiling(a) <= context_cap_ceiling(b) + 1e-9,
+                    "sub {a} (worse) out-ceilinged sub {b} (better)"
+                );
+            }
+        }
+
+        // 3. The property that actually matters: the *reported composite* is
+        //    non-decreasing in the sub-score. The composite is
+        //    `min(uncapped, ceiling)`, and `uncapped` itself rises with the
+        //    sub-score (context is weighted 25), so the minimum of the two must
+        //    rise too. Modelled here across a range of sibling-dimension quality.
+        for others in [40.0f64, 60.0, 75.0, 90.0, 100.0] {
+            let composite_at = |sub: f64| {
+                let uncapped = (others * 75.0 + sub * 25.0) / 100.0;
+                match context_cost_cap(Some(sub), uncapped, 40_000, None) {
+                    Some(c) => c.cap,
+                    None => uncapped,
+                }
+            };
+            for w in sweep.windows(2) {
+                assert!(
+                    composite_at(w[0]) <= composite_at(w[1]) + 1e-9,
+                    "with siblings at {others}, sub {} scored {} but sub {} scored {}",
+                    w[0],
+                    composite_at(w[0]),
+                    w[1],
+                    composite_at(w[1])
+                );
+            }
+        }
     }
 
     /// A cap that would not lower the score is not reported at all, so a
@@ -3196,6 +3664,13 @@ mod tests {
         assert!(context_cost_cap(Some(5.0), 55.1, 40_000, None).is_some());
         // A dimension that was not applicable cannot cap anything.
         assert_eq!(context_cost_cap(None, 90.0, 40_000, None), None);
+        // At and above the inert anchor (p90) the ramp is 100 and never binds,
+        // however good the rest of the server is.
+        assert_eq!(
+            context_cost_cap(Some(CONTEXT_CAP_RAMP_INERT_SUBSCORE), 100.0, 40_000, None),
+            None
+        );
+        assert_eq!(context_cost_cap(Some(100.0), 100.0, 400, None), None);
     }
 
     /// The cap explanation names the token count and, with a census loaded, how
@@ -3213,16 +3688,27 @@ mod tests {
         };
         let cap = context_cost_cap(Some(5.0), 73.0, 42_288, Some(&census)).unwrap();
         // Median of the four samples is 1,750; 42,288 / 1,750 = 24.2 -> "24×".
+        // The line states the applied cap *and* the sub-score that produced it:
+        // with a continuous ramp, the input is what makes the output checkable.
         assert_eq!(
             cap.explanation,
-            "composite capped at 55 by context cost: 42,288 tokens is 24× the census median"
+            "composite capped at 55 by context cost (context sub-score 5): 42,288 tokens \
+             is 24× the census median"
         );
         assert_eq!(cap.uncapped, 73.0);
         // With no census the multiple is simply omitted, never fabricated.
         let bare = context_cost_cap(Some(5.0), 73.0, 42_288, None).unwrap();
         assert_eq!(
             bare.explanation,
-            "composite capped at 55 by context cost: 42,288 tokens"
+            "composite capped at 55 by context cost (context sub-score 5): 42,288 tokens"
+        );
+        // A mid-ramp cap reports its own interpolated ceiling, not a constant.
+        let mid = context_cost_cap(Some(13.5), 90.0, 20_000, None).unwrap();
+        assert!(
+            mid.explanation
+                .starts_with("composite capped at 78 by context cost (context sub-score 14)"),
+            "{}",
+            mid.explanation
         );
     }
 
@@ -3277,6 +3763,20 @@ mod tests {
              grade F: composite {}",
             report.composite_rounded()
         );
+        // Pinned exactly, so a future re-tune has to look at this shape on
+        // purpose. Under `rubric-v1.1` this landed on 65 only because the
+        // two-step cap forced it there; under `v1.2` its p96 context sub-score
+        // (11.8) yields a ceiling of 73.0, which does *not* bind on an uncapped
+        // 69.5 — the server is graded on its merits rather than pinned to a step.
+        assert!(
+            (report.composite - 69.49).abs() < 0.05,
+            "composite drifted: {}",
+            report.composite
+        );
+        assert!(
+            report.context_cap.is_none(),
+            "the v1.2 ramp must not bind on this shape"
+        );
     }
 
     /// **Defect 2 regression.** The heaviest server measured (89 tools, 42,288
@@ -3305,16 +3805,17 @@ mod tests {
             .score
             .unwrap();
         assert!(
-            heavy_context < CONTEXT_CAP_CATASTROPHIC_SUBSCORE,
-            "the p100 fixture must reproduce a catastrophic context sub-score, got {heavy_context}"
+            heavy_context <= CONTEXT_CAP_FLOOR_SUBSCORE,
+            "the p100 fixture must reproduce the floor context sub-score, got {heavy_context}"
         );
 
-        // The cap fired, and it is explicit — never a silent adjustment.
+        // The cap fired, and it is explicit — never a silent adjustment. At p100
+        // the ramp is at its floor, so this is still exactly 55.
         let cap = heavy
             .context_cap
             .as_ref()
             .expect("a catastrophic context cost must cap the composite");
-        assert_eq!(cap.cap, CONTEXT_CAP_CATASTROPHIC_COMPOSITE);
+        assert_eq!(cap.cap, CONTEXT_CAP_FLOOR_COMPOSITE);
         assert!(
             cap.uncapped > cap.cap,
             "the cap must have actually lowered the score"
@@ -3330,14 +3831,51 @@ mod tests {
             "the cap must also surface as a finding"
         );
 
-        // The inversion is gone: the heaviest server can no longer outrank a
-        // lighter one on the strength of schema polish.
+        // The cap finding is not merely recorded — it *ranks*, so the one fact
+        // most determining this server's grade appears in the list users read
+        // first (`rubric-v1.2`, defect 5). Under `rubric-v1.1` its `points: 0.0`
+        // filtered it straight out of `top_fixes`.
+        let top = heavy.top_fixes(5);
+        assert!(
+            top.iter().any(|f| f.message == cap.explanation),
+            "the cap must rank in Top fixes, got: {:?}",
+            top.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+        // …without double-deducting: it still contributes nothing to the score.
+        let cap_finding = heavy
+            .dimension(Dimension::ContextCost)
+            .unwrap()
+            .findings
+            .iter()
+            .find(|f| f.message == cap.explanation)
+            .unwrap();
+        assert_eq!(
+            cap_finding.points, 0.0,
+            "the cap must not deduct twice from the composite"
+        );
+        assert!(cap_finding.rank_points.unwrap() > 0.0);
+        assert!(cap_finding.pinned, "the cap finding must be pinned");
+
+        // **The ordering assertion.** The inversion is gone: the heaviest server
+        // can no longer outrank a lighter one on the strength of schema polish.
+        // Asserted explicitly on the composite, in both directions.
         assert!(
             heavy.composite < lighter.composite,
-            "heavy ({}) must rank below lighter ({})",
+            "heaviest-server composite ({}) must be strictly below the lighter-server \
+             composite ({})",
             heavy.composite,
             lighter.composite
         );
+        assert!(
+            heavy.composite_rounded() < lighter.composite_rounded(),
+            "the ordering must survive rounding: heavy {} vs lighter {}",
+            heavy.composite_rounded(),
+            lighter.composite_rounded()
+        );
+        // Pinned: heavy is held at the ramp floor (55, p100), lighter is graded
+        // on its merits (69) because the ramp does not bind at p96.
+        assert_eq!(heavy.composite_rounded(), 55);
+        assert_eq!(lighter.composite_rounded(), 69);
     }
 
     // -----------------------------------------------------------------------
@@ -3345,9 +3883,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn rubric_version_is_v1_1() {
-        assert_eq!(RUBRIC_VERSION, "rubric-v1.1");
-        assert_eq!(evaluate(&clean_input(), None).rubric_version, "rubric-v1.1");
+    fn rubric_version_is_v1_2() {
+        assert_eq!(RUBRIC_VERSION, "rubric-v1.2");
+        assert_eq!(evaluate(&clean_input(), None).rubric_version, "rubric-v1.2");
     }
 
     /// The badge colors are the grade bands, so a badge never disagrees with the

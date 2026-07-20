@@ -256,7 +256,7 @@ async fn run_inner(
     } else {
         emit(&render_human(&report));
         // For an HTTP target, surface a compact, informational OAuth-conformance
-        // section. The auth dimension is NOT scored into the rubric-v1.1 composite
+        // section. The auth dimension is NOT scored into the rubric-v1.2 composite
         // in this milestone; it is a heads-up only. The probe reuses the session
         // tap, so its HTTP traffic is captured alongside the rest.
         if let Target::Http { url, headers } = target {
@@ -341,7 +341,7 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
         grade(composite)
     ));
 
-    // The context-cost cap (rubric-v1.1) is never applied silently: if the
+    // The context-cost cap (rubric-v1.2) is never applied silently: if the
     // composite was bounded, say so on its own line, right under the score.
     if let Some(cap) = &report.context_cap {
         s.push_str(&format!(
@@ -488,7 +488,7 @@ fn render_json(report: &CheckReport) -> String {
             "provenance": provenance_json(&report.context_provenance),
         },
         // Present (non-null) only when the composite was actually bounded by
-        // context cost — see `rubric-v1.1`.
+        // context cost — see `rubric-v1.2`.
         "contextCap": report.context_cap.as_ref().map(|c| json!({
             "cap": c.cap,
             "uncapped": round2(c.uncapped),
@@ -778,7 +778,7 @@ mod tests {
     }
 
     /// A census in which the server under test is heavier than every sample, so
-    /// its context sub-score is catastrophic and the `rubric-v1.1` cap binds.
+    /// its context sub-score is catastrophic and the `rubric-v1.2` cap binds.
     fn capping_percentiles() -> Percentiles {
         Percentiles {
             context_cost_tokens: MetricSamples {
