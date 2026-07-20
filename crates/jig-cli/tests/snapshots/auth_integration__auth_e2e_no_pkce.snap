@@ -28,4 +28,4 @@ Authorization Server Metadata
   ✓ PASS            sets `authorization_response_iss_parameter_supported` (RFC 9207 mix-up defence)  [RFC 9207 §3]
 
 Pass --header "Authorization: Bearer <token>" to also test that a real token is accepted (header passthrough).
-jig auth probes discoverable auth surfaces; it performs no login flow (roadmap).
+This run probed the discoverable auth surface only. Add --login to run the OAuth 2.1 authorization-code flow for real and prove a token opens a session.
