@@ -144,7 +144,7 @@ fn footer(report: &AuthReport, header_supplied: bool) -> String {
 // ---------------------------------------------------------------------------
 
 /// Probe `url` and render a compact, informational auth section for `jig check`.
-/// The auth dimension is **not** scored into the rubric-v1 composite in this
+/// The auth dimension is **not** scored into the rubric-v1.1 composite in this
 /// milestone — this is a heads-up section only. Shares `tap` so the probe's HTTP
 /// traffic is captured alongside the rest of the session.
 pub(crate) async fn check_summary(

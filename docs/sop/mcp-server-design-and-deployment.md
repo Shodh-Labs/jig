@@ -838,7 +838,7 @@ more than the claim it fixes.
   above but remain choices. A different, defensible grader could pick differently.
 - Which findings are *scored* vs *observed-only* is also a choice: description quality is
   labelled heuristic; robustness scores only what a single session observed; the tool-set
-  advisor and the auth dimension are **not** folded into the `rubric-v1` composite at all.
+  advisor and the auth dimension are **not** folded into the `rubric-v1.1` composite at all.
 
 **What will age.**
 - The **`2026-07-28` release candidate** is a moving target — final publication was

@@ -256,7 +256,7 @@ async fn run_inner(
     } else {
         emit(&render_human(&report));
         // For an HTTP target, surface a compact, informational OAuth-conformance
-        // section. The auth dimension is NOT scored into the rubric-v1 composite
+        // section. The auth dimension is NOT scored into the rubric-v1.1 composite
         // in this milestone; it is a heads-up only. The probe reuses the session
         // tap, so its HTTP traffic is captured alongside the rest.
         if let Target::Http { url, headers } = target {
@@ -304,7 +304,9 @@ fn glyph(score: Option<f64>) -> char {
     }
 }
 
-/// The letter grade for a composite score.
+/// The letter grade for a composite score: `A >= 90 · B 80–89 · C 70–79 ·
+/// D 60–69 · F < 60` (`rubric-v1.1` — v1 documented `F < 40`, leaving 40–59
+/// unbanded).
 fn grade(score: u32) -> char {
     match score {
         90..=u32::MAX => 'A',
@@ -338,6 +340,16 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
         composite,
         grade(composite)
     ));
+
+    // The context-cost cap (rubric-v1.1) is never applied silently: if the
+    // composite was bounded, say so on its own line, right under the score.
+    if let Some(cap) = &report.context_cap {
+        s.push_str(&format!(
+            "  ⓘ  {} (would have scored {})\n\n",
+            cap.explanation,
+            cap.uncapped.round() as i64
+        ));
+    }
 
     // Per-dimension lines, in rubric order.
     let label_width = report
@@ -475,6 +487,14 @@ fn render_json(report: &CheckReport) -> String {
             "model": "gpt-4o",
             "provenance": provenance_json(&report.context_provenance),
         },
+        // Present (non-null) only when the composite was actually bounded by
+        // context cost — see `rubric-v1.1`.
+        "contextCap": report.context_cap.as_ref().map(|c| json!({
+            "cap": c.cap,
+            "uncapped": round2(c.uncapped),
+            "contextScore": round2(c.context_score),
+            "explanation": c.explanation,
+        })),
         "dimensions": dimensions,
         "advisor": report.advisor.iter().map(finding_json).collect::<Vec<_>>(),
         "topFixes": top_fixes,
@@ -755,6 +775,64 @@ mod tests {
     fn json_report_snapshot() {
         let report = evaluate(&mock_input(), None);
         insta::assert_snapshot!("check_json", render_json(&report));
+    }
+
+    /// A census in which the server under test is heavier than every sample, so
+    /// its context sub-score is catastrophic and the `rubric-v1.1` cap binds.
+    fn capping_percentiles() -> Percentiles {
+        Percentiles {
+            context_cost_tokens: MetricSamples {
+                samples: vec![1.0; 40],
+            },
+            collected: Some("2026-07-19".to_string()),
+            census_date: Some("2026-07-19".to_string()),
+            startup_failure_rate: None,
+            bundled: true,
+        }
+    }
+
+    /// The cap is never silent: the human report states it, names the token
+    /// count, and shows what the server would otherwise have scored.
+    #[test]
+    fn human_report_states_the_context_cap() {
+        let p = capping_percentiles();
+        let report = evaluate(&mock_input(), Some(&p));
+        let cap = report
+            .context_cap
+            .as_ref()
+            .expect("a p100 server must be capped");
+        let text = render_human(&report);
+        assert!(
+            text.contains(&cap.explanation),
+            "the human report must carry the cap explanation verbatim:\n{text}"
+        );
+        assert!(text.contains("composite capped at 55 by context cost"));
+        assert!(text.contains("would have scored"));
+        // The rendered score is the capped one.
+        assert!(text.contains("55 / 100   grade F"));
+    }
+
+    /// The cap is machine-readable too, and absent (null) when it did not fire.
+    #[test]
+    fn json_report_carries_the_context_cap() {
+        let p = capping_percentiles();
+        let capped: Value = serde_json::from_str(&render_json(&evaluate(&mock_input(), Some(&p))))
+            .expect("valid JSON");
+        assert_eq!(capped["composite"], 55);
+        assert_eq!(capped["grade"], "F");
+        assert_eq!(capped["contextCap"]["cap"], 55.0);
+        assert!(capped["contextCap"]["uncapped"].as_f64().unwrap() > 55.0);
+        assert!(capped["contextCap"]["explanation"]
+            .as_str()
+            .unwrap()
+            .contains("composite capped at 55"));
+
+        let clean: Value =
+            serde_json::from_str(&render_json(&evaluate(&mock_input(), None))).expect("valid JSON");
+        assert!(
+            clean["contextCap"].is_null(),
+            "an uncapped server reports contextCap: null"
+        );
     }
 
     #[test]

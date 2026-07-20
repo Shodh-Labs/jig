@@ -130,22 +130,58 @@ Every run also writes this — the self-contained HTML report card, by default:
 
 ![The HTML report card jig writes by default — score hero, dimension bars, token chart](docs/media/report-page.png)
 
-One session, one grade over five weighted dimensions (`rubric-v1`):
+One session, one grade over five weighted dimensions (`rubric-v1.1`):
 
-| Dimension | Weight | What it scores |
-|:----------|-------:|:---------------|
-| Protocol compliance | 25 | handshake, stdout framing/pollution, spec-valid capabilities, timeouts |
-| Context cost | 25 | gpt-4o exact total tokens (percentile vs the ecosystem, or absolute bands) |
-| Schema hygiene | 20 | per tool: descriptions, param types & descriptions, annotations |
-| Description quality | 15 | *heuristic* — description length, name consistency, titles (no LLM) |
-| Robustness | 15 | *observed only* — list latency, clean shutdown |
+| Dimension | Weight | What it scores | How it's scored |
+|:----------|-------:|:---------------|:----------------|
+| Protocol compliance | 25 | handshake, stdout framing/pollution, spec-valid capabilities, timeouts | absolute penalties from 100 |
+| Context cost | 25 | gpt-4o exact total tokens (percentile vs the ecosystem, or absolute bands) | interpolated bands; **caps the composite** when catastrophic |
+| Schema hygiene | 20 | per tool: descriptions, param types & descriptions, annotations | **rate-based**, floor 15 |
+| Description quality | 15 | *heuristic* — description length, name consistency, titles (no LLM) | **rate-based**, floor 15 |
+| Robustness | 15 | *observed only* — list latency, clean shutdown | mean of observed sub-scores |
+
+Grades: **A** ≥ 90 · **B** 80–89 · **C** 70–79 · **D** 60–69 · **F** < 60.
+
+**Rate-based dimensions.** Schema hygiene and description quality grade
+*per-item* defects, so they score the **rate** of defects rather than the raw
+count — otherwise a large tool surface saturates the deduction on its own and
+the dimension measures server size instead of server quality. For each defect
+class *c* with per-item weight `p_c` (the class's relative severity):
+
+```text
+rate_c    = defective items in class c / total items in class c
+deduction = SCALE * Σ_c ( p_c * rate_c )
+score     = clamp(100 - deduction, 15, 100)
+```
+
+Tool-level classes divide by the tool count, parameter-level classes by the total
+parameter count. `SCALE` is set per dimension so a 100%-defective server lands
+exactly on the floor. The floor is **15, not 0**: a server that handshook and
+listed its tools has produced *some* structure, and 0 stays reserved for
+genuinely absent structure. A 90-tool server and a 5-tool server with the same
+*proportion* of defects now score the same.
+
+**The context-cost cap.** Context cost is a cost, not a quality — schema polish
+cannot redeem a server that spends 42k tokens of every conversation. When the
+context sub-score is catastrophic it bounds the composite outright: below 20
+(beyond ~p95 of the census) caps at **65 (D)**, below 10 caps at **55 (F)**. The
+cap is never silent — it emits a finding and a visible line naming the token
+count and its multiple of the census median:
+
+```
+composite capped at 55 by context cost: 42,288 tokens is 25× the census median
+```
+
+> Scores from different rubric versions are **not comparable**. See
+> [`docs/rubric-changelog.md`](docs/rubric-changelog.md) for what changed in
+> `rubric-v1.1` and why.
 
 Every deduction is a typed finding carrying the fix, and the three highest-impact
 fixes are surfaced up top:
 
 ```
 jig check · jig-mock-server v0.1.0
-protocol 2025-06-18 · rubric-v1
+protocol 2025-06-18 · rubric-v1.1
 
   ✓  98 / 100   grade A
 
@@ -280,7 +316,7 @@ Authorization Server Metadata
 stdio target gets a clear error). Every HTTP exchange is captured to the tap
 (`--tap`) and to `--json`, with any token redacted. `jig check --http` also
 surfaces a compact, informational auth line — the auth dimension is **not** scored
-into `rubric-v1` in this milestone.
+into `rubric-v1.1` in this milestone.
 
 > **Scope (honest framing).** `jig auth` probes the *discoverable* auth surface.
 > It does **not** perform the authorization-code + PKCE login flow, exchange a

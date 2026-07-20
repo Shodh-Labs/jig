@@ -14,21 +14,89 @@
 //! constructed fixtures and the whole report is snapshot-lockable. The CLI does
 //! the one live session, fills a [`CheckInput`], and calls [`evaluate`] once.
 //!
-//! # The rubric (`rubric-v1`)
+//! # The rubric (`rubric-v1.1`)
 //!
-//! | Dimension | Weight | What it measures |
+//! | Dimension | Weight | What it measures | Scoring shape |
+//! | --- | --- | --- | --- |
+//! | [Protocol compliance](Dimension::Protocol) | 25 | handshake, stdout framing, spec-valid capabilities, timeouts | absolute penalties |
+//! | [Context cost](Dimension::ContextCost) | 25 | gpt-4o exact total tokens, percentile or absolute bands | interpolated bands |
+//! | [Schema hygiene](Dimension::SchemaHygiene) | 20 | per-tool: descriptions, param types/descriptions, annotations | **rate-based** |
+//! | [Description quality](Dimension::DescriptionQuality) | 15 | *heuristic* — description length, name consistency, titles | **rate-based** |
+//! | [Robustness](Dimension::Robustness) | 15 | *observed only* — list latency, clean shutdown | mean of sub-scores |
+//!
+//! A dimension that is not applicable (e.g. schema hygiene on a server exposing
+//! no tools) is *excluded* from the composite and its weight is dropped, never
+//! assumed to be 100.
+//!
+//! ## Absolute-penalty dimensions
+//!
+//! Protocol compliance starts at 100 and subtracts documented penalties (see the
+//! `PROTOCOL_*` constants), clamped to `0..=100`. These defects are per-server,
+//! not per-item, so their magnitude does not grow with the tool surface.
+//!
+//! ## Rate-based dimensions (`rubric-v1.1`)
+//!
+//! Schema hygiene and description quality grade *per-item* defects. Summing raw
+//! per-item penalties made these dimensions a function of **tool-surface size**
+//! rather than quality: a 90-tool server with a 30% defect rate saturated at 0
+//! while a 5-tool server with the *same* rate scored well. That manufactured F
+//! grades for large-but-average servers, so `rubric-v1.1` scores them on the
+//! **rate** of defects instead.
+//!
+//! For each defect class *c* with per-item penalty `p_c` (the constants below,
+//! which now set the class's *relative* weight rather than an absolute
+//! deduction):
+//!
+//! ```text
+//! rate_c     = defective items in class c / total items in class c   (0.0 ..= 1.0)
+//! deduction  = SCALE * Σ_c ( p_c * rate_c )
+//! score      = clamp(100 - deduction, RATE_SCORE_FLOOR, 100)
+//! ```
+//!
+//! The denominator is class-appropriate: tool-level classes (missing tool
+//! description, missing annotations) divide by the tool count; parameter-level
+//! classes divide by the total parameter count across all tools. `SCALE` is
+//! chosen per dimension so that a **100%-defective server lands exactly on
+//! [`RATE_SCORE_FLOOR`]** — that is, `SCALE = (100 - floor) / Σ_c p_c` over the
+//! worst simultaneously-attainable class set. This keeps the constants readable
+//! as relative severities while pinning both ends of the scale.
+//!
+//! ### The floor
+//!
+//! Rate-scored dimensions clamp at [`RATE_SCORE_FLOOR`] (15), not 0. A server
+//! that completes a handshake and enumerates a tool list has demonstrably done
+//! *something* right, and 0 is reserved for genuinely absent structure — a
+//! dimension scored `None` (not applicable) or a server that never got far
+//! enough to be graded. Reserving 0 keeps the bottom of the scale meaningful.
+//!
+//! **Findings are unaffected by this change.** Every defect still produces
+//! exactly one [`Finding`] carrying its fix text; only each finding's `points`
+//! (its share of the dimension deduction, used to rank "Top fixes") reflects the
+//! new math.
+//!
+//! ## The context-cost cap (`rubric-v1.1`)
+//!
+//! Context cost is a *cost*, not a quality: a server that spends 42k tokens of
+//! every conversation cannot be redeemed by schema polish. Under `rubric-v1` the
+//! heaviest server measured outranked a much lighter one purely on the strength
+//! of its other dimensions, which contradicts the rubric's claim that context
+//! discipline matters. So when the context sub-score is catastrophic it now
+//! **bounds the composite**:
+//!
+//! | Context sub-score | Composite capped at | Grade ceiling |
 //! | --- | --- | --- |
-//! | [Protocol compliance](Dimension::Protocol) | 25 | handshake, stdout framing, spec-valid capabilities, timeouts |
-//! | [Context cost](Dimension::ContextCost) | 25 | gpt-4o exact total tokens, percentile or absolute bands |
-//! | [Schema hygiene](Dimension::SchemaHygiene) | 20 | per-tool: descriptions, param types/descriptions, annotations |
-//! | [Description quality](Dimension::DescriptionQuality) | 15 | *heuristic* — description length, name consistency, titles |
-//! | [Robustness](Dimension::Robustness) | 15 | *observed only* — list latency, clean shutdown |
+//! | `< 10` | 55 (`CONTEXT_CAP_CATASTROPHIC_COMPOSITE`) | F |
+//! | `< 20` | 65 (`CONTEXT_CAP_SEVERE_COMPOSITE`) | D |
 //!
-//! Each dimension starts at 100 and subtracts documented penalties (see the
-//! `PENALTY_*` / `*_PENALTY` constants), clamped to `0..=100`. A dimension that
-//! is not applicable (e.g. schema hygiene on a server exposing no tools) is
-//! *excluded* from the composite and its weight is dropped, never assumed to be
-//! 100.
+//! The cap is never silent: it produces a [`Finding`] and populates
+//! [`Report::context_cap`], which every renderer surfaces as an explicit line
+//! naming the token count and the cap that was applied.
+//!
+//! ## Grade bands
+//!
+//! `A >= 90 · B 80–89 · C 70–79 · D 60–69 · F < 60`. `rubric-v1` documented
+//! `F < 40`, leaving 40–59 in a gap between the bands; `rubric-v1.1` closes it
+//! by defining F as everything below the D band. [`badge_color`] agrees.
 
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -53,7 +121,7 @@ fn context_counter() -> Option<&'static ModelCounter> {
 
 /// The rubric version string, emitted in `--json` so a score is always tied to
 /// the ruleset that produced it.
-pub const RUBRIC_VERSION: &str = "rubric-v1";
+pub const RUBRIC_VERSION: &str = "rubric-v1.1";
 
 /// The model whose exact tokenizer defines the context-cost metric.
 const CONTEXT_METRIC_MODEL: &str = "gpt-4o";
@@ -98,36 +166,88 @@ const TOOL_NAME_MAX_LEN: usize = 64;
 /// How many leading bytes of a polluting line to quote in the fix text.
 const POLLUTION_EXCERPT_BYTES: usize = 24;
 
-/// Schema: deduction per tool missing a description.
-const SCHEMA_MISSING_TOOL_DESC: f64 = 8.0;
-/// Schema: deduction per parameter missing a description.
-const SCHEMA_PARAM_MISSING_DESC: f64 = 3.0;
-/// Schema: deduction per parameter missing a type (and no enum/`$ref`/etc.).
-const SCHEMA_PARAM_MISSING_TYPE: f64 = 5.0;
-/// Schema: deduction per tool declaring no annotations (`readOnlyHint`, …).
-const SCHEMA_MISSING_ANNOTATIONS: f64 = 1.0;
-/// Schema: cap on the total missing-annotations deduction (it is minor).
-const SCHEMA_ANNOTATIONS_CAP: f64 = 10.0;
+// -- Rate-based dimension scoring (rubric-v1.1) ------------------------------
 
-/// Description: deduction for a tool name containing whitespace (uncallable).
+/// The floor a rate-scored dimension (schema hygiene, description quality)
+/// clamps to.
+///
+/// Not 0: a server that completed a handshake and enumerated a tool list has
+/// demonstrably produced *some* structure, and grading that identically to a
+/// server with no structure at all is what manufactured F grades under
+/// `rubric-v1`. 0 stays reserved for genuinely absent structure.
+pub const RATE_SCORE_FLOOR: f64 = 15.0;
+
+/// The full deduction span of a rate-scored dimension: 100% defective in every
+/// class deducts exactly this much, landing the score on [`RATE_SCORE_FLOOR`].
+const RATE_DEDUCTION_SPAN: f64 = 100.0 - RATE_SCORE_FLOOR;
+
+/// Schema: relative weight of a tool missing a description.
+const SCHEMA_MISSING_TOOL_DESC: f64 = 8.0;
+/// Schema: relative weight of a parameter missing a description.
+const SCHEMA_PARAM_MISSING_DESC: f64 = 3.0;
+/// Schema: relative weight of a parameter missing a type (no enum/`$ref`/etc.).
+const SCHEMA_PARAM_MISSING_TYPE: f64 = 5.0;
+/// Schema: relative weight of a tool declaring no annotations (`readOnlyHint`, …).
+const SCHEMA_MISSING_ANNOTATIONS: f64 = 1.0;
+
+/// The sum of schema hygiene's class weights — the deduction a server that is
+/// 100% defective in *every* class would take before scaling. All four classes
+/// are simultaneously attainable, so this is the true worst case.
+const SCHEMA_WEIGHT_SUM: f64 = SCHEMA_MISSING_TOOL_DESC
+    + SCHEMA_PARAM_MISSING_DESC
+    + SCHEMA_PARAM_MISSING_TYPE
+    + SCHEMA_MISSING_ANNOTATIONS;
+
+/// Schema hygiene's rate scale: maps a fully-defective server onto
+/// [`RATE_SCORE_FLOOR`] exactly. (85 / 17 = 5.0.)
+const SCHEMA_RATE_SCALE: f64 = RATE_DEDUCTION_SPAN / SCHEMA_WEIGHT_SUM;
+
+/// Description: relative weight of a tool name containing whitespace
+/// (uncallable).
 const DQ_NAME_HAS_SPACE: f64 = 15.0;
-/// Description: deduction for a tool name breaking the server's dominant
+/// Description: relative weight of a tool name breaking the server's dominant
 /// naming convention (kebab vs snake).
 const DQ_NAME_INCONSISTENT: f64 = 5.0;
-/// Description: deduction for a description that is present but too terse for a
-/// model to select on (see [`DQ_TERSE_TOKENS`]) or missing entirely.
+/// Description: relative weight of a description that is present but too terse
+/// for a model to select on (see [`DQ_TERSE_TOKENS`]) or missing entirely.
 const DQ_DESC_TERSE: f64 = 6.0;
-/// Description: deduction for a description long enough to waste context (see
-/// [`DQ_VERBOSE_TOKENS`]).
+/// Description: relative weight of a description long enough to waste context
+/// (see [`DQ_VERBOSE_TOKENS`]).
 const DQ_DESC_VERBOSE: f64 = 4.0;
-/// Description: deduction per tool missing a human-facing `title`.
+/// Description: relative weight of a tool missing a human-facing `title`.
 const DQ_MISSING_TITLE: f64 = 1.0;
-/// Description: cap on the total missing-title deduction (it is minor).
-const DQ_TITLE_CAP: f64 = 10.0;
+
+/// The sum of description quality's *simultaneously attainable* class weights.
+///
+/// Unlike schema hygiene, some classes here are mutually exclusive per tool: a
+/// name is whitespace-broken **or** convention-inconsistent (the whitespace
+/// check short-circuits), and a description is terse **or** verbose, never both.
+/// The worst attainable server therefore takes the heavier of each exclusive
+/// pair plus the title weight — 15 + 6 + 1 = 22 — and scaling by the naive sum
+/// of all five would make [`RATE_SCORE_FLOOR`] unreachable.
+const DQ_WEIGHT_SUM: f64 = DQ_NAME_HAS_SPACE + DQ_DESC_TERSE + DQ_MISSING_TITLE;
+
+/// Description quality's rate scale: maps a fully-defective server onto
+/// [`RATE_SCORE_FLOOR`] exactly. (85 / 22.)
+const DQ_RATE_SCALE: f64 = RATE_DEDUCTION_SPAN / DQ_WEIGHT_SUM;
 /// A description at or below this token count is "terse".
 const DQ_TERSE_TOKENS: usize = 4;
 /// A description at or above this token count is "verbose".
 const DQ_VERBOSE_TOKENS: usize = 160;
+
+// -- The context-cost composite cap (rubric-v1.1) ----------------------------
+
+/// Context sub-score below which the composite is capped at
+/// [`CONTEXT_CAP_SEVERE_COMPOSITE`]. Roughly the census p95 — a server heavier
+/// than 95% of the ecosystem.
+const CONTEXT_CAP_SEVERE_SUBSCORE: f64 = 20.0;
+/// The composite ceiling for a severely heavy server: the top of the D band.
+const CONTEXT_CAP_SEVERE_COMPOSITE: f64 = 65.0;
+/// Context sub-score below which the composite is capped at
+/// [`CONTEXT_CAP_CATASTROPHIC_COMPOSITE`] — the extreme tail of the census.
+const CONTEXT_CAP_CATASTROPHIC_SUBSCORE: f64 = 10.0;
+/// The composite ceiling for a catastrophically heavy server: inside the F band.
+const CONTEXT_CAP_CATASTROPHIC_COMPOSITE: f64 = 55.0;
 
 /// Robustness: list latency at or below this is unremarkable (full sub-score).
 const ROBUST_LATENCY_FAST_MS: u128 = 1_000;
@@ -471,6 +591,26 @@ pub enum ContextProvenance {
     AbsoluteBands,
 }
 
+/// A composite ceiling imposed by catastrophic context cost (`rubric-v1.1`).
+///
+/// Recorded on the [`Report`] whenever the cap actually bound — i.e. the
+/// weighted composite exceeded the ceiling and was lowered to it — so no
+/// renderer ever shows an adjusted score without saying why. See the
+/// [module docs](self#the-context-cost-cap-rubric-v11).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextCap {
+    /// The ceiling applied (65 or 55).
+    pub cap: f64,
+    /// The weighted composite *before* the cap, so the cost of the cap is
+    /// legible.
+    pub uncapped: f64,
+    /// The context-cost sub-score that triggered the cap.
+    pub context_score: f64,
+    /// A one-line human explanation naming the token count and, when a census
+    /// is loaded, how it compares to the ecosystem median.
+    pub explanation: String,
+}
+
 /// The complete report card produced by [`evaluate`].
 #[derive(Debug, Clone)]
 pub struct Report {
@@ -480,8 +620,13 @@ pub struct Report {
     pub server_version: String,
     /// The negotiated protocol version.
     pub protocol_version: String,
-    /// The weighted composite score, `0..=100` (unrounded).
+    /// The weighted composite score, `0..=100` (unrounded), **after** any
+    /// [context-cost cap](Report::context_cap).
     pub composite: f64,
+    /// The composite ceiling imposed by catastrophic context cost, when one
+    /// bound. `None` on every server whose context cost did not trigger a cap —
+    /// which is the overwhelming majority.
+    pub context_cap: Option<ContextCap>,
     /// Per-dimension scores, in rubric order.
     pub dimensions: Vec<DimensionScore>,
     /// The gpt-4o exact total tokens the context-cost dimension measured.
@@ -823,14 +968,19 @@ impl Percentiles {
 
 /// The shields.io color band for a composite `score` (`0..=100`).
 ///
-/// `>=90` brightgreen, `75..=89` green, `60..=74` yellow, `40..=59` orange,
-/// `<40` red.
+/// The color bands are the **grade** bands, one color per letter, so a badge
+/// never disagrees with the letter next to it: `A >= 90` brightgreen,
+/// `B 80..=89` green, `C 70..=79` yellowgreen, `D 60..=69` yellow, `F < 60` red.
+///
+/// Under `rubric-v1` the color bands were independent of the grade bands (green
+/// ran to 75, orange covered 40–59) which let a `C` and a `B` share a color while
+/// two `F`s differed; `rubric-v1.1` aligns them.
 pub fn badge_color(score: u32) -> &'static str {
     match score {
         90..=u32::MAX => "brightgreen",
-        75..=89 => "green",
-        60..=74 => "yellow",
-        40..=59 => "orange",
+        80..=89 => "green",
+        70..=79 => "yellowgreen",
+        60..=69 => "yellow",
         _ => "red",
     }
 }
@@ -884,13 +1034,47 @@ pub fn evaluate(input: &CheckInput, percentiles: Option<&Percentiles>) -> Report
     let total_tokens = costs.total;
 
     let protocol = score_protocol(input);
-    let (context, provenance) = score_context(total_tokens, &costs, percentiles);
+    let (mut context, provenance) = score_context(total_tokens, &costs, percentiles);
     let schema = score_schema(input);
     let description = score_description(input);
     let robustness = score_robustness(input);
 
+    // The context-cost cap (rubric-v1.1): a catastrophically heavy server cannot
+    // buy its way past the ceiling with schema polish. Computed before the
+    // dimensions are moved so the cap finding can be attached to the very
+    // dimension that caused it.
+    let uncapped = composite_score(&[
+        protocol.clone(),
+        context.clone(),
+        schema.clone(),
+        description.clone(),
+        robustness.clone(),
+    ]);
+    let context_cap =
+        context_cost_cap(context.score, uncapped, total_tokens, percentiles).inspect(|cap| {
+            context.findings.push(Finding {
+                dimension: Dimension::ContextCost,
+                severity: Severity::High,
+                message: cap.explanation.clone(),
+                fix: "cut the tool surface — split the server, or gate rarely-used tools behind \
+                      an opt-in — so context cost no longer bounds the grade"
+                    .to_string(),
+                // The cap is a composite ceiling, not a dimension-local
+                // deduction: the context sub-score already carries the full
+                // penalty for these tokens. Scoring it again here would
+                // double-count, so it ranks in "Top fixes" on the strength of
+                // the sibling context finding instead.
+                points: 0.0,
+                pinned: false,
+            });
+        });
+
+    let composite = match &context_cap {
+        Some(cap) => cap.cap,
+        None => uncapped,
+    };
+
     let dimensions = vec![protocol, context, schema, description, robustness];
-    let composite = composite_score(&dimensions);
 
     // The tool-set advisor reuses the per-tool token costs already computed
     // above — it never re-tokenizes. Its findings are unscored (see
@@ -902,6 +1086,7 @@ pub fn evaluate(input: &CheckInput, percentiles: Option<&Percentiles>) -> Report
         server_version: input.server_version.clone(),
         protocol_version: input.protocol_version.clone(),
         composite,
+        context_cap,
         dimensions,
         total_tokens,
         context_provenance: provenance,
@@ -922,6 +1107,58 @@ fn advisor_costs(costs: &ToolCosts) -> Vec<crate::advisor::ToolTokenCost> {
             tokens: *tokens,
         })
         .collect()
+}
+
+/// The composite ceiling imposed by a catastrophic context sub-score, or `None`
+/// when no cap applies.
+///
+/// Returns `None` when the context dimension is not applicable, when the
+/// sub-score is above [`CONTEXT_CAP_SEVERE_SUBSCORE`], or when the cap would not
+/// actually bind (the composite is already at or below the ceiling) — a cap that
+/// changes nothing is not reported, so a [`ContextCap`] on a [`Report`] always
+/// means the score really was lowered.
+fn context_cost_cap(
+    context_score: Option<f64>,
+    uncapped: f64,
+    total_tokens: usize,
+    percentiles: Option<&Percentiles>,
+) -> Option<ContextCap> {
+    let context_score = context_score?;
+    let cap = if context_score < CONTEXT_CAP_CATASTROPHIC_SUBSCORE {
+        CONTEXT_CAP_CATASTROPHIC_COMPOSITE
+    } else if context_score < CONTEXT_CAP_SEVERE_SUBSCORE {
+        CONTEXT_CAP_SEVERE_COMPOSITE
+    } else {
+        return None;
+    };
+    if uncapped <= cap {
+        return None;
+    }
+    let comparison = census_median(percentiles)
+        .filter(|m| *m > 0.0)
+        .map(|m| format!(" is {:.0}× the census median", total_tokens as f64 / m))
+        .unwrap_or_default();
+    Some(ContextCap {
+        cap,
+        uncapped,
+        context_score,
+        explanation: format!(
+            "composite capped at {:.0} by context cost: {} tokens{comparison}",
+            cap,
+            commas(total_tokens)
+        ),
+    })
+}
+
+/// The median of the census token samples, if a dataset is loaded. Samples are
+/// held ascending by [`Percentiles::from_json`], so this is a direct index.
+fn census_median(percentiles: Option<&Percentiles>) -> Option<f64> {
+    let s = &percentiles?.context_cost_tokens.samples;
+    match s.len() {
+        0 => None,
+        n if n.is_multiple_of(2) => Some((s[n / 2 - 1] + s[n / 2]) / 2.0),
+        n => Some(s[n / 2]),
+    }
 }
 
 /// The weighted composite over the *applicable* dimensions (those with a
@@ -946,6 +1183,87 @@ fn composite_score(dimensions: &[DimensionScore]) -> f64 {
 /// Clamp a running score into `0..=100`.
 fn clamp_score(s: f64) -> f64 {
     s.clamp(0.0, 100.0)
+}
+
+/// Accumulator for a [rate-scored dimension](self#rate-based-dimensions-rubric-v11).
+///
+/// Findings are emitted during the per-tool walk, before the defect *rates* are
+/// known, so each is registered here against its defect class along with how
+/// many defective items it covers. [`apply`](RateTally::apply) then computes the
+/// dimension score from the class rates and back-fills each finding's `points`
+/// with its exact share of the deduction it caused.
+#[derive(Default)]
+struct RateTally {
+    /// `(class index, defective items covered)` per finding, in emission order.
+    entries: Vec<(usize, usize)>,
+}
+
+impl RateTally {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register `finding` as covering `items` defective items of class `class`,
+    /// returning it unchanged so the caller can push it. Findings must be pushed
+    /// in the order they are recorded — [`apply`](RateTally::apply) pairs them
+    /// positionally and asserts the lengths agree.
+    fn record(&mut self, class: usize, items: usize, finding: Finding) -> Finding {
+        self.entries.push((class, items));
+        finding
+    }
+
+    /// Score the dimension from the recorded defect rates and back-fill each
+    /// finding's `points`.
+    ///
+    /// `classes` gives, per class, its `(index, relative weight, denominator)`.
+    /// A class whose denominator is 0 has no items to be defective and
+    /// contributes nothing. The returned score is clamped to
+    /// `RATE_SCORE_FLOOR..=100`.
+    fn apply(&self, classes: &[(usize, f64, usize)], scale: f64, findings: &mut [Finding]) -> f64 {
+        debug_assert_eq!(
+            self.entries.len(),
+            findings.len(),
+            "every finding of a rate-scored dimension must be registered with RateTally::record"
+        );
+
+        // Defective item count per class, indexed by class index.
+        let n_classes = classes.len();
+        let mut defective = vec![0usize; n_classes];
+        for (class, items) in &self.entries {
+            if let Some(slot) = defective.get_mut(*class) {
+                *slot += items;
+            }
+        }
+
+        // Per-class deduction: relative weight × defect rate × scale.
+        let mut deduction_per_class = vec![0.0f64; n_classes];
+        let mut total = 0.0;
+        for (class, weight, denominator) in classes {
+            if *denominator == 0 || defective[*class] == 0 {
+                continue;
+            }
+            // A class can never exceed a 100% defect rate, but clamp defensively
+            // so a miscounted denominator cannot inflate the deduction.
+            let rate = (defective[*class] as f64 / *denominator as f64).min(1.0);
+            let d = scale * weight * rate;
+            deduction_per_class[*class] = d;
+            total += d;
+        }
+
+        // Back-fill points: each finding takes its pro-rata share of the class
+        // deduction it contributed to, so "Top fixes" ranks by true composite
+        // impact rather than by a raw per-item penalty the score never applied.
+        for (finding, (class, items)) in findings.iter_mut().zip(&self.entries) {
+            let class_defective = defective.get(*class).copied().unwrap_or(0);
+            finding.points = if class_defective == 0 {
+                0.0
+            } else {
+                deduction_per_class[*class] * *items as f64 / class_defective as f64
+            };
+        }
+
+        (100.0 - total).clamp(RATE_SCORE_FLOOR, 100.0)
+    }
 }
 
 // ---- Dimension 1: protocol compliance -------------------------------------
@@ -1396,96 +1714,123 @@ fn score_schema(input: &CheckInput) -> DimensionScore {
         return not_applicable(Dimension::SchemaHygiene, "no tools to inspect");
     }
 
-    let mut score = 100.0;
+    let n_tools = input.tools.len();
+    // Total top-level parameters across every tool — the denominator for the two
+    // parameter-level defect classes.
+    let n_params: usize = input
+        .tools
+        .iter()
+        .map(|t| param_count(&t.input_schema))
+        .sum();
+
+    let mut rates = RateTally::new();
     let mut findings = Vec::new();
-    let mut annotation_deduction = 0.0;
 
     for tool in &input.tools {
         // Missing tool description.
         if tool.description.as_deref().unwrap_or("").trim().is_empty() {
-            score -= SCHEMA_MISSING_TOOL_DESC;
-            findings.push(Finding {
-                dimension: Dimension::SchemaHygiene,
-                severity: Severity::Medium,
-                message: format!("`{}` has no description", tool.name),
-                fix: format!("add a one-line description to `{}`", tool.name),
-                points: SCHEMA_MISSING_TOOL_DESC,
-                pinned: false,
-            });
+            findings.push(rates.record(
+                SCHEMA_CLASS_TOOL_DESC,
+                1,
+                Finding {
+                    dimension: Dimension::SchemaHygiene,
+                    severity: Severity::Medium,
+                    message: format!("`{}` has no description", tool.name),
+                    fix: format!("add a one-line description to `{}`", tool.name),
+                    points: 0.0,
+                    pinned: false,
+                },
+            ));
         }
 
         // Per-parameter checks over the top-level properties (deterministic).
         let (no_desc, no_type) = schema_param_gaps(&tool.input_schema);
         if !no_desc.is_empty() {
-            let points = SCHEMA_PARAM_MISSING_DESC * no_desc.len() as f64;
-            score -= points;
-            findings.push(Finding {
-                dimension: Dimension::SchemaHygiene,
-                severity: Severity::Medium,
-                message: format!(
-                    "`{}`: parameter{} {} missing a description",
-                    tool.name,
-                    plural(no_desc.len()),
-                    quote_join(&no_desc)
-                ),
-                fix: format!(
-                    "describe each parameter of `{}` so the model can fill it correctly",
-                    tool.name
-                ),
-                points,
-                pinned: false,
-            });
+            findings.push(rates.record(
+                SCHEMA_CLASS_PARAM_DESC,
+                no_desc.len(),
+                Finding {
+                    dimension: Dimension::SchemaHygiene,
+                    severity: Severity::Medium,
+                    message: format!(
+                        "`{}`: parameter{} {} missing a description",
+                        tool.name,
+                        plural(no_desc.len()),
+                        quote_join(&no_desc)
+                    ),
+                    fix: format!(
+                        "describe each parameter of `{}` so the model can fill it correctly",
+                        tool.name
+                    ),
+                    points: 0.0,
+                    pinned: false,
+                },
+            ));
         }
         if !no_type.is_empty() {
-            let points = SCHEMA_PARAM_MISSING_TYPE * no_type.len() as f64;
-            score -= points;
-            findings.push(Finding {
+            findings.push(rates.record(
+                SCHEMA_CLASS_PARAM_TYPE,
+                no_type.len(),
+                Finding {
+                    dimension: Dimension::SchemaHygiene,
+                    severity: Severity::High,
+                    message: format!(
+                        "`{}`: parameter{} {} missing a type",
+                        tool.name,
+                        plural(no_type.len()),
+                        quote_join(&no_type)
+                    ),
+                    fix: format!(
+                        "give every parameter of `{}` a JSON Schema `type` (or enum/$ref)",
+                        tool.name
+                    ),
+                    points: 0.0,
+                    pinned: false,
+                },
+            ));
+        }
+    }
+
+    // Missing annotations, as a single rolled-up finding over all tools.
+    let missing_annotations = input
+        .tools
+        .iter()
+        .filter(|t| !has_annotations(&t.input_schema, t))
+        .count();
+    if missing_annotations > 0 {
+        findings.push(rates.record(
+            SCHEMA_CLASS_ANNOTATIONS,
+            missing_annotations,
+            Finding {
                 dimension: Dimension::SchemaHygiene,
-                severity: Severity::High,
+                severity: Severity::Low,
                 message: format!(
-                    "`{}`: parameter{} {} missing a type",
-                    tool.name,
-                    plural(no_type.len()),
-                    quote_join(&no_type)
+                    "{missing_annotations} tool(s) declare no annotations \
+                     (readOnlyHint, destructiveHint, …)"
                 ),
-                fix: format!(
-                    "give every parameter of `{}` a JSON Schema `type` (or enum/$ref)",
-                    tool.name
-                ),
-                points,
+                fix: "add tool annotations so clients can reason about side effects".to_string(),
+                points: 0.0,
                 pinned: false,
-            });
-        }
-
-        // Missing annotations (minor, capped).
-        if !has_annotations(&tool.input_schema, tool) {
-            annotation_deduction += SCHEMA_MISSING_ANNOTATIONS;
-        }
+            },
+        ));
     }
 
-    // Apply the capped annotation deduction as a single rolled-up finding.
-    let annotation_deduction = annotation_deduction.min(SCHEMA_ANNOTATIONS_CAP);
-    if annotation_deduction > 0.0 {
-        let missing = input
-            .tools
-            .iter()
-            .filter(|t| !has_annotations(&t.input_schema, t))
-            .count();
-        score -= annotation_deduction;
-        findings.push(Finding {
-            dimension: Dimension::SchemaHygiene,
-            severity: Severity::Low,
-            message: format!(
-                "{missing} tool(s) declare no annotations (readOnlyHint, destructiveHint, …)"
-            ),
-            fix: "add tool annotations so clients can reason about side effects".to_string(),
-            points: annotation_deduction,
-            pinned: false,
-        });
-    }
+    // Rate-based deduction (rubric-v1.1): each class contributes its relative
+    // weight scaled by the fraction of items in that class that are defective,
+    // so a large tool surface can no longer saturate the dimension on its own.
+    let classes = [
+        (SCHEMA_CLASS_TOOL_DESC, SCHEMA_MISSING_TOOL_DESC, n_tools),
+        (SCHEMA_CLASS_PARAM_DESC, SCHEMA_PARAM_MISSING_DESC, n_params),
+        (SCHEMA_CLASS_PARAM_TYPE, SCHEMA_PARAM_MISSING_TYPE, n_params),
+        (
+            SCHEMA_CLASS_ANNOTATIONS,
+            SCHEMA_MISSING_ANNOTATIONS,
+            n_tools,
+        ),
+    ];
+    let score = rates.apply(&classes, SCHEMA_RATE_SCALE, &mut findings);
 
-    let score = clamp_score(score);
-    let summary = schema_summary(&findings, input.tools.len());
+    let summary = schema_summary(&findings, n_tools);
     DimensionScore {
         dimension: Dimension::SchemaHygiene,
         score: Some(score),
@@ -1494,6 +1839,22 @@ fn score_schema(input: &CheckInput) -> DimensionScore {
         heuristic: false,
         findings,
     }
+}
+
+/// Schema hygiene defect classes (indices into the tally).
+const SCHEMA_CLASS_TOOL_DESC: usize = 0;
+const SCHEMA_CLASS_PARAM_DESC: usize = 1;
+const SCHEMA_CLASS_PARAM_TYPE: usize = 2;
+const SCHEMA_CLASS_ANNOTATIONS: usize = 3;
+
+/// The number of top-level `properties` a tool's input schema declares — the
+/// per-tool contribution to the parameter-class denominator.
+fn param_count(schema: &Value) -> usize {
+    schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(serde_json::Map::len)
+        .unwrap_or(0)
 }
 
 /// The names of top-level properties missing a `description` and missing a
@@ -1573,48 +1934,55 @@ fn score_description(input: &CheckInput) -> DimensionScore {
         return d;
     }
 
-    let mut score = 100.0;
+    let n_tools = input.tools.len();
+    let mut rates = RateTally::new();
     let mut findings = Vec::new();
 
     // ---- Naming: spaces (uncallable) and convention consistency ----
     let convention = dominant_convention(&input.tools);
     for tool in &input.tools {
         if tool.name.chars().any(char::is_whitespace) {
-            score -= DQ_NAME_HAS_SPACE;
-            findings.push(Finding {
-                dimension: Dimension::DescriptionQuality,
-                severity: Severity::High,
-                message: format!(
-                    "`{}` contains whitespace — models cannot call it",
-                    tool.name
-                ),
-                fix: format!(
-                    "rename `{}` to a whitespace-free identifier (kebab or snake case)",
-                    tool.name
-                ),
-                points: DQ_NAME_HAS_SPACE,
-                pinned: false,
-            });
-        } else if let Some(dom) = convention {
-            if name_convention(&tool.name) == Some(dom.other()) {
-                score -= DQ_NAME_INCONSISTENT;
-                findings.push(Finding {
+            findings.push(rates.record(
+                DQ_CLASS_NAME_SPACE,
+                1,
+                Finding {
                     dimension: Dimension::DescriptionQuality,
-                    severity: Severity::Low,
+                    severity: Severity::High,
                     message: format!(
-                        "`{}` uses {} while the server is mostly {}",
-                        tool.name,
-                        dom.other().label(),
-                        dom.label()
+                        "`{}` contains whitespace — models cannot call it",
+                        tool.name
                     ),
                     fix: format!(
-                        "rename `{}` to match the server's {} convention",
-                        tool.name,
-                        dom.label()
+                        "rename `{}` to a whitespace-free identifier (kebab or snake case)",
+                        tool.name
                     ),
-                    points: DQ_NAME_INCONSISTENT,
+                    points: 0.0,
                     pinned: false,
-                });
+                },
+            ));
+        } else if let Some(dom) = convention {
+            if name_convention(&tool.name) == Some(dom.other()) {
+                findings.push(rates.record(
+                    DQ_CLASS_NAME_INCONSISTENT,
+                    1,
+                    Finding {
+                        dimension: Dimension::DescriptionQuality,
+                        severity: Severity::Low,
+                        message: format!(
+                            "`{}` uses {} while the server is mostly {}",
+                            tool.name,
+                            dom.other().label(),
+                            dom.label()
+                        ),
+                        fix: format!(
+                            "rename `{}` to match the server's {} convention",
+                            tool.name,
+                            dom.label()
+                        ),
+                        points: 0.0,
+                        pinned: false,
+                    },
+                ));
             }
         }
     }
@@ -1623,60 +1991,78 @@ fn score_description(input: &CheckInput) -> DimensionScore {
     for tool in &input.tools {
         let toks = description_tokens(tool);
         if toks <= DQ_TERSE_TOKENS {
-            score -= DQ_DESC_TERSE;
-            findings.push(Finding {
-                dimension: Dimension::DescriptionQuality,
-                severity: Severity::Medium,
-                message: format!(
-                    "`{}` description is very terse ({toks} tokens) — models struggle to select it",
-                    tool.name
-                ),
-                fix: format!(
-                    "expand `{}`'s description to say what it does and when to use it",
-                    tool.name
-                ),
-                points: DQ_DESC_TERSE,
-                pinned: false,
-            });
+            findings.push(rates.record(
+                DQ_CLASS_DESC_TERSE,
+                1,
+                Finding {
+                    dimension: Dimension::DescriptionQuality,
+                    severity: Severity::Medium,
+                    message: format!(
+                        "`{}` description is very terse ({toks} tokens) — models struggle to select it",
+                        tool.name
+                    ),
+                    fix: format!(
+                        "expand `{}`'s description to say what it does and when to use it",
+                        tool.name
+                    ),
+                    points: 0.0,
+                    pinned: false,
+                },
+            ));
         } else if toks >= DQ_VERBOSE_TOKENS {
-            score -= DQ_DESC_VERBOSE;
-            findings.push(Finding {
-                dimension: Dimension::DescriptionQuality,
-                severity: Severity::Low,
-                message: format!(
-                    "`{}` description is very long ({toks} tokens) — context waste",
-                    tool.name
-                ),
-                fix: format!(
-                    "tighten `{}`'s description; move detail into params",
-                    tool.name
-                ),
-                points: DQ_DESC_VERBOSE,
-                pinned: false,
-            });
+            findings.push(rates.record(
+                DQ_CLASS_DESC_VERBOSE,
+                1,
+                Finding {
+                    dimension: Dimension::DescriptionQuality,
+                    severity: Severity::Low,
+                    message: format!(
+                        "`{}` description is very long ({toks} tokens) — context waste",
+                        tool.name
+                    ),
+                    fix: format!(
+                        "tighten `{}`'s description; move detail into params",
+                        tool.name
+                    ),
+                    points: 0.0,
+                    pinned: false,
+                },
+            ));
         }
     }
 
-    // ---- Titles (minor, capped) ----
+    // ---- Titles (minor) ----
     let missing_titles = input
         .tools
         .iter()
         .filter(|t| t.title.as_deref().unwrap_or("").trim().is_empty())
         .count();
     if missing_titles > 0 {
-        let points = (DQ_MISSING_TITLE * missing_titles as f64).min(DQ_TITLE_CAP);
-        score -= points;
-        findings.push(Finding {
-            dimension: Dimension::DescriptionQuality,
-            severity: Severity::Low,
-            message: format!("{missing_titles} tool(s) have no human-facing title"),
-            fix: "add a `title` to each tool for nicer client display".to_string(),
-            points,
-            pinned: false,
-        });
+        findings.push(rates.record(
+            DQ_CLASS_TITLE,
+            missing_titles,
+            Finding {
+                dimension: Dimension::DescriptionQuality,
+                severity: Severity::Low,
+                message: format!("{missing_titles} tool(s) have no human-facing title"),
+                fix: "add a `title` to each tool for nicer client display".to_string(),
+                points: 0.0,
+                pinned: false,
+            },
+        ));
     }
 
-    let score = clamp_score(score);
+    // Rate-based deduction (rubric-v1.1) — every class here is per-tool, so the
+    // denominator is the tool count throughout.
+    let classes = [
+        (DQ_CLASS_NAME_SPACE, DQ_NAME_HAS_SPACE, n_tools),
+        (DQ_CLASS_NAME_INCONSISTENT, DQ_NAME_INCONSISTENT, n_tools),
+        (DQ_CLASS_DESC_TERSE, DQ_DESC_TERSE, n_tools),
+        (DQ_CLASS_DESC_VERBOSE, DQ_DESC_VERBOSE, n_tools),
+        (DQ_CLASS_TITLE, DQ_MISSING_TITLE, n_tools),
+    ];
+    let score = rates.apply(&classes, DQ_RATE_SCALE, &mut findings);
+
     let summary = if findings.is_empty() {
         "heuristic · consistent names, well-sized descriptions".to_string()
     } else {
@@ -1696,6 +2082,13 @@ fn score_description(input: &CheckInput) -> DimensionScore {
         findings,
     }
 }
+
+/// Description quality defect classes (indices into the tally).
+const DQ_CLASS_NAME_SPACE: usize = 0;
+const DQ_CLASS_NAME_INCONSISTENT: usize = 1;
+const DQ_CLASS_DESC_TERSE: usize = 2;
+const DQ_CLASS_DESC_VERBOSE: usize = 3;
+const DQ_CLASS_TITLE: usize = 4;
 
 /// The token length of a tool's description under the context metric model,
 /// using the shared counter. Falls back to a whitespace word count only if the
@@ -2274,8 +2667,15 @@ mod tests {
         };
         let report = evaluate(&input, None);
         let s = report.dimension(Dimension::SchemaHygiene).unwrap();
-        // x has neither type (-5) nor description (-3); plus annotations (-1).
-        assert_eq!(s.score, Some(100.0 - 5.0 - 3.0 - 1.0));
+        // One tool, one parameter: `x` has neither a type nor a description and
+        // the tool declares no annotations, so three of the four classes sit at
+        // a 100% defect rate (the tool itself *is* described).
+        let expected = 100.0
+            - SCHEMA_RATE_SCALE
+                * (SCHEMA_PARAM_MISSING_TYPE
+                    + SCHEMA_PARAM_MISSING_DESC
+                    + SCHEMA_MISSING_ANNOTATIONS);
+        assert_eq!(s.score, Some(expected));
         assert!(s
             .findings
             .iter()
@@ -2298,8 +2698,13 @@ mod tests {
         };
         let report = evaluate(&input, None);
         let s = report.dimension(Dimension::SchemaHygiene).unwrap();
-        // -8 (no desc) -1 (annotations).
-        assert_eq!(s.score, Some(91.0));
+        // The one tool has no description and no annotations — both those
+        // classes are 100% defective. The tool declares no parameters at all, so
+        // the two parameter classes have an empty denominator and contribute
+        // nothing rather than counting as clean.
+        let expected =
+            100.0 - SCHEMA_RATE_SCALE * (SCHEMA_MISSING_TOOL_DESC + SCHEMA_MISSING_ANNOTATIONS);
+        assert_eq!(s.score, Some(expected));
     }
 
     #[test]
@@ -2315,8 +2720,11 @@ mod tests {
         };
         let report = evaluate(&input, None);
         let s = report.dimension(Dimension::SchemaHygiene).unwrap();
-        // Only the annotations nit (-1).
-        assert_eq!(s.score, Some(99.0));
+        // Only the annotations nit, at a 100% rate over the single tool.
+        assert_eq!(
+            s.score,
+            Some(100.0 - SCHEMA_RATE_SCALE * SCHEMA_MISSING_ANNOTATIONS)
+        );
     }
 
     #[test]
@@ -2333,8 +2741,12 @@ mod tests {
         let d = report.dimension(Dimension::DescriptionQuality).unwrap();
         assert!(d.findings.iter().any(|f| f.message.contains("whitespace")));
         assert!(d.heuristic);
-        // -15 name space, -1 missing title (no verbose/terse).
-        assert_eq!(d.score, Some(84.0));
+        // The single tool has a whitespace name and no title, both at a 100%
+        // rate; its description is neither terse nor verbose.
+        assert_eq!(
+            d.score,
+            Some(100.0 - DQ_RATE_SCALE * (DQ_NAME_HAS_SPACE + DQ_MISSING_TITLE))
+        );
     }
 
     #[test]
@@ -2515,20 +2927,6 @@ mod tests {
     }
 
     #[test]
-    fn badge_color_bands() {
-        assert_eq!(badge_color(95), "brightgreen");
-        assert_eq!(badge_color(90), "brightgreen");
-        assert_eq!(badge_color(89), "green");
-        assert_eq!(badge_color(75), "green");
-        assert_eq!(badge_color(74), "yellow");
-        assert_eq!(badge_color(60), "yellow");
-        assert_eq!(badge_color(59), "orange");
-        assert_eq!(badge_color(40), "orange");
-        assert_eq!(badge_color(39), "red");
-        assert_eq!(badge_color(0), "red");
-    }
-
-    #[test]
     fn empty_server_excludes_schema_and_description() {
         let input = CheckInput {
             tools: vec![],
@@ -2589,5 +2987,385 @@ mod tests {
         assert_eq!(commas(0), "0");
         assert_eq!(commas(1234), "1,234");
         assert_eq!(commas(1234567), "1,234,567");
+    }
+
+    // -----------------------------------------------------------------------
+    // rubric-v1.1: rate-based dimension scoring
+    // -----------------------------------------------------------------------
+
+    /// `n` tools of which the first `defective` are defective in **every**
+    /// schema-hygiene class at once (no tool description, one parameter with
+    /// neither a description nor a type, no annotations) and the rest are clean
+    /// in every class.
+    ///
+    /// Because each tool carries exactly one parameter, the tool-level and
+    /// parameter-level denominators are both `n`, so every class has the same
+    /// defect rate `defective / n` — which makes the resulting score exactly
+    /// `100 - 85 * rate` and independent of `n`.
+    fn schema_rate_tools(n: usize, defective: usize) -> Vec<Tool> {
+        (0..n)
+            .map(|i| {
+                if i < defective {
+                    tool(
+                        &format!("tool_{i}"),
+                        None,
+                        json!({ "type": "object", "properties": { "arg": {} } }),
+                    )
+                } else {
+                    tool(
+                        &format!("tool_{i}"),
+                        Some("Does a specific, well-described thing for the caller."),
+                        json!({
+                            "type": "object",
+                            "annotations": { "readOnlyHint": true },
+                            "properties": {
+                                "arg": { "type": "string", "description": "The argument." }
+                            }
+                        }),
+                    )
+                }
+            })
+            .collect()
+    }
+
+    /// A [`CheckInput`] over `tools` with everything else clean, so a test can
+    /// isolate one dimension.
+    fn input_with_tools(tools: Vec<Tool>) -> CheckInput {
+        CheckInput {
+            tools,
+            ..clean_input()
+        }
+    }
+
+    fn schema_score(n: usize, defective: usize) -> f64 {
+        evaluate(&input_with_tools(schema_rate_tools(n, defective)), None)
+            .dimension(Dimension::SchemaHygiene)
+            .unwrap()
+            .score
+            .unwrap()
+    }
+
+    /// Defect **rate**, not defect count, sets the score: the same proportion of
+    /// broken tools scores identically on a 3-, 30- and 90-tool server. This is
+    /// the whole of defect 1 — under `rubric-v1` the 90-tool server saturated at
+    /// 0 while the 3-tool server scored well.
+    #[test]
+    fn schema_rate_is_independent_of_tool_surface_size() {
+        // Thirds, so every rate is exactly representable at all three sizes.
+        for numerator in [0usize, 1, 2, 3] {
+            let scores: Vec<f64> = [3usize, 30, 90]
+                .into_iter()
+                .map(|n| schema_score(n, n * numerator / 3))
+                .collect();
+            for w in scores.windows(2) {
+                assert!(
+                    (w[0] - w[1]).abs() < 1e-9,
+                    "a {numerator}/3 defect rate must score the same at every surface size, \
+                     got {scores:?}"
+                );
+            }
+        }
+    }
+
+    /// The documented formula: `score = 100 - 85 * rate`, floored at 15.
+    #[test]
+    fn schema_rate_matches_the_documented_formula() {
+        for n in [3usize, 30, 90] {
+            for numerator in [0usize, 1, 2, 3] {
+                let rate = numerator as f64 / 3.0;
+                let expected = (100.0 - RATE_DEDUCTION_SPAN * rate).max(RATE_SCORE_FLOOR);
+                let got = schema_score(n, n * numerator / 3);
+                assert!(
+                    (got - expected).abs() < 1e-9,
+                    "n={n}, rate={numerator}/3: expected {expected}, got {got}"
+                );
+            }
+            // Both ends of the scale are pinned exactly.
+            assert!((schema_score(n, 0) - 100.0).abs() < 1e-9);
+            assert!((schema_score(n, n) - RATE_SCORE_FLOOR).abs() < 1e-9);
+        }
+        // 50% specifically, at a size where it is representable.
+        assert!((schema_score(30, 15) - 57.5).abs() < 1e-9);
+    }
+
+    /// The floor is 15, not 0 — a server that listed tools has done *something*
+    /// right, and 0 stays reserved for genuinely absent structure.
+    #[test]
+    fn rate_scored_dimensions_floor_at_15_not_zero() {
+        // 90 tools, every one defective in every class: the worst input the
+        // schema dimension can receive.
+        let report = evaluate(&input_with_tools(schema_rate_tools(90, 90)), None);
+        let schema = report.dimension(Dimension::SchemaHygiene).unwrap();
+        assert_eq!(schema.score, Some(RATE_SCORE_FLOOR));
+        assert!(
+            schema.score.unwrap() > 0.0,
+            "the floor must be strictly above 0"
+        );
+        // A server with no tools at all is `None` (excluded), never 0 — that is
+        // the "genuinely absent structure" case the floor reserves 0 for.
+        let empty = evaluate(&input_with_tools(Vec::new()), None);
+        assert_eq!(
+            empty.dimension(Dimension::SchemaHygiene).unwrap().score,
+            None
+        );
+    }
+
+    /// Description quality has the same rate shape and the same floor.
+    #[test]
+    fn description_quality_is_rate_based_and_floors_at_15() {
+        // Every tool maximally defective: whitespace name + terse description +
+        // no title. That is the worst simultaneously-attainable class set.
+        let tools: Vec<Tool> = (0..40)
+            .map(|i| {
+                tool(
+                    &format!("bad tool {i}"),
+                    Some("do"),
+                    json!({ "type": "object", "properties": {} }),
+                )
+            })
+            .collect();
+        let worst = evaluate(&input_with_tools(tools), None);
+        assert_eq!(
+            worst
+                .dimension(Dimension::DescriptionQuality)
+                .unwrap()
+                .score,
+            Some(RATE_SCORE_FLOOR),
+            "a 100%-defective description surface lands exactly on the floor"
+        );
+    }
+
+    /// Findings are unchanged by the rate rework: still one per defect, still
+    /// carrying fix text. Only the arithmetic behind `points` moved.
+    #[test]
+    fn rate_scoring_preserves_one_finding_per_defect() {
+        let report = evaluate(&input_with_tools(schema_rate_tools(30, 10)), None);
+        let schema = report.dimension(Dimension::SchemaHygiene).unwrap();
+        // 10 missing tool descriptions + 10 param-description findings + 10
+        // param-type findings + 1 rolled-up annotations finding.
+        assert_eq!(schema.findings.len(), 31);
+        assert!(
+            schema.findings.iter().all(|f| !f.fix.trim().is_empty()),
+            "every finding must still carry fix text"
+        );
+        // Each finding's points is its share of the deduction it caused, so the
+        // parts sum to the whole.
+        let summed: f64 = schema.findings.iter().map(|f| f.points).sum();
+        assert!(
+            (summed - (100.0 - schema.score.unwrap())).abs() < 1e-9,
+            "finding points must sum to the dimension deduction"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // rubric-v1.1: the context-cost composite cap
+    // -----------------------------------------------------------------------
+
+    /// The cap boundaries are exclusive at the top: a sub-score *of* 20 or 10 is
+    /// not capped, one just below it is.
+    #[test]
+    fn context_cap_boundaries() {
+        // Uncapped composite of 90 so the cap always binds when it applies.
+        let cap_at = |sub: f64| context_cost_cap(Some(sub), 90.0, 40_000, None).map(|c| c.cap);
+
+        assert_eq!(cap_at(20.0), None, "sub-score 20 is not capped");
+        assert_eq!(
+            cap_at(19.0),
+            Some(CONTEXT_CAP_SEVERE_COMPOSITE),
+            "sub-score 19 caps at 65 (D)"
+        );
+        assert_eq!(
+            cap_at(10.0),
+            Some(CONTEXT_CAP_SEVERE_COMPOSITE),
+            "sub-score 10 takes the severe cap, not the catastrophic one"
+        );
+        assert_eq!(
+            cap_at(9.0),
+            Some(CONTEXT_CAP_CATASTROPHIC_COMPOSITE),
+            "sub-score 9 caps at 55 (F)"
+        );
+        assert_eq!(cap_at(100.0), None, "a light server is never capped");
+    }
+
+    /// A cap that would not lower the score is not reported at all, so a
+    /// `context_cap` on a report always means the composite really moved.
+    #[test]
+    fn context_cap_is_absent_when_it_would_not_bind() {
+        assert_eq!(context_cost_cap(Some(5.0), 50.0, 40_000, None), None);
+        assert_eq!(context_cost_cap(Some(5.0), 55.0, 40_000, None), None);
+        assert!(context_cost_cap(Some(5.0), 55.1, 40_000, None).is_some());
+        // A dimension that was not applicable cannot cap anything.
+        assert_eq!(context_cost_cap(None, 90.0, 40_000, None), None);
+    }
+
+    /// The cap explanation names the token count and, with a census loaded, how
+    /// far above the median it sits — it is never a bare number.
+    #[test]
+    fn context_cap_explanation_cites_the_census_median() {
+        let census = Percentiles {
+            context_cost_tokens: MetricSamples {
+                samples: vec![1_000.0, 1_500.0, 2_000.0, 2_500.0],
+            },
+            collected: None,
+            census_date: None,
+            startup_failure_rate: None,
+            bundled: false,
+        };
+        let cap = context_cost_cap(Some(5.0), 73.0, 42_288, Some(&census)).unwrap();
+        // Median of the four samples is 1,750; 42,288 / 1,750 = 24.2 -> "24×".
+        assert_eq!(
+            cap.explanation,
+            "composite capped at 55 by context cost: 42,288 tokens is 24× the census median"
+        );
+        assert_eq!(cap.uncapped, 73.0);
+        // With no census the multiple is simply omitted, never fabricated.
+        let bare = context_cost_cap(Some(5.0), 73.0, 42_288, None).unwrap();
+        assert_eq!(
+            bare.explanation,
+            "composite capped at 55 by context cost: 42,288 tokens"
+        );
+    }
+
+    /// A census in which the server under test sits at exactly `pct` — built
+    /// from sentinel samples (far below and far above any realistic fixture) so
+    /// the percentile is pinned regardless of the fixture's exact token count.
+    ///
+    /// The *median* of such a census is a sentinel too, so the "N× the census
+    /// median" clause of a cap explanation is meaningless here; these fixtures
+    /// pin the percentile only. `context_cap_explanation_cites_the_census_median`
+    /// covers the explanation text against realistic samples.
+    fn census_at_percentile(pct: usize) -> Percentiles {
+        let mut samples = vec![1.0; pct];
+        samples.extend(std::iter::repeat_n(1e9, 100 - pct));
+        Percentiles {
+            context_cost_tokens: MetricSamples { samples },
+            collected: Some("2026-07-19".to_string()),
+            census_date: Some("2026-07-19".to_string()),
+            startup_failure_rate: None,
+            bundled: true,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // rubric-v1.1: regression tests for the two fleet-run defects
+    // -----------------------------------------------------------------------
+
+    /// **Defect 1 regression.** A large-surface server with schema defects
+    /// spread across many tools — the shape that scored protocol 100,
+    /// description 90, robustness 100, schema **0**, context 11 and landed at
+    /// F 56 in the 31-server fleet run.
+    ///
+    /// The schema cliff is gone (rate-based, floored at 15), so the composite no
+    /// longer reads F. Its heavy context cost still binds it to the D band,
+    /// which is the honest reading: 17k tokens is genuinely expensive.
+    #[test]
+    fn regression_large_surface_schema_defects_no_longer_grade_f() {
+        // 24 tools, ~40% of them defective — the fleet-run shape.
+        let input = input_with_tools(schema_rate_tools(24, 10));
+        let census = census_at_percentile(96);
+        let report = evaluate(&input, Some(&census));
+
+        let schema = report.dimension(Dimension::SchemaHygiene).unwrap();
+        assert!(
+            schema.score.unwrap() > RATE_SCORE_FLOOR,
+            "schema must no longer bottom out: {:?}",
+            schema.score
+        );
+        assert!(
+            report.composite_rounded() >= 60,
+            "a large-surface server with proportionally ordinary schema defects must not \
+             grade F: composite {}",
+            report.composite_rounded()
+        );
+    }
+
+    /// **Defect 2 regression.** The heaviest server measured (89 tools, 42,288
+    /// tokens, 100th percentile) graded C 73 under `rubric-v1` — *above* the
+    /// F 56 of a far lighter server — because schema and description polish
+    /// offset a context sub-score of 5.
+    ///
+    /// Under `rubric-v1.1` the cap binds it below the lighter server, and says
+    /// so out loud.
+    #[test]
+    fn regression_heaviest_server_cannot_outrank_a_lighter_one() {
+        // The heavy server: a big but *clean* tool surface, at p100 context.
+        let heavy = evaluate(
+            &input_with_tools(schema_rate_tools(89, 0)),
+            Some(&census_at_percentile(100)),
+        );
+        // The lighter server from the defect-1 regression above.
+        let lighter = evaluate(
+            &input_with_tools(schema_rate_tools(24, 10)),
+            Some(&census_at_percentile(96)),
+        );
+
+        let heavy_context = heavy
+            .dimension(Dimension::ContextCost)
+            .unwrap()
+            .score
+            .unwrap();
+        assert!(
+            heavy_context < CONTEXT_CAP_CATASTROPHIC_SUBSCORE,
+            "the p100 fixture must reproduce a catastrophic context sub-score, got {heavy_context}"
+        );
+
+        // The cap fired, and it is explicit — never a silent adjustment.
+        let cap = heavy
+            .context_cap
+            .as_ref()
+            .expect("a catastrophic context cost must cap the composite");
+        assert_eq!(cap.cap, CONTEXT_CAP_CATASTROPHIC_COMPOSITE);
+        assert!(
+            cap.uncapped > cap.cap,
+            "the cap must have actually lowered the score"
+        );
+        assert!(cap.explanation.contains("composite capped at 55"));
+        assert!(
+            heavy
+                .dimension(Dimension::ContextCost)
+                .unwrap()
+                .findings
+                .iter()
+                .any(|f| f.message == cap.explanation),
+            "the cap must also surface as a finding"
+        );
+
+        // The inversion is gone: the heaviest server can no longer outrank a
+        // lighter one on the strength of schema polish.
+        assert!(
+            heavy.composite < lighter.composite,
+            "heavy ({}) must rank below lighter ({})",
+            heavy.composite,
+            lighter.composite
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // rubric-v1.1: version + grade bands
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rubric_version_is_v1_1() {
+        assert_eq!(RUBRIC_VERSION, "rubric-v1.1");
+        assert_eq!(evaluate(&clean_input(), None).rubric_version, "rubric-v1.1");
+    }
+
+    /// The badge colors are the grade bands, so a badge never disagrees with the
+    /// letter beside it — including across the closed 40–59 gap, which is now
+    /// unambiguously F/red.
+    #[test]
+    fn badge_colors_match_the_grade_bands() {
+        assert_eq!(badge_color(100), "brightgreen");
+        assert_eq!(badge_color(90), "brightgreen");
+        assert_eq!(badge_color(89), "green");
+        assert_eq!(badge_color(80), "green");
+        assert_eq!(badge_color(79), "yellowgreen");
+        assert_eq!(badge_color(70), "yellowgreen");
+        assert_eq!(badge_color(69), "yellow");
+        assert_eq!(badge_color(60), "yellow");
+        // The whole F band is one color — under rubric-v1, 59 and 39 differed.
+        assert_eq!(badge_color(59), "red");
+        assert_eq!(badge_color(40), "red");
+        assert_eq!(badge_color(0), "red");
     }
 }

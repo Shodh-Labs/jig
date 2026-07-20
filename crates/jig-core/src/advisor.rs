@@ -31,7 +31,7 @@
 //!
 //! # Scoring
 //!
-//! Advisor findings are **not** scored into the `rubric-v1` composite (whether
+//! Advisor findings are **not** scored into the `rubric-v1.1` composite (whether
 //! and how to weight tool-set health is a separate decision). They are tagged
 //! with the [`Dimension::ToolSet`] category — a sentinel deliberately excluded
 //! from [`Dimension::all`] and never given a [`DimensionScore`](crate::check::DimensionScore),

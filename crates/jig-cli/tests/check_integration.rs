@@ -188,7 +188,7 @@ fn json_output_has_dimensions_weights_and_rubric_version() {
     let out = run_check("", &["--json"]);
     assert!(out.status.success());
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON report");
-    assert_eq!(v["rubricVersion"], "rubric-v1");
+    assert_eq!(v["rubricVersion"], "rubric-v1.1");
     // The bundled census now engages by default (M7 #4), so context cost is
     // scored against the ecosystem and labelled bundled.
     assert_eq!(v["contextCost"]["provenance"]["type"], "percentile");
@@ -305,6 +305,6 @@ fn json_mode_with_report_flag_writes_file_and_keeps_json_clean() {
     // The announcement goes to stderr, so stdout is still parseable JSON.
     let v: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("stdout stays valid JSON");
-    assert_eq!(v["rubricVersion"], "rubric-v1");
+    assert_eq!(v["rubricVersion"], "rubric-v1.1");
     let _ = std::fs::remove_dir_all(&dir);
 }

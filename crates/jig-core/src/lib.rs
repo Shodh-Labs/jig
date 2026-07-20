@@ -55,10 +55,10 @@ pub use bench::{
     RunResult, Usage, BENCH_SYSTEM_PROMPT,
 };
 pub use check::{
-    badge_color, bundled_percentiles, capability_offspec_note, evaluate, CheckInput,
+    badge_color, bundled_percentiles, capability_offspec_note, evaluate, CheckInput, ContextCap,
     ContextProvenance, Dimension, DimensionScore, Finding, Observations, Percentiles,
     PollutionSite, Report as CheckReport, Severity, UnknownMethodProbe, BUNDLED_PERCENTILES_JSON,
-    RUBRIC_VERSION,
+    RATE_SCORE_FLOOR, RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};
 pub use context::{

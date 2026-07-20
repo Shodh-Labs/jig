@@ -147,7 +147,8 @@ fn commas(n: usize) -> String {
     out
 }
 
-/// The letter grade for a composite score (mirrors `check`'s human renderer).
+/// The letter grade for a composite score (mirrors `check`'s human renderer):
+/// `A >= 90 · B 80–89 · C 70–79 · D 60–69 · F < 60`.
 fn grade(score: u32) -> char {
     match score {
         90..=u32::MAX => 'A',
@@ -286,6 +287,15 @@ fn render_hero(s: &mut String, report: &CheckReport, composite: u32, g: char) {
         "      <div class=\"g\" style=\"background:{gvar}\">grade {g}</div>\n"
     ));
     s.push_str("      <div class=\"sub\">out of 100 · composite of 5 weighted dimensions</div>\n");
+    // The context-cost cap (rubric-v1.1) is never silent: when the composite was
+    // bounded, the hero says so and shows what it would otherwise have been.
+    if let Some(cap) = &report.context_cap {
+        s.push_str(&format!(
+            "      <div class=\"capnote\">{} — would have scored {}</div>\n",
+            html_escape(&cap.explanation),
+            cap.uncapped.round() as i64
+        ));
+    }
     s.push_str("    </div>\n    <div class=\"dims\">\n");
     for d in &report.dimensions {
         render_dim(s, d);
@@ -614,6 +624,8 @@ const STYLE: &str = r#"<style>
   .score .g { display: inline-block; margin-top: .45rem; font-family: ui-monospace, Consolas, monospace; font-weight: 700;
     color: var(--surface); border-radius: 6px; padding: .1rem .6rem; font-size: 1rem; }
   .score .sub { color: var(--faint); font-size: .72rem; margin-top: .4rem; }
+  .score .capnote { color: var(--bad); font-size: .72rem; margin-top: .5rem; line-height: 1.4;
+    border-left: 2px solid var(--bad); padding-left: .5rem; text-align: left; }
   .dims { display: flex; flex-direction: column; gap: .45rem; min-width: 0; }
   .dim { display: grid; grid-template-columns: 11.5rem 1fr 2.6rem; gap: .7rem; align-items: center; font-size: .85rem; }
   .dim .lbl { text-align: right; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
