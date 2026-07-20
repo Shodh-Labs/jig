@@ -566,6 +566,11 @@ pub struct RunReport {
     pub gate: Option<f64>,
     /// The minimal bench system prompt (pinned for reproducibility).
     pub system_prompt: &'static str,
+    /// The exact endpoint every case was sent to — the vendor default, or the
+    /// `--base-url` an OpenAI-compatible endpoint was reached at.
+    pub endpoint: String,
+    /// Whether the run sent no credential at all (`--no-auth`).
+    pub keyless: bool,
     /// The suites, in the order given.
     pub suites: Vec<SuiteReport>,
 }
@@ -851,6 +856,8 @@ pub async fn run_eval(
         temp_override: config.temp_override,
         gate: config.gate,
         system_prompt: bench::BENCH_SYSTEM_PROMPT,
+        endpoint: bench::provider_endpoint(config.model.provider, config.base_url.as_deref()),
+        keyless: config.api_key.is_empty(),
         suites: suite_reports,
     })
 }
@@ -1108,6 +1115,8 @@ cases:
             rendered_request: Value::Null,
             results,
             server_tool_names: vec!["search_docs".into()],
+            endpoint: bench::provider_endpoint(Provider::OpenAI, None),
+            keyless: false,
         }
     }
 
@@ -1255,6 +1264,8 @@ cases:
             temp_override: None,
             gate,
             system_prompt: bench::BENCH_SYSTEM_PROMPT,
+            endpoint: bench::provider_endpoint(Provider::OpenAI, None),
+            keyless: false,
             suites: vec![SuiteReport {
                 name: "s".into(),
                 source: "s.yaml".into(),

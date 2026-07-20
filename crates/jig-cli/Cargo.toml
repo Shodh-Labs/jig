@@ -21,7 +21,9 @@ path = "src/main.rs"
 jig-core = { path = "../jig-core", features = ["exact-anthropic"] }
 clap.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# `io-std` + `io-util`: `jig serve` is an MCP server over stdio, so it needs
+# async stdin/stdout and a line-oriented reader.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync", "time"] }
 
 [dev-dependencies]
 proptest = { workspace = true }

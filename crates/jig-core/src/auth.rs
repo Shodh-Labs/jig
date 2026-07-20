@@ -450,10 +450,21 @@ pub(crate) fn string_array(v: &Value, key: &str) -> Vec<String> {
 
 /// The canonical resource identifier for an MCP endpoint URL, per RFC 8707 §2 and
 /// the MCP spec: lowercase scheme/host, no fragment, and no gratuitous trailing
-/// slash. Returns the input unchanged if it does not parse as a URL.
+/// slash.
+///
+/// Input that does not parse as a URL is passed through with only the textual
+/// canonicalization applied — the fragment and a lone trailing slash are still
+/// removed. Those two are the guarantees callers rely on, and a URL can fail to
+/// parse for reasons that have nothing to do with either: a host like
+/// `xn--.example.com` is an IDNA error, but its fragment is no more part of the
+/// resource identifier than any other.
 pub fn canonical_resource_uri(url: &str) -> String {
     let Ok(mut parsed) = reqwest::Url::parse(url) else {
-        return url.to_string();
+        let without_fragment = url.split('#').next().unwrap_or(url);
+        return without_fragment
+            .strip_suffix('/')
+            .unwrap_or(without_fragment)
+            .to_string();
     };
     parsed.set_fragment(None);
     let mut out = parsed.to_string();
@@ -1518,6 +1529,15 @@ mod tests {
             canonical_resource_uri("https://mcp.example.com/mcp#frag"),
             "https://mcp.example.com/mcp"
         );
+
+        // An unparseable URL still loses its fragment: `xn--.example.com` is an
+        // IDNA error, so this never reaches the URL parser at all.
+        assert_eq!(
+            canonical_resource_uri("https://xn--.example.com/#frag"),
+            "https://xn--.example.com"
+        );
+        // …and a genuinely opaque string is otherwise left alone.
+        assert_eq!(canonical_resource_uri("not a url"), "not a url");
     }
 
     #[test]

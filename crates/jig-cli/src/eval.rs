@@ -15,7 +15,7 @@ use jig_core::eval::{self, CaseReport, CaseVerdict, EvalConfig, RunReport, Suite
 use jig_core::ProtocolTap;
 use serde_json::{json, Value};
 
-use crate::bench::{default_model, require_key};
+use crate::bench::{auth_label, Endpoint};
 use crate::{client_options, emit, warn_non_protocol_output, write_tap_if_requested, Target};
 
 /// Exit code when the eval ran cleanly but the run did not pass its gate /
@@ -30,6 +30,7 @@ pub async fn run(
     suite_specs: Vec<PathBuf>,
     model: Option<String>,
     api_model: Option<String>,
+    endpoint: Endpoint,
     runs_override: Option<usize>,
     temp: Option<f64>,
     gate: Option<f64>,
@@ -46,12 +47,12 @@ pub async fn run(
     }
 
     // 2) Resolve the model and its key up front, before touching the server.
-    let model_id = model.unwrap_or_else(|| default_model().to_string());
+    let model_id = model.unwrap_or_else(|| endpoint.default_model().to_string());
     let mut resolved = BenchModel::resolve(&model_id).map_err(|e| e.to_string())?;
     if let Some(over) = api_model {
         resolved = resolved.with_api_model(over);
     }
-    let key = require_key(resolved.provider)?;
+    let key = endpoint.resolve_key(resolved.provider)?;
 
     if let Some(g) = gate {
         if !(0.0..=1.0).contains(&g) {
@@ -66,6 +67,7 @@ pub async fn run(
         suites,
         resolved,
         key,
+        &endpoint,
         runs_override,
         temp,
         gate,
@@ -88,6 +90,7 @@ async fn run_inner(
     suites: Vec<eval::Suite>,
     model: BenchModel,
     key: String,
+    endpoint: &Endpoint,
     runs_override: Option<usize>,
     temp: Option<f64>,
     gate: Option<f64>,
@@ -113,7 +116,7 @@ async fn run_inner(
         gate,
         timeout: opts.request_timeout,
         max_tokens: bench::DEFAULT_MAX_TOKENS,
-        base_url: std::env::var("JIG_BENCH_BASE_URL").ok(),
+        base_url: endpoint.effective_base_url(),
     };
 
     let report = eval::run_eval(&tools, &config, &suites)
@@ -378,6 +381,13 @@ fn render_pinned(report: &RunReport) -> String {
         report.model_id, report.provider_label
     ));
     s.push_str(&format!("  api model:         {}\n", report.api_model));
+    // Where every case was actually sent, and on whose credential. A pinned
+    // context that does not name the endpoint is not reproducible.
+    s.push_str(&format!("  endpoint:          {}\n", report.endpoint));
+    s.push_str(&format!(
+        "  auth:              {}\n",
+        auth_label(report.keyless)
+    ));
     s.push_str(&format!(
         "  reported version:  {}\n",
         report.reported_version.as_deref().unwrap_or("<none>")
@@ -708,6 +718,8 @@ mod tests {
             rendered_request: Value::Null,
             results,
             server_tool_names: vec!["search_docs".into(), "fetch_page".into()],
+            endpoint: bench::provider_endpoint(Provider::OpenAI, None),
+            keyless: false,
         }
     }
 
@@ -804,6 +816,8 @@ mod tests {
             temp_override: None,
             gate: Some(0.8),
             system_prompt: bench::BENCH_SYSTEM_PROMPT,
+            endpoint: bench::provider_endpoint(Provider::OpenAI, None),
+            keyless: false,
             suites: vec![SuiteReport {
                 name: "search-basics".into(),
                 source: ".jig/search.yaml".into(),
@@ -845,6 +859,8 @@ mod tests {
             temp_override: None,
             gate: Some(0.8),
             system_prompt: bench::BENCH_SYSTEM_PROMPT,
+            endpoint: bench::provider_endpoint(Provider::OpenAI, None),
+            keyless: false,
             suites: vec![SuiteReport {
                 name: "search-basics".into(),
                 source: ".jig/search.yaml".into(),

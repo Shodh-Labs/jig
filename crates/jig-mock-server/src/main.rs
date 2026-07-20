@@ -37,6 +37,10 @@
 //!   whole authorization-code flow: `login-happy`, `login-bad-state`,
 //!   `login-bad-iss`, `login-no-s256`, `login-token-error`. See
 //!   [`http::AuthMode`].
+//! * `--sampling-client [--no-sampling] -- <cmd...>` — run as a scripted MCP
+//!   *host* instead of a server: spawn `<cmd>`, handshake (advertising the
+//!   `sampling` capability unless `--no-sampling`), call one tool, and answer
+//!   every `sampling/createMessage` from a script. See [`sampling_client`].
 //! * `--pollute-stdout` / `--paginate` — (stdio mode) test fixtures, see below.
 //! * `--chaos <mode[,mode...]>` — (stdio mode) the **hostile-server chaos
 //!   catalog**: deliberately misbehave in one specific way so Jig's degradation
@@ -49,6 +53,7 @@ use serde_json::{json, Value};
 
 mod http;
 mod provider;
+mod sampling_client;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -112,6 +117,19 @@ fn main() {
     // Mock model-provider mode: `--provider <port>` (the `jig bench` test double).
     if let Some(port) = flag_port(&args, "--provider") {
         provider::serve(port);
+        return;
+    }
+
+    // Scripted MCP *host* mode: `--sampling-client [--no-sampling] -- <cmd...>`.
+    // Plays the client half of MCP so `jig serve`'s `sampling/createMessage`
+    // path has something to talk to. See [`sampling_client`].
+    if args.iter().any(|a| a == "--sampling-client") {
+        let command: Vec<String> = match args.iter().position(|a| a == "--") {
+            Some(i) => args[i + 1..].to_vec(),
+            None => Vec::new(),
+        };
+        let advertise = !args.iter().any(|a| a == "--no-sampling");
+        sampling_client::run(&command, advertise);
         return;
     }
 
