@@ -126,6 +126,10 @@ jig check --server "playwright"                        # a server discovered by 
 jig check --http "https://example.com/mcp" --header "Authorization: Bearer $TOKEN"
 ```
 
+Every run also writes this — the self-contained HTML report card, by default:
+
+![The HTML report card jig writes by default — score hero, dimension bars, token chart](docs/media/report-page.png)
+
 One session, one grade over five weighted dimensions (`rubric-v1`):
 
 | Dimension | Weight | What it scores |
@@ -285,6 +289,8 @@ into `rubric-v1` in this milestone.
 > get wrong.
 
 ### `jig context` — see exactly what the model sees
+
+![jig context — the token-annotated request body a model API receives](docs/media/context-card.png)
 
 The founding promise: developers write tool descriptions blind, never seeing the
 context block a model actually receives. `jig context` renders it —
@@ -523,6 +529,8 @@ Jig has been validated against a battery of real public MCP servers — see
 
 ### `jig bench` — the model-in-the-loop bench
 
+![jig bench — 5-run tool-selection distribution with per-run detail](docs/media/bench-card.png)
+
 `jig budget` prices a tool surface statically. `jig bench` does something no
 other tool does: it puts a **real model in the loop** and measures which tool
 that model actually picks for a natural-language task, with what arguments,
@@ -587,6 +595,8 @@ the bench — a misbehaving provider is Jig's to handle informatively, exactly a
 a misbehaving server is.
 
 ### `jig eval` — the `.jig` eval suite
+
+![jig eval — suite verdicts with rates, flakiness, and a CI gate](docs/media/eval-card.png)
 
 `jig bench` explores. `jig eval` **asserts**: it turns `prompt → expected tool
 call` cases into regression tests, versioned in git next to your server and
