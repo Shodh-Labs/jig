@@ -35,7 +35,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
+          sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --all-targets
@@ -56,7 +56,7 @@ jobs:
       - name: Install Linux webkit dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
+          sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo fmt --check
         run: cargo fmt --all --check
@@ -78,7 +78,7 @@ jobs:
       - name: Install Linux webkit dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
+          sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo doc
         run: cargo doc --workspace --no-deps
@@ -133,7 +133,7 @@ jobs:
       - name: Install Linux webkit dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
+          sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
@@ -168,7 +168,7 @@ jobs:
       - name: Install Linux webkit dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \n            libwebkit2gtk-4.1-dev \n            libappindicator3-dev \n            librsvg2-dev \n            libsoup-3.0-dev \n            libjavascriptcoregtk-4.1-dev \n            patchelf
+          sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Build jig + mock server
         run: cargo build --workspace
