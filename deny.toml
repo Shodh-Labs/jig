@@ -24,6 +24,12 @@ allow = [
     "BSD-3-Clause",     # subtle
     "Unicode-3.0",      # icu_* crates, unicode-ident
     "CDLA-Permissive-2.0", # webpki-roots (permissive data license, not copyleft)
+    # MPL-2.0 arrived with the Tauri workbench (Servo-lineage crates: selectors,
+    # cssparser, and friends). It is *file-level* copyleft: obligations attach to
+    # the MPL-licensed files themselves, not to a work that merely depends on
+    # them, so it does not reach Jig's Apache-2.0 source. Allowed for
+    # dependencies; we do not modify or vendor those files.
+    "MPL-2.0",
 ]
 # Fuzzy-match threshold for license-text detection; 0.8 is the cargo-deny default.
 confidence-threshold = 0.8
