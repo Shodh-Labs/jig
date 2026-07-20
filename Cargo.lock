@@ -1772,7 +1772,7 @@ dependencies = [
 
 [[package]]
 name = "jig-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "jig-core",
  "serde",
@@ -1784,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "jig-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "clap",
  "insta",
@@ -1796,7 +1796,7 @@ dependencies = [
 
 [[package]]
 name = "jig-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "proptest",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "jig-mock-server"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "axum",
  "base64 0.22.1",

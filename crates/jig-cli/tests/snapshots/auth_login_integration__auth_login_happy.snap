@@ -1,5 +1,6 @@
 ---
 source: crates/jig-cli/tests/auth_login_integration.rs
+assertion_line: 406
 expression: redact_ids(&redact_port(&run.stdout))
 ---
 jig auth --login · http://127.0.0.1:PORT/mcp
@@ -17,10 +18,10 @@ Flow trace
    7 ✓ PASS  Authorization request          sent response_type=code with code_challenge_method=S256, a CSPRNG `state`, resource=http://127.0.0.1:PORT/mcp, scope=mcp:tools mcp:resources — --no-browser: the URL was printed, not opened  [OAuth 2.1 §4.1.1 · RFC 7636 §4.3 · RFC 8707 §2]
    8 ✓ PASS  Authorization response         received an authorization code on the loopback redirect; its `state` matches the generated nonce (constant-time) and its `iss` matches the metadata issuer (RFC 9207)  [OAuth 2.1 §4.1.2 · §7.12 · RFC 9207 §2.4]
    9 ✓ PASS  Token exchange                 redeemed the authorization code with the PKCE verifier at http://127.0.0.1:PORT/token → a Bearer token, expires_in=3600s, scope=mcp:tools mcp:resources, refresh token issued (the token itself is never printed)  [OAuth 2.1 §4.1.3–§4.1.4 · RFC 7636 §4.5 · RFC 8707 §2]
-  10 ✓ PASS  Authenticated MCP session      authenticated session established with jig-mock-server 0.5.0 (protocol 2025-06-18): 3 tool(s) visible  [MCP 2025-06-18 (Access Token Usage)]
+  10 ✓ PASS  Authenticated MCP session      authenticated session established with jig-mock-server 0.6.0 (protocol 2025-06-18): 3 tool(s) visible  [MCP 2025-06-18 (Access Token Usage)]
 
 Authenticated probe
-  server    jig-mock-server 0.5.0 (protocol 2025-06-18)
+  server    jig-mock-server 0.6.0 (protocol 2025-06-18)
   tools     3 visible — echo, make_reservation, always_fails
   scope     mcp:tools mcp:resources
   expires   in 3600s
