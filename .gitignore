@@ -15,6 +15,11 @@ crates/jig-app/gen/schemas/
 # jig check writes its HTML report card to the cwd by default
 jig-report-*.html
 
+# Census harness working files: raw npm search dumps (regenerate with
+# scripts/census2/build-candidates.js --fetch-pools) and run checkpoints.
+data/pools/
+*.progress.jsonl
+
 # OS
 .DS_Store
 Thumbs.db

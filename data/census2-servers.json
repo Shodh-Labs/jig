@@ -1,0 +1,792 @@
+{
+  "_selection": {
+    "purpose": "Census v2 fleet: the curated v1 50 plus every actively-published, npx-runnable, MCP-flavored package from the Jul-2026 npm discovery pools. Purpose: per-dimension `jig check` scores across a wide fleet, the dataset rubric weight calibration requires (docs/rubric-changelog.md).",
+    "screened": {
+      "poolCandidates": 129,
+      "accepted": 77,
+      "rejected": {
+        "noBin": 22,
+        "stale": 10,
+        "notMcp": 0,
+        "nonServer": 20,
+        "fetchFail": 0
+      }
+    },
+    "criteria": [
+      "v1 servers kept verbatim with their curated args ({TMPDIR} placeholders intact).",
+      "Pool additions: registry doc has a bin entry (npx-runnable), latest publish within ~14 months, MCP-related name/keywords/description, and not matching obvious non-server patterns (sdk/inspector/template/etc.).",
+      "No reachability screening: startup failures are census data, not exclusions."
+    ],
+    "builtFrom": [
+      "data/census-servers.json",
+      "npm-mcp-search.json (100)",
+      "npm-mcp2.json (80)"
+    ]
+  },
+  "servers": [
+    {
+      "package": "@modelcontextprotocol/server-everything",
+      "args": [],
+      "note": "Official reference server exercising every MCP feature (tools/resources/prompts).",
+      "source": "servers-repo"
+    },
+    {
+      "package": "@modelcontextprotocol/server-filesystem",
+      "args": [
+        "{TMPDIR}"
+      ],
+      "note": "Official filesystem server; requires an allowed-directory argument (temp dir substituted).",
+      "source": "servers-repo"
+    },
+    {
+      "package": "@modelcontextprotocol/server-memory",
+      "args": [],
+      "note": "Official knowledge-graph memory server; no config.",
+      "source": "servers-repo"
+    },
+    {
+      "package": "@modelcontextprotocol/server-sequential-thinking",
+      "args": [],
+      "note": "Official structured-reasoning server; no config.",
+      "source": "servers-repo"
+    },
+    {
+      "package": "@modelcontextprotocol/server-github",
+      "args": [],
+      "note": "Official GitHub server (deprecated; superseded by the Go github-mcp-server). Kept as a drift data point; may require a token at startup.",
+      "source": "servers-repo"
+    },
+    {
+      "package": "@modelcontextprotocol/server-slack",
+      "args": [],
+      "note": "Official Slack server (deprecated). Kept as a drift data point; likely needs a bot token at startup.",
+      "source": "servers-repo"
+    },
+    {
+      "package": "@modelcontextprotocol/server-gitlab",
+      "args": [],
+      "note": "Official GitLab server (deprecated). Kept as a drift data point.",
+      "source": "servers-repo"
+    },
+    {
+      "package": "@modelcontextprotocol/server-everart",
+      "args": [],
+      "note": "Official EverArt image server (deprecated). Kept as a drift data point.",
+      "source": "servers-repo"
+    },
+    {
+      "package": "@playwright/mcp",
+      "args": [],
+      "note": "Microsoft Playwright browser-automation server; the single most-downloaded MCP server on npm.",
+      "source": "registry"
+    },
+    {
+      "package": "@upstash/context7-mcp",
+      "args": [],
+      "note": "Upstash Context7 docs-retrieval server; widely deployed, no key for basic use.",
+      "source": "registry"
+    },
+    {
+      "package": "@wonderwhy-er/desktop-commander",
+      "args": [],
+      "note": "Popular terminal/desktop-automation server.",
+      "source": "registry"
+    },
+    {
+      "package": "@eslint/mcp",
+      "args": [],
+      "note": "Official ESLint MCP server; runs locally against a project.",
+      "source": "npm"
+    },
+    {
+      "package": "@mantine/mcp-server",
+      "args": [],
+      "note": "Mantine UI documentation server.",
+      "source": "npm"
+    },
+    {
+      "package": "@antv/mcp-server-chart",
+      "args": [],
+      "note": "AntV chart-generation server.",
+      "source": "npm"
+    },
+    {
+      "package": "@assistant-ui/mcp-docs-server",
+      "args": [],
+      "note": "assistant-ui documentation server.",
+      "source": "npm"
+    },
+    {
+      "package": "mcp-server-code-runner",
+      "args": [],
+      "note": "Code Runner server (formulahendry, author of the VS Code extension).",
+      "source": "npm"
+    },
+    {
+      "package": "@cyanheads/git-mcp-server",
+      "args": [],
+      "note": "Local git-operations server.",
+      "source": "npm"
+    },
+    {
+      "package": "@shopify/dev-mcp",
+      "args": [],
+      "note": "Shopify developer documentation/tooling server.",
+      "source": "npm"
+    },
+    {
+      "package": "@mapbox/mcp-server",
+      "args": [],
+      "note": "Mapbox geospatial server; may require a token at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "drawio-mcp-server",
+      "args": [],
+      "note": "draw.io diagram server.",
+      "source": "npm"
+    },
+    {
+      "package": "xcodebuildmcp",
+      "args": [],
+      "note": "Xcode build server; macOS-only, expected to fail on Linux CI (platform data point).",
+      "source": "npm"
+    },
+    {
+      "package": "ios-simulator-mcp",
+      "args": [],
+      "note": "iOS Simulator control server; macOS-only, expected to fail on Linux (platform data point).",
+      "source": "npm"
+    },
+    {
+      "package": "@agentdeskai/browser-tools-mcp",
+      "args": [],
+      "note": "Browser devtools bridge server.",
+      "source": "npm"
+    },
+    {
+      "package": "@kazuph/mcp-fetch",
+      "args": [],
+      "note": "URL fetch/scrape server.",
+      "source": "npm"
+    },
+    {
+      "package": "mcp-searxng",
+      "args": [],
+      "note": "SearXNG meta-search server; requires SEARXNG_URL env, expected to fail at startup (config data point).",
+      "source": "npm"
+    },
+    {
+      "package": "@professional-wiki/mediawiki-mcp-server",
+      "args": [],
+      "note": "MediaWiki server.",
+      "source": "npm"
+    },
+    {
+      "package": "nx-mcp",
+      "args": [],
+      "note": "Nx monorepo server.",
+      "source": "npm"
+    },
+    {
+      "package": "@shortcut/mcp",
+      "args": [],
+      "note": "Shortcut (project mgmt) server; likely needs a token at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "@notionhq/notion-mcp-server",
+      "args": [],
+      "note": "Official Notion server; likely needs an integration token at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "@sentry/mcp-server",
+      "args": [],
+      "note": "Official Sentry server; likely needs an auth token at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "tavily-mcp",
+      "args": [],
+      "note": "Tavily search server; requires TAVILY_API_KEY.",
+      "source": "npm"
+    },
+    {
+      "package": "@brave/brave-search-mcp-server",
+      "args": [],
+      "note": "Brave Search server; requires an API key.",
+      "source": "npm"
+    },
+    {
+      "package": "firecrawl-mcp",
+      "args": [],
+      "note": "Firecrawl web-scraping server; requires an API key.",
+      "source": "npm"
+    },
+    {
+      "package": "@stripe/mcp",
+      "args": [],
+      "note": "Official Stripe server; likely needs a secret key at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "@perplexity-ai/mcp-server",
+      "args": [],
+      "note": "Perplexity search server; requires an API key.",
+      "source": "npm"
+    },
+    {
+      "package": "@hubspot/mcp-server",
+      "args": [],
+      "note": "Official HubSpot server; likely needs a token at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "dataforseo-mcp-server",
+      "args": [],
+      "note": "DataForSEO server; requires credentials.",
+      "source": "npm"
+    },
+    {
+      "package": "@apify/actors-mcp-server",
+      "args": [],
+      "note": "Apify Actors server; likely needs an API token at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "@heroku/mcp-server",
+      "args": [],
+      "note": "Official Heroku server; likely needs auth at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "@launchdarkly/mcp-server",
+      "args": [],
+      "note": "Official LaunchDarkly server; likely needs an API key at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "@taazkareem/clickup-mcp-server",
+      "args": [],
+      "note": "ClickUp server; requires an API token.",
+      "source": "npm"
+    },
+    {
+      "package": "@benborla29/mcp-server-mysql",
+      "args": [],
+      "note": "MySQL server; requires a reachable database, expected to fail (backend data point).",
+      "source": "npm"
+    },
+    {
+      "package": "kubernetes-mcp-server",
+      "args": [],
+      "note": "Kubernetes server (containers/Red Hat lineage); may list tools without a live cluster.",
+      "source": "npm"
+    },
+    {
+      "package": "@azure/mcp",
+      "args": [],
+      "note": "Official Azure server; large tool surface, may need auth at startup.",
+      "source": "npm"
+    },
+    {
+      "package": "@growthbook/mcp",
+      "args": [],
+      "note": "GrowthBook feature-flag server; likely needs an API key.",
+      "source": "npm"
+    },
+    {
+      "package": "newrelic-mcp",
+      "args": [],
+      "note": "New Relic observability server; likely needs credentials.",
+      "source": "npm"
+    },
+    {
+      "package": "mcp-server-kubernetes",
+      "args": [],
+      "note": "Kubernetes server (Flux159 lineage); a second, independent k8s implementation for comparison.",
+      "source": "npm"
+    },
+    {
+      "package": "@microsoft/clarity-mcp-server",
+      "args": [],
+      "note": "Microsoft Clarity analytics server; likely needs a token.",
+      "source": "npm"
+    },
+    {
+      "package": "serper-search-scrape-mcp-server",
+      "args": [],
+      "note": "Serper search/scrape server; requires an API key.",
+      "source": "npm"
+    },
+    {
+      "package": "@dynatrace-oss/dynatrace-mcp-server",
+      "args": [],
+      "note": "Dynatrace observability server; likely needs credentials.",
+      "source": "npm"
+    },
+    {
+      "package": "@aikidosec/mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Aikido MCP server"
+    },
+    {
+      "package": "@alchemy/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for using Alchemy APIs"
+    },
+    {
+      "package": "@anyproto/anytype-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Official MCP server for Anytype API"
+    },
+    {
+      "package": "@arikusi/deepseek-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP Server for DeepSeek API integration - enables Claude Code to use DeepSeek Chat and Reasoner models"
+    },
+    {
+      "package": "@atomicmail/mcp-modelcontextprotocol",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "Atomic Mail MCP server — local stdio proxy with PoW auth and JMAP, for AI agents. (modelcontextprotocol install channel)"
+    },
+    {
+      "package": "@automattic/mcp-wordpress-remote",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP WordPress Remote proxy server"
+    },
+    {
+      "package": "@browserstack/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "BrowserStack's Official MCP Server"
+    },
+    {
+      "package": "@buildwithlayer/openapi-to-tools",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "A tool to create MCP compliant tools from an OpenAPI Spec"
+    },
+    {
+      "package": "@cexll/codex-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for Codex CLI integration"
+    },
+    {
+      "package": "@cognitionai/metabase-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "A Model Context Protocol server for Metabase integration"
+    },
+    {
+      "package": "@doitintl/doit-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "DoiT official MCP Server"
+    },
+    {
+      "package": "@dokploy/mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "MCP Server for Dokploy API"
+    },
+    {
+      "package": "@dropthis/mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "Official MCP server for dropthis — publish content and get a permanent URL from any MCP-compatible agent."
+    },
+    {
+      "package": "@ehrocks/fe-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for searching Hero Design System components"
+    },
+    {
+      "package": "@ericthered926/duckduckgo-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "A Model Context Protocol (MCP) server for DuckDuckGo web and news search"
+    },
+    {
+      "package": "@esaio/esa-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Official MCP server for esa.io - STDIO transport version"
+    },
+    {
+      "package": "@fruggr/zendesk-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "Deep Zendesk MCP server for your AI assistant: search, draft, update and translate Help Center articles and manage Support tickets end to en"
+    },
+    {
+      "package": "@gongrzhe/server-gmail-autoauth-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Gmail MCP server with auto authentication support"
+    },
+    {
+      "package": "@guhcostan/web-search-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "MCP server to search the web and fetch page contents"
+    },
+    {
+      "package": "@hisma/server-puppeteer",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Fork and update (v0.6.5) of the original @modelcontextprotocol/server-puppeteer MCP server for browser automation using Puppeteer."
+    },
+    {
+      "package": "@ironbee-ai/devtools",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP Server and CLI for IronBee DevTools"
+    },
+    {
+      "package": "@kelceyp/caw-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "CAW server - REST API, MCP server and core features"
+    },
+    {
+      "package": "@kintone/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "The official MCP Server for kintone"
+    },
+    {
+      "package": "@knip/mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Knip MCP Server"
+    },
+    {
+      "package": "@mgsoftwarebv/mcp-server-bridge",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP Server bridge for MG Tickets - connects Cursor to HTTP MCP server with image support and GitHub code exploration"
+    },
+    {
+      "package": "@microsoft/workiq",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for Microsoft 365 Copilot"
+    },
+    {
+      "package": "@nexus2520/bitbucket-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for Bitbucket API integration - supports both Cloud and Server"
+    },
+    {
+      "package": "@nexus2520/jira-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for Jira API integration - supports Jira Cloud"
+    },
+    {
+      "package": "@postman/postman-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Postman MCP Server — connect AI agents (Claude Code, Cursor, VS Code Copilot, Gemini CLI) to your Postman collections, specifications, and e"
+    },
+    {
+      "package": "@qase/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Official MCP server for Qase Test Management Platform"
+    },
+    {
+      "package": "@rollbar/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Model Context Protocol server for Rollbar"
+    },
+    {
+      "package": "@roychri/mcp-server-asana",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP Server for Asana"
+    },
+    {
+      "package": "@runpod/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for interacting with Runpod API"
+    },
+    {
+      "package": "@rushdb/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "RushDB MCP Server - Model Context Protocol server for RushDB"
+    },
+    {
+      "package": "@siemens/element-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Element MCP server"
+    },
+    {
+      "package": "@smartbear/mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for interacting SmartBear Products"
+    },
+    {
+      "package": "@softeria/ms-365-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": " A Model Context Protocol (MCP) server for interacting with Microsoft 365 and Office services through the Graph API"
+    },
+    {
+      "package": "@solapi/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for SOLAPI document search and integration"
+    },
+    {
+      "package": "@tiberriver256/mcp-server-azure-devops",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Azure DevOps reference server for the Model Context Protocol (MCP)"
+    },
+    {
+      "package": "@tocharianou/mcp-server-kibana",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Kibana MCP Server"
+    },
+    {
+      "package": "@tosspayments/integration-guide-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "토스페이먼츠 연동가이드 MCP 서버"
+    },
+    {
+      "package": "@transloadit/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Transloadit MCP server"
+    },
+    {
+      "package": "@tsmztech/mcp-server-salesforce",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "A Salesforce connector MCP Server."
+    },
+    {
+      "package": "@ui5/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for SAPUI5/OpenUI5 development"
+    },
+    {
+      "package": "@unthread-io/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Unthread MCP Server"
+    },
+    {
+      "package": "@vantasdk/vanta-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Model Context Protocol server for Vanta's security compliance platform"
+    },
+    {
+      "package": "@z_ai/mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP Server for Z.AI - A Model Context Protocol server that provides AI capabilities"
+    },
+    {
+      "package": "@zereight/mcp-gitlab",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "GitLab MCP server for projects, merge requests, issues, pipelines, wiki, releases, and more"
+    },
+    {
+      "package": "aether-code",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "Uncensored AI coding agent for your terminal — Claude Code alternative with MCP support. Reads code, writes files, runs commands. Drives IDA"
+    },
+    {
+      "package": "argocd-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Argo CD MCP Server"
+    },
+    {
+      "package": "aws-s3-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "MCP Server for S3"
+    },
+    {
+      "package": "bitbucket-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Model Context Protocol (MCP) server for Bitbucket Cloud and Server API integration"
+    },
+    {
+      "package": "buggazi",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "Buggazi CLI - project management for coding agents. Bug tracking, feature planning, sprint management. As easy as git."
+    },
+    {
+      "package": "cclsp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for accessing LSP functionality"
+    },
+    {
+      "package": "claude-consult-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "MCP stdio server that lets OpenAI Codex consult local Claude Code for co-analysis, second opinions, and read-only file review"
+    },
+    {
+      "package": "confluence-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Confluence MCP server for Cloud/Server/Data Center search/read/create/update"
+    },
+    {
+      "package": "docusaurus-plugin-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "A Docusaurus plugin that exposes an MCP server endpoint for AI agents to search and retrieve documentation"
+    },
+    {
+      "package": "european-parliament-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Model Context Protocol server for European Parliament open data"
+    },
+    {
+      "package": "gemini-mcp-tool",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "MCP server for Gemini CLI integration"
+    },
+    {
+      "package": "hostinger-api-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for Hostinger API"
+    },
+    {
+      "package": "hvip-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "hvip MCP Server — 365 工具覆盖 97.7% OKX REST API，含交易/行情/资金/策略/预测市场/技术指标/Smart Money（非 OKX 官方产品）"
+    },
+    {
+      "package": "lsp-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server bridging Claude Code to Language Server Protocol servers"
+    },
+    {
+      "package": "malicious-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "A deliberately malicious MCP server for E2E testing purposes"
+    },
+    {
+      "package": "mcp-bitbucket-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for Bitbucket Server"
+    },
+    {
+      "package": "mcp-crypto-price",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "A Model Context Protocol (MCP) server that provides real-time cryptocurrency data and analysis through CoinCap's API. Features include price"
+    },
+    {
+      "package": "mcp-server-mysql",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "MCP server for interacting with MySQL databases (READ-ONLY) with optimized caching"
+    },
+    {
+      "package": "mssql-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for Microsoft SQL Server database access and comprehensive schema exploration using tedious. Includes enhanced stored procedure t"
+    },
+    {
+      "package": "notion-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "Notion MCP server for Claude, Cursor, ChatGPT, and Claude Desktop — connect AI agents to Notion via the Model Context Protocol. Create pages"
+    },
+    {
+      "package": "novada-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "One MCP server for all web data. Search, scrape, crawl, proxy, and AI research in one install."
+    },
+    {
+      "package": "playwright-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "Playwright integration for ModelContext"
+    },
+    {
+      "package": "pulsecloud-mcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "MCP server for PulseCloud hosting platform - manage Pterodactyl servers, Nginx Proxy Manager, Cloudflare DNS, and more via AI agents"
+    },
+    {
+      "package": "rosetta-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for Rosetta/PyRosetta functions and properties"
+    },
+    {
+      "package": "slack-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "Model Context Protocol (MCP) server for Slack Workspaces. This integration supports both Stdio and SSE transports, proxy settings and does n"
+    },
+    {
+      "package": "slite-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "'Slite MCP server'"
+    },
+    {
+      "package": "storybook-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp-search.json",
+      "note": "MCP server for Storybook - provides AI assistants access to components, stories, properties and screenshots"
+    },
+    {
+      "package": "tapd-mcp-server",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "TAPD MCP Server - 在 Cursor/Copilot 中查询、分析和回填 TAPD bug / 需求"
+    },
+    {
+      "package": "xmcp",
+      "args": [],
+      "source": "npm-search:npm-mcp2.json",
+      "note": "The MCP framework"
+    }
+  ]
+}

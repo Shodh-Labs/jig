@@ -55,17 +55,21 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 
+// Release is preferred over debug: the census times how long a server takes to
+// answer `initialize`, and a debug jig adds its own startup cost to every
+// measurement. A machine with both binaries built should census with the fast
+// one. `scripts/census2/run-census2.js` resolves in this same order.
 function defaultJigBin() {
   const exe = process.platform === 'win32' ? 'jig.exe' : 'jig';
   const candidates = [
     process.env.JIG_BIN,
-    path.join(REPO_ROOT, 'target', 'debug', exe),
     path.join(REPO_ROOT, 'target', 'release', exe),
+    path.join(REPO_ROOT, 'target', 'debug', exe),
   ].filter(Boolean);
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
-  // Fall back to the debug path even if missing, so the error message is clear.
+  // Fall back to the release path even if missing, so the error message is clear.
   return candidates[1] || candidates[0];
 }
 
