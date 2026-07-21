@@ -187,3 +187,40 @@ this: both were collected in run 1, and the spread file's purpose is reporting
 context, not scoring. But the robustness spread in it should be read as *one
 machine on one afternoon*, and the same caveat applies to any robustness figure
 quoted from this dataset.
+
+---
+
+## A code-keyed re-run (2026-07-22)
+
+`jig check --json` now emits a stable `code` on every finding, so defect classes
+no longer have to be inferred from message text. The fleet was re-run with a
+binary carrying that field; the result is
+[`data/census2-coded-raw.json`](../../data/census2-coded-raw.json) and
+[`data/census2-coded-calibration.json`](../../data/census2-coded-calibration.json),
+whose aggregate records `"_findingClassKeySource": "code"`.
+
+**This is the dataset to use for anything that counts defect classes.** The
+earlier files remain as collected and stay message-derived; re-aggregating them
+cannot recover codes, because the codes were never in the raw documents.
+
+The difference is not cosmetic. Message-normalisation split one defect across
+four keys, because the message enumerates the offending parameters:
+
+```
+15 servers  "`<name>`: parameter `<name>` missing a description"
+13 servers  "`<name>`: parameters `<name>`, `<name>` missing a description"
+11 servers  "`<name>`: parameters `<name>`, `<name>`, `<name>`, `<name>` missing …"
+ 9 servers  "`<name>`: parameters `<name>`, `<name>`, `<name>` missing a description"
+```
+
+Under codes that is one class — `schema_hygiene.param_missing_description`, 288
+occurrences across 22 servers — and the fleet's class count drops from 32
+message-derived keys to 15 real classes. The old table did not merely look
+untidy; it understated how widespread the most common defects are, because each
+defect's mass was divided among its phrasings.
+
+One honest note on comparability between runs: this run checked **62** servers
+where the earlier runs checked 63. `european-parliament-mcp-server` is
+intermittently reachable — it also appeared in only one of the three leaderboard
+runs — so fleet composition varies slightly at the margin even when the list does
+not.
