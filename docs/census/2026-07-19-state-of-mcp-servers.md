@@ -17,7 +17,9 @@ We never call a tool. A server that lists its tools but needs a key to *use* the
 
 Two numbers frame everything below:
 
-> **The median reachable server costs 1,679 gpt-4o tokens to load. The heaviest costs 42,288 — 25× more — and the model pays that on every single turn.**
+> **The median reachable server advertises 1,679 gpt-4o tokens of tool surface. The heaviest advertises 42,288 — 25× more.**
+>
+> *(Qualified 2026-07-21: this was originally written as a per-turn cost. Clients that defer tool schemas — Claude Code, Codex — do not send the whole surface each turn. See finding 1.)*
 
 ---
 
@@ -52,7 +54,7 @@ Across the 29 servers we could price, the distribution of tool-surface cost (gpt
 | 90th percentile | 14,401 |
 | Maximum (`dataforseo-mcp-server`) | 42,288 |
 
-Half the servers are genuinely cheap — under ~1,700 tokens, a rounding error in a modern context window. But the top decile is expensive enough to matter on every turn, and the tail is savage. The ten heaviest:
+Half the servers are genuinely cheap — under ~1,700 tokens, a rounding error in a modern context window. But the top decile is expensive enough to matter on any client that sends the full surface, and the tail is savage. The ten heaviest:
 
 | Server | Tools | gpt-4o tokens |
 | --- | ---: | ---: |
@@ -110,7 +112,9 @@ Among reachable servers, **27 of 29 already speak the current `2025-06-18` proto
 
 ## Five findings worth remembering
 
-1. **The heaviest server costs 42,288 tokens before you say anything.** `dataforseo-mcp-server` ships **89 tools** and **21 prompts**; its tool surface alone is 25× the median server and a meaningful fraction of a mid-size context window — paid on every turn, whether or not the user needs SEO data.
+1. **The heaviest server advertises 42,288 tokens before you say anything.** `dataforseo-mcp-server` ships **89 tools** and **21 prompts**; its tool surface alone is 25× the median server and a meaningful fraction of a mid-size context window, whether or not the user needs SEO data.
+
+   **QUALIFIED 2026-07-21 — originally: "paid on every turn."** A maintainer we filed a token-cost issue with ([Softeria/ms-365-mcp-server#579](https://github.com/Softeria/ms-365-mcp-server/issues/579)) pointed out that clients increasingly *defer* tool schemas: Claude Code and Codex now load tools on demand rather than putting the whole surface in context each turn. On those clients a large advertised surface is **not** a per-turn bill. The measurement is unchanged and still worth publishing — it is what the server advertises, it is what a non-deferring client sends, and it is the worst case — but "paid on every turn" overstated it, and we said it in several places. Two things remain true regardless of deferral: tool-selection accuracy degrades as the menu grows, and a client without deferral pays the full amount. We keep the original wording visible because corrections should be as public as the findings they fix.
 
 2. **CORRECTED 2026-07-20 — originally: "two popular servers break their own handshake."** Re-verification with each vendor's documented invocation showed the stdout lines from `@azure/mcp` and `@launchdarkly/mcp-server` were *CLI usage text from our bare invocation*, not runtime pollution: both require a subcommand (`server start` / `start`), and `@azure/mcp` invoked correctly handshakes cleanly (protocol 100/100, overall grade B — its real finding is a 16,072-token context cost). The smaller, true issue — usage/error text on stdout rather than stderr — was reported upstream to both vendors. We keep the original claim visible here because corrections should be as public as the findings they fix.
 

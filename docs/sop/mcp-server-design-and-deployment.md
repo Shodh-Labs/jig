@@ -144,7 +144,9 @@ are both findings.
 tools across 103 MCP servers found **97.1% of tool descriptions carry at least one
 "smell," and 56% fail to state their purpose clearly** (Hasan et al., *"MCP Tool
 Descriptions Are Smelly!"*, [arXiv:2602.14878](https://arxiv.org/abs/2602.14878), Feb
-2026). Terse descriptions starve selection; verbose ones burn context on every turn
+2026). Terse descriptions starve selection; verbose ones burn context whenever the
+surface is sent — every turn on a client without tool-deferral, and on first use even
+with one
 (see SOP 11). jig flags terse (≤4 tok, Medium) and verbose (≥160 tok, Low) descriptions.
 
 **Verify.** `jig check --stdio "<cmd>"` (Description quality) for the length bands;
