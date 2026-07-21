@@ -1,0 +1,925 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MCP server leaderboard — jig</title>
+<meta name="description" content="64 public MCP servers graded on protocol, context cost, schema hygiene, description quality and robustness. Median of 3 runs, rubric-v1.5.">
+<style>
+:root{--bg:#0b0c0e;--fg:#e8e6e3;--dim:#8b8b8b;--line:#23262b;--acc:#7dd3a0;--warn:#e0b050;--bad:#e07070}
+@media (prefers-color-scheme:light){:root{--bg:#fbfbfa;--fg:#16181d;--dim:#666;--line:#e2e2e0;--acc:#1a7f4e;--warn:#8a6100;--bad:#a33}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 ui-sans-serif,-apple-system,'Segoe UI',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:48px 20px 96px}
+h1{font-size:clamp(28px,5vw,42px);letter-spacing:-.02em;margin:0 0 6px}
+.sub{color:var(--dim);margin:0 0 28px;max-width:70ch}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
+a{color:inherit}
+.meta{display:flex;flex-wrap:wrap;gap:10px 22px;padding:14px 16px;border:1px solid var(--line);border-radius:8px;margin:0 0 26px;font-size:13.5px;color:var(--dim)}
+.meta b{color:var(--fg);font-weight:600}
+.method{border-left:3px solid var(--acc);padding:2px 0 2px 16px;margin:0 0 30px;max-width:78ch}
+.method h2{font-size:16px;margin:0 0 8px}
+.method p{margin:0 0 10px;color:var(--dim);font-size:14px}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:820px}
+th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:600;position:sticky;top:0;background:var(--bg)}
+tbody tr:last-child td{border-bottom:0}
+.rank{color:var(--dim);width:36px;text-align:right}
+.pkg{white-space:normal}
+.grade{font-weight:700;width:34px;text-align:center}
+.gA{color:var(--acc)}.gB{color:var(--fg)}.gC{color:var(--warn)}.gD{color:var(--warn)}.gF{color:var(--bad)}
+.score{font-variant-numeric:tabular-nums;width:110px}
+.rng{color:var(--dim);font-size:12px;margin-left:7px}
+.rng.stable{opacity:.45}
+.d,.t{font-variant-numeric:tabular-nums;color:var(--dim);width:56px;text-align:right}
+.rob{font-style:italic}
+.warn{color:var(--warn);font-size:11.5px;border:1px solid currentColor;border-radius:4px;padding:0 4px;margin-left:6px}
+h2.sec{font-size:19px;margin:44px 0 10px}
+.note{color:var(--dim);font-size:13.5px;max-width:78ch}
+footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>MCP server leaderboard</h1>
+<p class="sub">64 publicly installable Model Context Protocol servers, graded by <a href="https://github.com/Shodh-Labs/jig"><code>jig check</code></a> on five dimensions. No server was contacted for permission and none was asked to opt in — these are public packages, measured with a public rubric, and every number here is reproducible from the repository.</p>
+
+<div class="meta">
+  <span><b>127</b> servers attempted</span>
+  <span><b>64</b> graded</span>
+  <span><b>63</b> never started</span>
+  <span><b>3</b> full runs, median reported</span>
+  <span><b>rubric-v1.5</b></span>
+  <span>collected <b>2026-07-21</b></span>
+</div>
+
+<div class="method">
+<h2>Read this before you read the table</h2>
+<p><b>The grade is a median of 3 complete runs, not a single measurement.</b> Four of the five dimensions are computed from a server's tool surface and return identical scores every time. Robustness is not: it times how long a server takes to answer <code>initialize</code>, so it registers machine load as if it were a property of the server. Across this fleet a single run can move a robustness score by 8 points and a letter grade by one step.</p>
+<p><b>The range column is the honest part.</b> It shows the lowest and highest composite we actually observed for that server. Median spread across the fleet was <b>1</b> points; the widest was <b>5</b>. A server whose range straddles a grade boundary should be read as sitting on that boundary, not as owning the better letter. Robustness is printed in italics for the same reason.</p>
+<p><b>An F means the server does not work</b> — it pollutes stdout, or never answers a required call. Since <code>rubric-v1.5</code>, size alone cannot produce an F: a large-but-correct server is floored at D. That distinction is deliberate and is documented in the <a href="https://github.com/Shodh-Labs/jig/blob/main/docs/rubric-changelog.md">rubric changelog</a>.</p>
+<p><b>If you maintain one of these servers and think the number is wrong, it is falsifiable in one command:</b> <code>npx @shodh/jig check --stdio "npx -y &lt;your-package&gt;"</code>. If it disagrees with this table, that is a bug worth filing against jig, and corrections get published as loudly as findings.</p>
+</div>
+
+<div class="tablewrap">
+<table>
+<thead><tr>
+<th></th><th>Server</th><th>Grade</th><th>Composite</th>
+<th title="Protocol compliance">Prot</th><th title="Context cost">Ctx</th><th title="Schema hygiene">Schema</th><th title="Description quality">Desc</th><th title="Robustness — live-measured, varies between runs">Robust</th><th title="Tool count">Tools</th>
+</tr></thead>
+<tbody>
+<tr>
+  <td class="rank">1</td>
+  <td class="pkg"><code>nx-mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">98<span class="rng">97–99</span></td>
+  <td class="d">100</td>
+  <td class="d">98</td>
+  <td class="d">100</td>
+  <td class="d">99</td>
+  <td class="d rob">99</td>
+  <td class="t">1</td>
+</tr>
+<tr>
+  <td class="rank">2</td>
+  <td class="pkg"><code>@automattic/mcp-wordpress-remote</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">97<span class="rng">97–99</span></td>
+  <td class="d">100</td>
+  <td class="d">100</td>
+  <td class="d">—</td>
+  <td class="d">—</td>
+  <td class="d rob">97</td>
+  <td class="t">0</td>
+</tr>
+<tr>
+  <td class="rank">3</td>
+  <td class="pkg"><code>@assistant-ui/mcp-docs-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">96<span class="rng">95–97</span></td>
+  <td class="d">100</td>
+  <td class="d">95</td>
+  <td class="d">100</td>
+  <td class="d">100</td>
+  <td class="d rob">87</td>
+  <td class="t">6</td>
+</tr>
+<tr>
+  <td class="rank">4</td>
+  <td class="pkg"><code>@ehrocks/fe-mcp-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">96<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">100</td>
+  <td class="d">99</td>
+  <td class="d rob">89</td>
+  <td class="t">1</td>
+</tr>
+<tr>
+  <td class="rank">5</td>
+  <td class="pkg"><code>@ericthered926/duckduckgo-mcp-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">96<span class="rng">95–96</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">99</td>
+  <td class="d">99</td>
+  <td class="d rob">86</td>
+  <td class="t">2</td>
+</tr>
+<tr>
+  <td class="rank">6</td>
+  <td class="pkg"><code>@modelcontextprotocol/server-sequential-thinking</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">96<span class="rng">95–96</span></td>
+  <td class="d">100</td>
+  <td class="d">96</td>
+  <td class="d">100</td>
+  <td class="d">96</td>
+  <td class="d rob">89</td>
+  <td class="t">1</td>
+</tr>
+<tr>
+  <td class="rank">7</td>
+  <td class="pkg"><code>aws-s3-mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">96<span class="rng">95–96</span></td>
+  <td class="d">100</td>
+  <td class="d">99</td>
+  <td class="d">99</td>
+  <td class="d">99</td>
+  <td class="d rob">87</td>
+  <td class="t">3</td>
+</tr>
+<tr>
+  <td class="rank">8</td>
+  <td class="pkg"><code>malicious-mcp-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">96<span class="rng">94–97</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">98</td>
+  <td class="d">89</td>
+  <td class="d rob">97</td>
+  <td class="t">7</td>
+</tr>
+<tr>
+  <td class="rank">9</td>
+  <td class="pkg"><code>mcp-server-mysql</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">96<span class="rng">96–97</span></td>
+  <td class="d">100</td>
+  <td class="d">100</td>
+  <td class="d">99</td>
+  <td class="d">99</td>
+  <td class="d rob">87</td>
+  <td class="t">1</td>
+</tr>
+<tr>
+  <td class="rank">10</td>
+  <td class="pkg"><code>notion-mcp-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">96<span class="rng">95–96</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">100</td>
+  <td class="d">100</td>
+  <td class="d rob">85</td>
+  <td class="t">2</td>
+</tr>
+<tr>
+  <td class="rank">11</td>
+  <td class="pkg"><code>@atomicmail/mcp-modelcontextprotocol</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">95<span class="rng">93–95</span></td>
+  <td class="d">100</td>
+  <td class="d">92</td>
+  <td class="d">100</td>
+  <td class="d">100</td>
+  <td class="d rob">90</td>
+  <td class="t">3</td>
+</tr>
+<tr>
+  <td class="rank">12</td>
+  <td class="pkg"><code>@eslint/mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">95<span class="rng">94–96</span></td>
+  <td class="d">100</td>
+  <td class="d">99</td>
+  <td class="d">95</td>
+  <td class="d">99</td>
+  <td class="d rob">87</td>
+  <td class="t">1</td>
+</tr>
+<tr>
+  <td class="rank">13</td>
+  <td class="pkg"><code>@mantine/mcp-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">95<span class="rng">95–96</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">89</td>
+  <td class="d">99</td>
+  <td class="d rob">94</td>
+  <td class="t">4</td>
+</tr>
+<tr>
+  <td class="rank">14</td>
+  <td class="pkg"><code>@modelcontextprotocol/server-memory</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">95<span class="rng">94–95</span></td>
+  <td class="d">100</td>
+  <td class="d">94</td>
+  <td class="d">95</td>
+  <td class="d">100</td>
+  <td class="d rob">89</td>
+  <td class="t">9</td>
+</tr>
+<tr>
+  <td class="rank">15</td>
+  <td class="pkg"><code>@siemens/element-mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">95<span class="rng">94–95</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">99</td>
+  <td class="d">96</td>
+  <td class="d rob">86</td>
+  <td class="t">2</td>
+</tr>
+<tr>
+  <td class="rank">16</td>
+  <td class="pkg"><code>playwright-mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">95<span class="rng">95–96</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">98</td>
+  <td class="d">99</td>
+  <td class="d rob">85</td>
+  <td class="t">7</td>
+</tr>
+<tr>
+  <td class="rank">17</td>
+  <td class="pkg"><code>@hisma/server-puppeteer</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">94<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">98</td>
+  <td class="d">95</td>
+  <td class="d rob">83</td>
+  <td class="t">7</td>
+</tr>
+<tr>
+  <td class="rank">18</td>
+  <td class="pkg"><code>@knip/mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">94<span class="rng">93–94</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">99</td>
+  <td class="d">94</td>
+  <td class="d rob">80</td>
+  <td class="t">2</td>
+</tr>
+<tr>
+  <td class="rank">19</td>
+  <td class="pkg"><code>@upstash/context7-mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">94<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">93</td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d rob">86</td>
+  <td class="t">2</td>
+</tr>
+<tr>
+  <td class="rank">20</td>
+  <td class="pkg"><code>gemini-mcp-tool</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">94<span class="rng">94–95</span></td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d">99</td>
+  <td class="d">90</td>
+  <td class="d rob">90</td>
+  <td class="t">5</td>
+</tr>
+<tr>
+  <td class="rank">21</td>
+  <td class="pkg"><code>mcp-searxng</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">94<span class="rng">93–95</span></td>
+  <td class="d">100</td>
+  <td class="d">92</td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d rob">81</td>
+  <td class="t">4</td>
+</tr>
+<tr>
+  <td class="rank">22</td>
+  <td class="pkg"><code>rosetta-mcp-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">94<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">87</td>
+  <td class="d">98</td>
+  <td class="d">98</td>
+  <td class="d rob">94</td>
+  <td class="t">18</td>
+</tr>
+<tr>
+  <td class="rank">23</td>
+  <td class="pkg"><code>tavily-mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">94<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">90</td>
+  <td class="d">99</td>
+  <td class="d">99</td>
+  <td class="d rob">88</td>
+  <td class="t">5</td>
+</tr>
+<tr>
+  <td class="rank">24</td>
+  <td class="pkg"><code>@aikidosec/mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">93<span class="rng">93–96</span></td>
+  <td class="d">100</td>
+  <td class="d">92</td>
+  <td class="d">93</td>
+  <td class="d">95</td>
+  <td class="d rob">88</td>
+  <td class="t">4</td>
+</tr>
+<tr>
+  <td class="rank">25</td>
+  <td class="pkg"><code>@guhcostan/web-search-mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">93<span class="rng">92–93</span></td>
+  <td class="d">100</td>
+  <td class="d">99</td>
+  <td class="d">92</td>
+  <td class="d">99</td>
+  <td class="d rob">79</td>
+  <td class="t">2</td>
+</tr>
+<tr>
+  <td class="rank">26</td>
+  <td class="pkg"><code>@modelcontextprotocol/server-everything</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">93<span class="rng">92–94</span></td>
+  <td class="d">90</td>
+  <td class="d">92</td>
+  <td class="d">99</td>
+  <td class="d">100</td>
+  <td class="d rob">87</td>
+  <td class="t">13</td>
+</tr>
+<tr>
+  <td class="rank">27</td>
+  <td class="pkg"><code>newrelic-mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">93<span class="rng">92–93</span></td>
+  <td class="d">100</td>
+  <td class="d">91</td>
+  <td class="d">90</td>
+  <td class="d">98</td>
+  <td class="d rob">89</td>
+  <td class="t">18</td>
+</tr>
+<tr>
+  <td class="rank">28</td>
+  <td class="pkg"><code>@modelcontextprotocol/server-filesystem</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">92<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">87</td>
+  <td class="d">92</td>
+  <td class="d">100</td>
+  <td class="d rob">89</td>
+  <td class="t">14</td>
+</tr>
+<tr>
+  <td class="rank">29</td>
+  <td class="pkg"><code>ios-simulator-mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">92<span class="rng">92–93</span></td>
+  <td class="d">100</td>
+  <td class="d">81</td>
+  <td class="d">100</td>
+  <td class="d">98</td>
+  <td class="d rob">89</td>
+  <td class="t">14</td>
+</tr>
+<tr>
+  <td class="rank">30</td>
+  <td class="pkg"><code>@cexll/codex-mcp-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">91<span class="rng">91–92</span></td>
+  <td class="d">90</td>
+  <td class="d">87</td>
+  <td class="d">98</td>
+  <td class="d">93</td>
+  <td class="d rob">90</td>
+  <td class="t">8</td>
+</tr>
+<tr>
+  <td class="rank">31</td>
+  <td class="pkg"><code>@playwright/mcp</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">91<span class="rng">88–93</span></td>
+  <td class="d">100</td>
+  <td class="d">75</td>
+  <td class="d">100</td>
+  <td class="d">92</td>
+  <td class="d rob">100</td>
+  <td class="t">24</td>
+</tr>
+<tr>
+  <td class="rank">32</td>
+  <td class="pkg"><code>@ui5/mcp-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">91<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">87</td>
+  <td class="d">100</td>
+  <td class="d">99</td>
+  <td class="d rob">76</td>
+  <td class="t">10</td>
+</tr>
+<tr>
+  <td class="rank">33</td>
+  <td class="pkg"><code>@kazuph/mcp-fetch</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">90<span class="rng">90–91</span></td>
+  <td class="d">100</td>
+  <td class="d">93</td>
+  <td class="d">89</td>
+  <td class="d">96</td>
+  <td class="d rob">77</td>
+  <td class="t">1</td>
+</tr>
+<tr>
+  <td class="rank">34</td>
+  <td class="pkg"><code>@transloadit/mcp-server</code> </td>
+  <td class="grade gA">A</td>
+  <td class="score">90<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">94</td>
+  <td class="d">85</td>
+  <td class="d">100</td>
+  <td class="d rob">79</td>
+  <td class="t">7</td>
+</tr>
+<tr>
+  <td class="rank">35</td>
+  <td class="pkg"><code>@tosspayments/integration-guide-mcp</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">89<span class="rng">89–90</span></td>
+  <td class="d">100</td>
+  <td class="d">81</td>
+  <td class="d">99</td>
+  <td class="d">93</td>
+  <td class="d rob">83</td>
+  <td class="t">4</td>
+</tr>
+<tr>
+  <td class="rank">36</td>
+  <td class="pkg"><code>confluence-mcp-server</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">89<span class="rng">89–90</span></td>
+  <td class="d">100</td>
+  <td class="d">69</td>
+  <td class="d">98</td>
+  <td class="d">98</td>
+  <td class="d rob">89</td>
+  <td class="t">25</td>
+</tr>
+<tr>
+  <td class="rank">37</td>
+  <td class="pkg"><code>@microsoft/clarity-mcp-server</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">88<span class="rng">87–89</span></td>
+  <td class="d">100</td>
+  <td class="d">64</td>
+  <td class="d">100</td>
+  <td class="d">99</td>
+  <td class="d rob">85</td>
+  <td class="t">3</td>
+</tr>
+<tr>
+  <td class="rank">38</td>
+  <td class="pkg"><code>@modelcontextprotocol/server-github</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">88<span class="rng">88–89</span></td>
+  <td class="d">100</td>
+  <td class="d">69</td>
+  <td class="d">94</td>
+  <td class="d">97</td>
+  <td class="d rob">95</td>
+  <td class="t">26</td>
+</tr>
+<tr>
+  <td class="rank">39</td>
+  <td class="pkg"><code>claude-consult-mcp</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">88<span class="rng">87–88</span></td>
+  <td class="d">100</td>
+  <td class="d">64</td>
+  <td class="d">100</td>
+  <td class="d">99</td>
+  <td class="d rob">87</td>
+  <td class="t">9</td>
+</tr>
+<tr>
+  <td class="rank">40</td>
+  <td class="pkg"><code>lsp-mcp-server</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">88<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">64</td>
+  <td class="d">100</td>
+  <td class="d">98</td>
+  <td class="d rob">89</td>
+  <td class="t">29</td>
+</tr>
+<tr>
+  <td class="rank">41</td>
+  <td class="pkg"><code>mssql-mcp-server</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">87<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">69</td>
+  <td class="d">98</td>
+  <td class="d">100</td>
+  <td class="d rob">80</td>
+  <td class="t">33</td>
+</tr>
+<tr>
+  <td class="rank">42</td>
+  <td class="pkg"><code>@tocharianou/mcp-server-kibana</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">86<span class="rng">86–87</span></td>
+  <td class="d">100</td>
+  <td class="d">64</td>
+  <td class="d">96</td>
+  <td class="d">98</td>
+  <td class="d rob">87</td>
+  <td class="t">16</td>
+</tr>
+<tr>
+  <td class="rank">43</td>
+  <td class="pkg"><code>mcp-server-code-runner</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">85<span class="rng stable">exact</span></td>
+  <td class="d">85</td>
+  <td class="d">99</td>
+  <td class="d">99</td>
+  <td class="d">99</td>
+  <td class="d rob">87</td>
+  <td class="t">1</td>
+</tr>
+<tr>
+  <td class="rank">44</td>
+  <td class="pkg"><code>@solapi/mcp-server</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">84<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">52</td>
+  <td class="d">94</td>
+  <td class="d">98</td>
+  <td class="d rob">90</td>
+  <td class="t">46</td>
+</tr>
+<tr>
+  <td class="rank">45</td>
+  <td class="pkg"><code>@cyanheads/git-mcp-server</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">82<span class="rng">82–85</span></td>
+  <td class="d">100</td>
+  <td class="d">40</td>
+  <td class="d">100</td>
+  <td class="d">100</td>
+  <td class="d rob">89</td>
+  <td class="t">28</td>
+</tr>
+<tr>
+  <td class="rank">46</td>
+  <td class="pkg"><code>@tsmztech/mcp-server-salesforce</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">82<span class="rng">81–82</span></td>
+  <td class="d">100</td>
+  <td class="d">52</td>
+  <td class="d">98</td>
+  <td class="d">93</td>
+  <td class="d rob">83</td>
+  <td class="t">15</td>
+</tr>
+<tr>
+  <td class="rank">47</td>
+  <td class="pkg"><code>drawio-mcp-server</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">82<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">46</td>
+  <td class="d">98</td>
+  <td class="d">98</td>
+  <td class="d rob">85</td>
+  <td class="t">28</td>
+</tr>
+<tr>
+  <td class="rank">48</td>
+  <td class="pkg"><code>@rushdb/mcp-server</code> </td>
+  <td class="grade gB">B</td>
+  <td class="score">80<span class="rng">80–82</span></td>
+  <td class="d">100</td>
+  <td class="d">34</td>
+  <td class="d">100</td>
+  <td class="d">97</td>
+  <td class="d rob">89</td>
+  <td class="t">39</td>
+</tr>
+<tr>
+  <td class="rank">49</td>
+  <td class="pkg"><code>@professional-wiki/mediawiki-mcp-server</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">79<span class="rng">78–80</span></td>
+  <td class="d">100</td>
+  <td class="d">34</td>
+  <td class="d">100</td>
+  <td class="d">98</td>
+  <td class="d rob">80</td>
+  <td class="t">29</td>
+</tr>
+<tr>
+  <td class="rank">50</td>
+  <td class="pkg"><code>european-parliament-mcp-server</code> <span class="warn" title="reachable in only 1 of 3 runs">1/3</span></td>
+  <td class="grade gC">C</td>
+  <td class="score">78<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">28</td>
+  <td class="d">98</td>
+  <td class="d">98</td>
+  <td class="d rob">85</td>
+  <td class="t">63</td>
+</tr>
+<tr>
+  <td class="rank">51</td>
+  <td class="pkg"><code>@qase/mcp-server</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">77<span class="rng">76–77</span></td>
+  <td class="d">100</td>
+  <td class="d">28</td>
+  <td class="d">100</td>
+  <td class="d">98</td>
+  <td class="d rob">80</td>
+  <td class="t">80</td>
+</tr>
+<tr>
+  <td class="rank">52</td>
+  <td class="pkg"><code>@antv/mcp-server-chart</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">76<span class="rng">75–77</span></td>
+  <td class="d">100</td>
+  <td class="d">23</td>
+  <td class="d">100</td>
+  <td class="d">98</td>
+  <td class="d rob">84</td>
+  <td class="t">27</td>
+</tr>
+<tr>
+  <td class="rank">53</td>
+  <td class="pkg"><code>@alchemy/mcp-server</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">75<span class="rng">75–77</span></td>
+  <td class="d">100</td>
+  <td class="d">23</td>
+  <td class="d">98</td>
+  <td class="d">98</td>
+  <td class="d rob">79</td>
+  <td class="t">97</td>
+</tr>
+<tr>
+  <td class="rank">54</td>
+  <td class="pkg"><code>@ironbee-ai/devtools</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">74<span class="rng">73–75</span></td>
+  <td class="d">100</td>
+  <td class="d">23</td>
+  <td class="d">95</td>
+  <td class="d">96</td>
+  <td class="d rob">79</td>
+  <td class="t">51</td>
+</tr>
+<tr>
+  <td class="rank">55</td>
+  <td class="pkg"><code>@wonderwhy-er/desktop-commander</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">72<span class="rng">72–73</span></td>
+  <td class="d">100</td>
+  <td class="d">28</td>
+  <td class="d">88</td>
+  <td class="d">93</td>
+  <td class="d rob">76</td>
+  <td class="t">26</td>
+</tr>
+<tr>
+  <td class="rank">56</td>
+  <td class="pkg"><code>firecrawl-mcp</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">72<span class="rng">71–72</span></td>
+  <td class="d">100</td>
+  <td class="d">17</td>
+  <td class="d">89</td>
+  <td class="d">93</td>
+  <td class="d rob">84</td>
+  <td class="t">26</td>
+</tr>
+<tr>
+  <td class="rank">57</td>
+  <td class="pkg"><code>@doitintl/doit-mcp-server</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">71<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">11</td>
+  <td class="d">99</td>
+  <td class="d">98</td>
+  <td class="d rob">93</td>
+  <td class="t">135</td>
+</tr>
+<tr>
+  <td class="rank">58</td>
+  <td class="pkg"><code>@notionhq/notion-mcp-server</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">71<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">11</td>
+  <td class="d">95</td>
+  <td class="d">98</td>
+  <td class="d rob">89</td>
+  <td class="t">24</td>
+</tr>
+<tr>
+  <td class="rank">59</td>
+  <td class="pkg"><code>hostinger-api-mcp</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">71<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">11</td>
+  <td class="d">98</td>
+  <td class="d">98</td>
+  <td class="d rob">87</td>
+  <td class="t">223</td>
+</tr>
+<tr>
+  <td class="rank">60</td>
+  <td class="pkg"><code>novada-mcp</code> </td>
+  <td class="grade gC">C</td>
+  <td class="score">71<span class="rng">70–71</span></td>
+  <td class="d">100</td>
+  <td class="d">11</td>
+  <td class="d">99</td>
+  <td class="d">90</td>
+  <td class="d rob">80</td>
+  <td class="t">38</td>
+</tr>
+<tr>
+  <td class="rank">61</td>
+  <td class="pkg"><code>@smartbear/mcp</code> </td>
+  <td class="grade gD">D</td>
+  <td class="score">60<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">5</td>
+  <td class="d">100</td>
+  <td class="d">95</td>
+  <td class="d rob">72</td>
+  <td class="t">290</td>
+</tr>
+<tr>
+  <td class="rank">62</td>
+  <td class="pkg"><code>@softeria/ms-365-mcp-server</code> </td>
+  <td class="grade gD">D</td>
+  <td class="score">60<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">5</td>
+  <td class="d">99</td>
+  <td class="d">98</td>
+  <td class="d rob">80</td>
+  <td class="t">183</td>
+</tr>
+<tr>
+  <td class="rank">63</td>
+  <td class="pkg"><code>dataforseo-mcp-server</code> </td>
+  <td class="grade gD">D</td>
+  <td class="score">60<span class="rng stable">exact</span></td>
+  <td class="d">100</td>
+  <td class="d">5</td>
+  <td class="d">100</td>
+  <td class="d">100</td>
+  <td class="d rob">89</td>
+  <td class="t">89</td>
+</tr>
+<tr>
+  <td class="rank">64</td>
+  <td class="pkg"><code>@agentdeskai/browser-tools-mcp</code> </td>
+  <td class="grade gF">F</td>
+  <td class="score">55<span class="rng stable">exact</span></td>
+  <td class="d">40</td>
+  <td class="d">97</td>
+  <td class="d">96</td>
+  <td class="d">95</td>
+  <td class="d rob">88</td>
+  <td class="t">14</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h2 class="sec">Never started (63)</h2>
+<p class="note">Installable is not the same as runnable. These packages install from npm without complaint and then fail to complete an MCP handshake — most of them because they exit demanding a credential. They are listed because a census that silently drops its failures lies about the ecosystem, not to shame anyone: refusing to start without a key is a defensible design, it is just one a user discovers the hard way.</p>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Server</th><th>What happened</th></tr></thead>
+<tbody>
+<tr><td class="pkg"><code>@anyproto/anytype-mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Initializing Anytype MCP Server... | Can't connect to API. Please ensure Anytype is running and reachable.</td></tr>
+<tr><td class="pkg"><code>@apify/actors-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: [31mERROR[39m APIFY_TOKEN is required but not set in the environment variables or in ~/.apify/auth.json | APIFY_TOKEN is required but not set in the environment variables or in ~/.apify/auth.json</td></tr>
+<tr><td class="pkg"><code>@arikusi/deepseek-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: Configuration validation failed | Please set your DeepSeek API key: |   export DEEPSEEK_API_KEY=&quot;your-api-key-here&quot; |   - apiKey: DEEPSEEK_API_KEY is required</td></tr>
+<tr><td class="pkg"><code>@azure/mcp</code></td><td class="why">server wrote 288 non-protocol line(s) to stdout — this breaks MCP framing (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)</td></tr>
+<tr><td class="pkg"><code>@benborla29/mcp-server-mysql</code></td><td class="why">tools/list failed: transport error: server process exited with code 1 before responding to 'tools/list' (id 2)</td></tr>
+<tr><td class="pkg"><code>@brave/brave-search-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: A Brave API key is required via --brave-api-key, BRAVE_API_KEY, --brave-api-key-file, or BRAVE_API_KEY_FILE. You can get one at https://brave.com/search/api/. | Invalid configuration</td></tr>
+<tr><td class="pkg"><code>@browserstack/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 0 before responding to 'initialize' (id 1). Last server stderr: Error: BROWSERSTACK_USERNAME environment variable is required |     at main (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/8749a405c902c3d3/node_modules/@browserstack/mcp-server/dist/index.js:19:15) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/8749a405c902c3d3/node_modules/@browserstack/mcp-server/dist/index.js:31:1 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)</td></tr>
+<tr><td class="pkg"><code>@buildwithlayer/openapi-to-tools</code></td><td class="why">server wrote 5 non-protocol line(s) to stdout — this breaks MCP framing (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)</td></tr>
+<tr><td class="pkg"><code>@cognitionai/metabase-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/7c1631dabda55adf/node_modules/@cognitionai/metabase-mcp-server/dist/utils/config.js:13 |         throw new Error(&quot;METABASE_URL environment variable is required&quot;); |               ^ |  | Error: METABASE_URL environment variable is required |     at loadConfig (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/7c1631dabda55adf/node_modules/@cognitionai/metabase-mcp-server/dist/utils/config.js:13:15) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/7c1631dabda55adf/node_modules/@cognitionai/metabase-mcp-server/dist/server.js:15:16 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>@dokploy/mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/f6402708929be68c/node_modules/@dokploy/mcp/build/utils/clientConfig.js:52 |             throw new Error(&quot;Environment variable DOKPLOY_URL is not defined&quot;); |                   ^ |  | Error: Environment variable DOKPLOY_URL is not defined |     at ConfigManager.loadConfig (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/f6402708929be68c/node_modules/@dokploy/mcp/build/utils/clientConfig.js:52:19) |     at ConfigManager.getConfig (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/f6402708929be68c/node_modules/@dokploy/mcp/build/utils/clientConfig.js:44:32) |     at getClientConfig (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/f6402708929be68c/node_modules/@dokploy/mcp/build/utils/clientConfig.js:75:40) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/f6402708929be68c/node_modules/@dokploy/mcp/build/utils/apiClient.js:7:16 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>@dropthis/mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: dropthis-mcp: DROPTHIS_API_KEY is required (set it in your MCP client config).</td></tr>
+<tr><td class="pkg"><code>@dynatrace-oss/dynatrace-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr:  | ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ |   DEPRECATION NOTICE |   This local Dynatrace MCP Server is deprecated. Last release: v2.1.2. |   No further updates will be made. |  |   Please migrate to: |   - Local dev (VS Code, IntelliJ, Claude Code, Cursor, ...): |     https://github.com/Dynatrace/dynatrace-for-ai/ + dtctl |     https://github.com/dynatrace-oss/dtctl |   - Remote MCP Server (no local setup required): |     https://www.dynatrace.com/hub/detail/dynatrace-mcp-server/ | ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ |  | Initializing Dynatrace MCP Server v2.1.2... | Please set DT_ENVIRONMENT environment variable to your Dynatrace Platform Environment</td></tr>
+<tr><td class="pkg"><code>@esaio/esa-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Configuration error: Error: ESA_ACCESS_TOKEN environment variable is required |     at c (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/ce7623e6db249f3c/node_modules/@esaio/esa-mcp-server/bin/index.js:2:1390) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/ce7623e6db249f3c/node_modules/@esaio/esa-mcp-server/bin/index.js:30:114 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)</td></tr>
+<tr><td class="pkg"><code>@fruggr/zendesk-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr:     ], |     &quot;message&quot;: &quot;ZENDESK_SUBDOMAIN is required&quot; |   }, |   { |     &quot;origin&quot;: &quot;string&quot;, |     &quot;code&quot;: &quot;too_small&quot;, |     &quot;minimum&quot;: 1, |     &quot;inclusive&quot;: true, |     &quot;path&quot;: [ |       &quot;oauthClientId&quot; |     ], |     &quot;message&quot;: &quot;Too small: expected string to have &gt;=1 characters&quot; |   } | ] |     at loadConfig (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/4b0cb73700542fcb/node_modules/@fruggr/zendesk-mcp-server/dist/index.js:693:22) |     at main (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/4b0cb73700542fcb/node_modules/@fruggr/zendesk-mcp-server/dist/index.js:4068:17) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/4b0cb73700542fcb/node_modules/@fruggr/zendesk-mcp-server/dist/index.js:4082:1 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)</td></tr>
+<tr><td class="pkg"><code>@gongrzhe/server-gmail-autoauth-mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: OAuth keys file not found. Please place gcp-oauth.keys.json in current directory or C:\Users\Varun Sharma\.gmail-mcp</td></tr>
+<tr><td class="pkg"><code>@growthbook/mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/a0f5de0d2b8ca0d2/node_modules/@growthbook/mcp/server/utils.js:43 |         throw new Error(&quot;GB_API_KEY environment variable is required&quot;); |               ^ |  | Error: GB_API_KEY environment variable is required |     at getApiKey (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/a0f5de0d2b8ca0d2/node_modules/@growthbook/mcp/server/utils.js:43:15) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/a0f5de0d2b8ca0d2/node_modules/@growthbook/mcp/server/index.js:16:23 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>@heroku/mcp-server</code></td><td class="why">wall timeout 105s</td></tr>
+<tr><td class="pkg"><code>@hubspot/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/e954c1e63b44fb9b/node_modules/@hubspot/mcp-server/dist/utils/client.js:12 |             throw new Error('HubSpot access token is required. Set PRIVATE_APP_ACCESS_TOKEN in your environment variables and retry.'); |                   ^ |  | Error: HubSpot access token is required. Set PRIVATE_APP_ACCESS_TOKEN in your environment variables and retry. |     at new HubSpotClient (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/e954c1e63b44fb9b/node_modules/@hubspot/mcp-server/dist/utils/client.js:12:19) |     at new UserCredentialsTool (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/e954c1e63b44fb9b/node_modules/@hubspot/mcp-server/dist/tools/oauth/getUserDetailsTool.js:35:23) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/e954c1e63b44fb9b/node_modules/@hubspot/mcp-server/dist/tools/toolsRegistry.js:26:14 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>@kelceyp/caw-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: npm warn cleanup Failed to remove some directories [ | npm warn cleanup   [ | npm warn cleanup     '\\\\?\\C:\\Users\\Varun Sharma\\AppData\\Local\\npm-cache\\_npx\\32553ae835c3c1c6\\node_modules\\@kelceyp\\caw-server', | npm warn cleanup     [Error: EPERM: operation not permitted, rmdir 'C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\32553ae835c3c1c6\node_modules\@kelceyp\caw-server\dist'] { | npm warn cleanup       errno: -4048, | npm warn cleanup       code: 'EPERM', | npm warn cleanup       syscall: 'rmdir', | npm warn cleanup       path: 'C:\\Users\\Varun Sharma\\AppData\\Local\\npm-cache\\_npx\\32553ae835c3c1c6\\node_modules\\@kelceyp\\caw-server\\dist' | npm warn cleanup     } | npm warn cleanup   ] | npm warn cleanup ]</td></tr>
+<tr><td class="pkg"><code>@kintone/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/b2db60d2046cbad3/node_modules/@kintone/mcp-server/dist/config/parser.js:19 |     throw new Error(`Environment variables are missing or invalid:\n${errorMessages.join(&quot;\n&quot;)}`); |           ^ |  | Error: Environment variables are missing or invalid: | KINTONE_BASE_URL: Required |     at parseKintoneMcpServerConfig (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/b2db60d2046cbad3/node_modules/@kintone/mcp-server/dist/config/parser.js:19:11) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/b2db60d2046cbad3/node_modules/@kintone/mcp-server/dist/config/index.js:4:16 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>@launchdarkly/mcp-server</code></td><td class="why">server wrote 10 non-protocol line(s) to stdout — this breaks MCP framing (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)</td></tr>
+<tr><td class="pkg"><code>@mapbox/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: node:internal/modules/esm/resolve:204 |   const resolvedOption = FSLegacyMainResolve(pkgPath, packageConfig.main, baseStringified); |                          ^ |  | Error: Cannot find package 'C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\e0bb14173bd5ddee\node_modules\@opentelemetry\api\index.js' imported from C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\e0bb14173bd5ddee\node_modules\@mapbox\mcp-server\dist\esm\index.js |     at legacyMainResolve (node:internal/modules/esm/resolve:204:26) |     at packageResolve (node:internal/modules/esm/resolve:778:12) |     at moduleResolve (node:internal/modules/esm/resolve:854:18) |     at defaultResolve (node:internal/modules/esm/resolve:984:11) |     at ModuleLoader.defaultResolve (node:internal/modules/esm/loader:780:12) |     at #cachedDefaultResolve (node:internal/modules/esm/loader:704:25) |     at ModuleLoader.resolve (node:internal/modules/esm/loader:687:38) |     at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:305:38) |     at ModuleJob._link (node:internal/modules/esm/module_job:137:49) { |   code: 'ERR_MODULE_NOT_FOUND' | } |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>@mgsoftwarebv/mcp-server-bridge</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:36 |   throw Error('Dynamic require of &quot;' + x3 + '&quot; is not supported'); |         ^ |  | Error: Dynamic require of &quot;crypto&quot; is not supported |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:36:9 |     at ../../node_modules/@redis/client/dist/lib/lua-script.js (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:95501:25) |     at __require2 (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:42:50) |     at ../../node_modules/@redis/client/dist/index.js (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:114846:24) |     at __require2 (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:42:50) |     at ../../node_modules/redis/dist/index.js (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:121129:20) |     at __require2 (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:42:50) |     at ../cache/src/shared-redis.ts (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:121253:28) |     at __init (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:39:56) |     at ../cache/src/redis-client.ts (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/6a13d3b3b3ac39fe/node_modules/@mgsoftwarebv/mcp-server-bridge/dist/index.js:121340:5) |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>@microsoft/workiq</code></td><td class="why">server wrote 26 non-protocol line(s) to stdout — this breaks MCP framing (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)</td></tr>
+<tr><td class="pkg"><code>@modelcontextprotocol/server-everart</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: EVERART_API_KEY environment variable is not set</td></tr>
+<tr><td class="pkg"><code>@modelcontextprotocol/server-gitlab</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: GITLAB_PERSONAL_ACCESS_TOKEN environment variable is not set</td></tr>
+<tr><td class="pkg"><code>@modelcontextprotocol/server-slack</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Please set SLACK_BOT_TOKEN and SLACK_TEAM_ID environment variables</td></tr>
+<tr><td class="pkg"><code>@nexus2520/bitbucket-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: BITBUCKET_USERNAME and either BITBUCKET_APP_PASSWORD (Cloud) or BITBUCKET_TOKEN (Server/DC) are required.</td></tr>
+<tr><td class="pkg"><code>@nexus2520/jira-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: JIRA_EMAIL and JIRA_API_TOKEN are required | Please set these in your MCP settings configuration |  | Example: |   JIRA_EMAIL=your-email@company.com |   JIRA_API_TOKEN=your-api-token |   JIRA_BASE_URL=https://your-domain.atlassian.net</td></tr>
+<tr><td class="pkg"><code>@perplexity-ai/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: PERPLEXITY_API_KEY environment variable is required</td></tr>
+<tr><td class="pkg"><code>@postman/postman-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Invalid environment variables for Postman MCP server: { _errors: [], POSTMAN_API_KEY: { _errors: [ 'Required' ] } }</td></tr>
+<tr><td class="pkg"><code>@rollbar/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: No Rollbar configuration found. Set ROLLBAR_ACCESS_TOKEN, or create .rollbar-mcp.json (in cwd or home), or set ROLLBAR_CONFIG_FILE.</td></tr>
+<tr><td class="pkg"><code>@roychri/mcp-server-asana</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Please set ASANA_ACCESS_TOKEN environment variable</td></tr>
+<tr><td class="pkg"><code>@runpod/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: RUNPOD_API_KEY environment variable is required</td></tr>
+<tr><td class="pkg"><code>@sentry/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Environment variables: |   SENTRY_ACCESS_TOKEN     Sentry auth token (alternative to --access-token) |   SENTRY_CLIENT_ID        Override OAuth client ID for device code flow |   OPENAI_API_KEY          OpenAI API key for AI-powered search tools |   ANTHROPIC_API_KEY       Anthropic API key for AI-powered search tools |   OPENROUTER_API_KEY      OpenRouter API key for AI-powered search tools |   OPENROUTER_MODEL        OpenRouter model (default: openai/gpt-5) |   EMBEDDED_AGENT_PROVIDER Provider override: openai, azure-openai, anthropic, or openrouter |   MCP_DISABLE_SKILLS      Disable specific skills (comma-separated) |  | Examples: |   @sentry/mcp-server                                        # device code auth (sentry.io only) |   @sentry/mcp-server --access-token=TOKEN |   @sentry/mcp-server --access-token=TOKEN --skills=inspect,triage |   @sentry/mcp-server --access-token=TOKEN --host=sentry.example.com |   @sentry/mcp-server --access-token=TOKEN --host=sentry.internal:9000 --insecure-http |   @sentry/mcp-server --access-token=TOKEN --host=sentry.example.com --disable-skills=seer |   @sentry/mcp-server --access-token=TOKEN --agent-provider=azure-openai --openai-base-url=https://example.openai.azure.com/openai/v1/ |   @sentry/mcp-server --access-token=TOKEN --agent-provider=anthropic |   @sentry/mcp-server --access-token=TOKEN --agent-provider=openrouter</td></tr>
+<tr><td class="pkg"><code>@shopify/dev-mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: npm error Invalid Version:  | npm error A complete log of this run can be found in: C:\Users\Varun Sharma\AppData\Local\npm-cache\_logs\2026-07-21T12_49_56_747Z-debug-0.log</td></tr>
+<tr><td class="pkg"><code>@shortcut/mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: A Shortcut api token is required.</td></tr>
+<tr><td class="pkg"><code>@stripe/mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: [31m[39m |    Stripe API key not provided. Please either pass it as an argument --api-key=$KEY or set the STRIPE_SECRET_KEY environment variable. |  | C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\bce731a0395adf49\node_modules\@stripe\mcp\dist\cli.js:34 |         throw new Error('Stripe API key not provided. Please either pass it as an argument --api-key=$KEY or set the STRIPE_SECRET_KEY environment variable.'); |               ^ |  | Error: Stripe API key not provided. Please either pass it as an argument --api-key=$KEY or set the STRIPE_SECRET_KEY environment variable. |     at parseArgs (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\bce731a0395adf49\node_modules\@stripe\mcp\dist\cli.js:34:15) |     at main (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\bce731a0395adf49\node_modules\@stripe\mcp\dist\index.js:18:41) |     at Object.&lt;anonymous&gt; (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\bce731a0395adf49\node_modules\@stripe\mcp\dist\index.js:81:5) |     at Module._compile (node:internal/modules/cjs/loader:1730:14) |     at Object..js (node:internal/modules/cjs/loader:1895:10) |     at Module.load (node:internal/modules/cjs/loader:1465:32) |     at Function._load (node:internal/modules/cjs/loader:1282:12) |     at TracingChannel.traceSync (node:diagnostics_channel:322:14) |     at wrapModuleLoad (node:internal/modules/cjs/loader:235:24) |     at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5) |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>@taazkareem/clickup-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: FATAL STARTUP ERROR: Missing required environment variables: clickupApiKey, clickupTeamId | Error: Missing required environment variables: clickupApiKey, clickupTeamId |     at validateConfiguration (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/8f282576af1ca14e/node_modules/@taazkareem/clickup-mcp-server/build/config.js:1:10741) |     at main (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/8f282576af1ca14e/node_modules/@taazkareem/clickup-mcp-server/build/index.js:2:11706) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/8f282576af1ca14e/node_modules/@taazkareem/clickup-mcp-server/build/index.js:2:13781 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)</td></tr>
+<tr><td class="pkg"><code>@tiberriver256/mcp-server-azure-devops</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: DEBUG - Environment variables in getConfig(): |   AZURE_DEVOPS_ORG_URL: NOT SET |   AZURE_DEVOPS_AUTH_METHOD: NOT SET |   AZURE_DEVOPS_PAT: NOT SET |   AZURE_DEVOPS_DEFAULT_PROJECT: NOT SET |   AZURE_DEVOPS_API_VERSION: NOT SET |   NODE_ENV: NOT SET |  | ERROR: Organization URL is required but was not provided. | Config: { |   &quot;organizationUrl&quot;: &quot;&quot;, |   &quot;authMethod&quot;: &quot;azure-identity&quot; | } | Error starting server: AzureDevOpsValidationError: Organization URL is required</td></tr>
+<tr><td class="pkg"><code>@unthread-io/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: MCP Server unhandled error { |   error: Error: Either API Key or Access Token is required |       at new BaseUnthreadClient (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\4bf7a596f1309e0d\node_modules\@unthread-io\node\build\base-client.js:15:19) |       at new UnthreadClient (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\4bf7a596f1309e0d\node_modules\@unthread-io\node\build\index.js:103:40) |       at createBaseUnthreadMcpServer (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\4bf7a596f1309e0d\node_modules\@unthread-io\mcp-server\build\common.js:7:28) |       at main (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\4bf7a596f1309e0d\node_modules\@unthread-io\mcp-server\build\index.js:47:68) |       at Object.&lt;anonymous&gt; (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\4bf7a596f1309e0d\node_modules\@unthread-io\mcp-server\build\index.js:58:5) |       at Module._compile (node:internal/modules/cjs/loader:1730:14) |       at Object..js (node:internal/modules/cjs/loader:1895:10) |       at Module.load (node:internal/modules/cjs/loader:1465:32) |       at Function._load (node:internal/modules/cjs/loader:1282:12) |       at TracingChannel.traceSync (node:diagnostics_channel:322:14) | }</td></tr>
+<tr><td class="pkg"><code>@vantasdk/vanta-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Failed to start Vanta MCP Server: Error: VANTA_ENV_FILE environment variable is required |     at loadCredentials (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/cf0d581a1bedc1a2/node_modules/@vantasdk/vanta-mcp-server/build/auth.js:20:15) |     at fetchNewToken (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/cf0d581a1bedc1a2/node_modules/@vantasdk/vanta-mcp-server/build/auth.js:42:25) |     at getValidToken (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/cf0d581a1bedc1a2/node_modules/@vantasdk/vanta-mcp-server/build/auth.js:80:30) |     at initializeToken (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/cf0d581a1bedc1a2/node_modules/@vantasdk/vanta-mcp-server/build/auth.js:96:11) |     at main (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/cf0d581a1bedc1a2/node_modules/@vantasdk/vanta-mcp-server/build/index.js:13:15) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/cf0d581a1bedc1a2/node_modules/@vantasdk/vanta-mcp-server/build/index.js:36:1 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)</td></tr>
+<tr><td class="pkg"><code>@z_ai/mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: [2026-07-21T13:01:06.983Z] ERROR: Application startup failed: [{&quot;message&quot;:&quot;Z_AI_API_KEY environment variable is required, please set your actual API key&quot;}]</td></tr>
+<tr><td class="pkg"><code>@zereight/mcp-gitlab</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Tool &quot;get_branch&quot; is defined in multiple toolsets: &quot;merge_requests&quot; and &quot;branches&quot; | Tool &quot;list_branches&quot; is defined in multiple toolsets: &quot;merge_requests&quot; and &quot;branches&quot; | [31mERROR[39m [18:31:45.223] (28756): [36mGITLAB_PERSONAL_ACCESS_TOKEN environment variable is not set[39m | [32mINFO[39m [18:31:45.224] (28756): [36mEither set GITLAB_PERSONAL_ACCESS_TOKEN or enable OAuth with GITLAB_USE_OAUTH=true[39m</td></tr>
+<tr><td class="pkg"><code>aether-code</code></td><td class="why">server wrote 10 non-protocol line(s) to stdout — this breaks MCP framing (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)</td></tr>
+<tr><td class="pkg"><code>argocd-mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: index.js &lt;command&gt; |  | Commands: |   index.js stdio  Start ArgoCD MCP server using stdio. |   index.js sse    Start ArgoCD MCP server using SSE. |   index.js http   Start ArgoCD MCP server using Http Stream. |  | Options: |   --help     Show help                                                 [boolean] |   --version  Show version number                                       [boolean] |  | Not enough non-option arguments: got 0, need at least 1</td></tr>
+<tr><td class="pkg"><code>bitbucket-mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/a5d88ed8e014be43/node_modules/bitbucket-mcp/dist/index.js:177 |             throw new Error(&quot;Either BITBUCKET_TOKEN or BITBUCKET_USERNAME/PASSWORD is required&quot;); |                   ^ |  | Error: Either BITBUCKET_TOKEN or BITBUCKET_USERNAME/PASSWORD is required |     at new BitbucketServer (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/a5d88ed8e014be43/node_modules/bitbucket-mcp/dist/index.js:177:19) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/a5d88ed8e014be43/node_modules/bitbucket-mcp/dist/index.js:3366:16 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>buggazi</code></td><td class="why">server wrote 205 non-protocol line(s) to stdout — this breaks MCP framing (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)</td></tr>
+<tr><td class="pkg"><code>cclsp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: configPath is required when CCLSP_CONFIG_PATH environment variable is not set</td></tr>
+<tr><td class="pkg"><code>docusaurus-plugin-mcp-server</code></td><td class="why">server wrote 8 non-protocol line(s) to stdout — this breaks MCP framing (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)</td></tr>
+<tr><td class="pkg"><code>hvip-mcp-server</code></td><td class="why">wall timeout 105s</td></tr>
+<tr><td class="pkg"><code>kubernetes-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr:       --cluster-provider string   Cluster provider strategy to use (one of: disabled, in-cluster, kcp, kubeconfig). If not set, the server will auto-detect based on the environment. |       --config string             Path of the config file. |       --config-dir string         Path to drop-in configuration directory (files loaded in lexical order). Defaults to conf.d relative to the config file if --config is set. |       --disable-destructive       If true, tools annotated with destructiveHint=true are disabled |       --disable-multi-cluster     Disable multi cluster tools. Optional. If true, all tools will be run against the default cluster/context. |   -h, --help                      help for kubernetes-mcp-server |       --kubeconfig string         Path to the kubeconfig file to use for authentication |       --list-output string        Output format for resource list operations (one of: yaml, table). Defaults to table. |       --log-file string           Defines the server log file path. Required for logging in stdio mode; overrides stdout in HTTP mode. Set to &quot;stderr&quot; to log to the standard error stream. |       --log-level int             Set the log level (from 0 to 9) |       --port string               Start a streamable HTTP and SSE HTTP server on the specified port (e.g. 8080) |       --read-only                 If true, only tools annotated with readOnlyHint=true are exposed |       --require-tls               Require TLS for server and all outbound connections |       --sse-base-url string       SSE public base URL to use when sending the endpoint message (e.g. https://example.com) |       --stateless                 If true, run the MCP server in stateless mode (disables tool/prompt change notifications). Useful for container deployments and load balancing. Default is false (stateful mode) |       --tls-cert string           Path to TLS certificate file for HTTPS. Must be used together with --tls-key. |       --tls-key string            Path to TLS private key file for HTTPS. Must be used together with --tls-cert. |       --toolsets strings          Comma-separated list of MCP toolsets to use (available toolsets: config, core, helm, kcp, kiali, kubevirt, netobserv, tekton). Defaults to core, config. |       --version                   Print version information and quit |</td></tr>
+<tr><td class="pkg"><code>mcp-bitbucket-server</code></td><td class="why">server wrote 1 non-protocol line(s) to stdout — this breaks MCP framing (MCP stdio requires stdout to carry *only* newline-delimited JSON-RPC; send logs to stderr)</td></tr>
+<tr><td class="pkg"><code>mcp-crypto-price</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Fatal error in main(): Error: COINCAP_API_KEY environment variable is required. Get your free API key at https://pro.coincap.io/dashboard |     at main (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/41ea4a56354d6fbe/node_modules/mcp-crypto-price/dist/index.js:468:15) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/41ea4a56354d6fbe/node_modules/mcp-crypto-price/dist/index.js:496:5 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)</td></tr>
+<tr><td class="pkg"><code>mcp-server-kubernetes</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: Cannot find module '@opentelemetry/core' | Require stack: | - C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\92668d6008b43da4\node_modules\@opentelemetry\sdk-node\build\src\index.js |     at Function._resolveFilename (node:internal/modules/cjs/loader:1401:15) |     at defaultResolveImpl (node:internal/modules/cjs/loader:1057:19) |     at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1062:22) |     at Function._load (node:internal/modules/cjs/loader:1211:37) |     at TracingChannel.traceSync (node:diagnostics_channel:322:14) |     at wrapModuleLoad (node:internal/modules/cjs/loader:235:24) |     at Module.require (node:internal/modules/cjs/loader:1487:12) |     at require (node:internal/modules/helpers:135:16) |     at Object.&lt;anonymous&gt; (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\92668d6008b43da4\node_modules\@opentelemetry\sdk-node\build\src\index.js:15:16) |     at Module._compile (node:internal/modules/cjs/loader:1730:14) { |   code: 'MODULE_NOT_FOUND', |   requireStack: [ |     'C:\\Users\\Varun Sharma\\AppData\\Local\\npm-cache\\_npx\\92668d6008b43da4\\node_modules\\@opentelemetry\\sdk-node\\build\\src\\index.js' |   ] | } |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>pulsecloud-mcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: node:events:496 |       throw er; // Unhandled 'error' event |       ^ |  | Error: listen EADDRINUSE: address already in use 0.0.0.0:3002 |     at Server.setupListenHandle [as _listen2] (node:net:1939:16) |     at listenInCluster (node:net:1996:12) |     at node:net:2205:7 |     at process.processTicksAndRejections (node:internal/process/task_queues:90:21) | Emitted 'error' event on Server instance at: |     at emitErrorNT (node:net:1975:8) |     at process.processTicksAndRejections (node:internal/process/task_queues:90:21) { |   code: 'EADDRINUSE', |   errno: -4091, |   syscall: 'listen', |   address: '0.0.0.0', |   port: 3002 | } |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>serper-search-scrape-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/109efb2ce6006f16/node_modules/serper-search-scrape-mcp-server/build/index.js:14 |     throw new Error(&quot;SERPER_API_KEY environment variable is required&quot;); |           ^ |  | Error: SERPER_API_KEY environment variable is required |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/109efb2ce6006f16/node_modules/serper-search-scrape-mcp-server/build/index.js:14:11 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>slack-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Error: Command failed: C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\0eb08d54ea065c82\node_modules\slack-mcp-server-windows-amd64\bin\slack-mcp-server-windows-amd64.exe |     at genericNodeError (node:internal/errors:983:15) |     at wrappedFn (node:internal/errors:537:14) |     at checkExecSyncError (node:child_process:882:11) |     at Object.execFileSync (node:child_process:918:15) |     at Object.&lt;anonymous&gt; (C:\Users\Varun Sharma\AppData\Local\npm-cache\_npx\0eb08d54ea065c82\node_modules\slack-mcp-server\bin\index.js:64:14) |     at Module._compile (node:internal/modules/cjs/loader:1730:14) |     at Object..js (node:internal/modules/cjs/loader:1895:10) |     at Module.load (node:internal/modules/cjs/loader:1465:32) |     at Function._load (node:internal/modules/cjs/loader:1282:12) |     at TracingChannel.traceSync (node:diagnostics_channel:322:14) { |   status: 1, |   signal: null, |   output: [ null, null, null ], |   pid: 29232, |   stdout: null, |   stderr: null | } |  | Node.js v22.16.0</td></tr>
+<tr><td class="pkg"><code>slite-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: An error occurred: Slite API key not provided. Please either pass it as an argument --api-key=$KEY or set the SLITE_API_KEY environment variable.</td></tr>
+<tr><td class="pkg"><code>storybook-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1)</td></tr>
+<tr><td class="pkg"><code>tapd-mcp-server</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: 启动失败: Error: 缺少 TAPD_ACCESS_TOKEN，请在 MCP 配置 env 中填写。 |     at validateTapdConfig (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/9dd5e6facbfb4208/node_modules/tapd-mcp-server/dist/tapd/config.js:17:15) |     at main (file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/9dd5e6facbfb4208/node_modules/tapd-mcp-server/dist/index.js:22:5) |     at file:///C:/Users/Varun%20Sharma/AppData/Local/npm-cache/_npx/9dd5e6facbfb4208/node_modules/tapd-mcp-server/dist/index.js:33:5 |     at ModuleJob.run (node:internal/modules/esm/module_job:274:25) |     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:644:26) |     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)</td></tr>
+<tr><td class="pkg"><code>xcodebuildmcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr:   project-scaffolding   Project Scaffolding |   simulator             iOS Simulator Development |   simulator-management  Simulator Management |   swift-package         Swift Package Development |   ui-automation         UI Automation |   utilities             Build Utilities |   xcode-ide             Xcode IDE Integration |   daemon &lt;action&gt;       Manage the xcodebuildmcp daemon |  | Options: |       --log-level               Set log verbosity level  [string] [choices: &quot;none&quot;, &quot;error&quot;, &quot;warn&quot;, &quot;info&quot;, &quot;debug&quot;] [default: &quot;none&quot;] |       --style                   Output style (normal is detailed; minimal is compact MCP-like output)  [string] [choices: &quot;normal&quot;, &quot;minimal&quot;] [default: &quot;normal&quot;] |       --file-path-render-style  Render file artifacts as a compact tree or labeled list in text output  [string] [choices: &quot;tree&quot;, &quot;list&quot;] |   -h, --help                    Show help  [boolean] |   -v, --version                 Show version number  [boolean] |  | Run 'xcodebuildmcp mcp' to start the MCP server. | Run 'xcodebuildmcp tools' to see all available tools. | Run 'xcodebuildmcp &lt;workflow&gt; &lt;tool&gt; --help' for tool-specific help. |</td></tr>
+<tr><td class="pkg"><code>xmcp</code></td><td class="why">failed to connect: transport error: server process exited with code 1 before responding to 'initialize' (id 1). Last server stderr: Usage: xmcp [options] [command] |  | The MCP framework CLI |  | Options: |   -V, --version                   output the version number |   -h, --help                      display help for command |  | Commands: |   dev [options]                   Start development mode |   build [options]                 Build for production |   create [options] &lt;type&gt; &lt;name&gt;  Scaffold a new tool, resource, prompt, or |                                   widget |   help [command]                  display help for command</td></tr>
+</tbody>
+</table>
+</div>
+
+<footer>
+Generated by <code>scripts/leaderboard/build-leaderboard.js</code> from 3 full fleet runs on one machine.
+Raw per-server documents, the fleet list, and the method note are in the
+<a href="https://github.com/Shodh-Labs/jig">jig repository</a>.
+This table describes the servers as measured on 2026-07-21; packages change, and it will age.
+</footer>
+</div>
+</body>
+</html>
