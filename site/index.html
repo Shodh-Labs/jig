@@ -242,7 +242,7 @@
     </div>
 
     <div class="gauge" id="gauge">
-      <div class="gauge-top"><span>Report card</span><span>rubric-v1.1</span></div>
+      <div class="gauge-top"><span>Report card</span><span>rubric-v1.5</span></div>
       <div class="gauge-arc">
         <svg viewBox="0 0 220 132" role="img" aria-label="Composite score 93 out of 100, grade A">
           <path class="arc-bg" d="M18 118 A 92 92 0 0 1 202 118"/>
@@ -304,9 +304,9 @@
           <span class="src">arXiv:2606.30317</span>
         </div>
         <div class="ro">
-          <div class="n">42%</div>
-          <div class="l">of 50 popular public servers failed at startup</div>
-          <span class="src">jig census, 2026-07-19</span>
+          <div class="n">50%</div>
+          <div class="l">of 127 public servers never answered <span class="mono">initialize</span></div>
+          <span class="src">jig census v2, 2026-07-21</span>
         </div>
         <div class="ro">
           <div class="n">97%</div>
@@ -411,12 +411,12 @@
       </div>
       <div class="cred">
         <h3>The census</h3>
-        <p>50 public servers measured: the distribution jig grades against — and a public correction where our own first reading was wrong.</p>
+        <p>50 servers priced, then 127 graded dimension by dimension — the distribution jig grades against, the dataset its weights are fitted to, and a public correction where our own first reading was wrong.</p>
         <a href="https://github.com/Shodh-Labs/jig/blob/main/docs/census/2026-07-19-state-of-mcp-servers.md">Read the census →</a>
       </div>
       <div class="cred">
-        <h3>rubric-v1.1</h3>
-        <p>Weights and penalty tables in the open. Deliberately arguable — if the rubric is wrong, that is a fixable, public thing.</p>
+        <h3>rubric-v1.5</h3>
+        <p>Weights and penalty tables in the open — now fitted to a 63-server spread census rather than asserted, with every rejected candidate weighting recorded. Deliberately arguable: if the rubric is wrong, that is a fixable, public thing.</p>
         <a href="https://github.com/Shodh-Labs/jig#jig-check--the-one-command-report-card">Read the rubric →</a>
       </div>
     </div>
@@ -438,7 +438,7 @@
           <li><b>Description quality is deterministic heuristics <em>by default</em></b>, never an LLM verdict, and every report says so. An opt-in labelled judge (<code>jig check --judge</code>) asks a model the three questions a heuristic cannot — does the description state its purpose, distinguish its siblings, and document its parameters — but it is off by default, reported in its own section, and never scored: the composite is byte-identical with and without it.</li>
           <li><b>Only <span class="mono">bench</span> and <span class="mono">eval</span> ever need a model.</b> <span class="mono">check</span>, <span class="mono">context</span>, <span class="mono">budget</span>, <span class="mono">inspect</span> and <span class="mono">auth</span> have never needed a key. For the two that do, there are now three keyless-or-not options: your host&rsquo;s model over MCP sampling, a local endpoint via <span class="mono">--base-url --no-auth</span>, or your own key.</li>
           <li><b>Sampling cannot pin the model.</b> A host chooses which model answers, so a sampling-backed bench reports whatever identity the host returns &mdash; or <span class="mono">unknown &mdash; host-selected</span>. Use <span class="mono">--base-url</span> or your own key when you need to name the model under test.</li>
-          <li><b>The ecosystem leaderboard is being generated</b> and will publish at <span class="mono">/leaderboard/</span>.</li>
+          <li><b>The ecosystem leaderboard is still unpublished, and the reason changed.</b> Its original blocker &mdash; a stdout-polluting server could still read A &mdash; shipped as the protocol ceiling. Re-grading the 127-server fleet then surfaced a second one: <b>robustness is the only dimension with a live-measured input</b> (boot timing), and it drifts between runs on the same machine &mdash; enough to move a card by several points and a letter grade. Publishing per-vendor grades that move when our laptop is busy would be the dishonesty this tool exists to catch, so the leaderboard waits on a stated measurement method: repeated runs, and a published tolerance.</li>
           <li><b>Corrections are published as loudly as findings</b> — see the census for the first one.</li>
         </ul>
       </div>

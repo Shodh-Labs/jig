@@ -134,3 +134,52 @@ Harness and per-flag documentation: [`scripts/census2/README.md`](../../scripts/
 Fleet list: [`data/census2-servers.json`](../../data/census2-servers.json) · Raw per-server check documents: [`data/census2-raw.json`](../../data/census2-raw.json) · Calibration aggregate: [`data/census2-calibration.json`](../../data/census2-calibration.json).
 
 *Wall-clock time for the full 127-server run: 20 minutes at concurrency 4.*
+
+---
+
+## Re-running this changes robustness scores (2026-07-21)
+
+The fleet was run twice on the same machine, from the same list: once under
+`rubric-v1.4`, and once again after `rubric-v1.5` shipped. Reachability was
+identical both times — 63 checked, 64 failed, the same servers in each bucket —
+and four of the five dimensions returned byte-identical scores.
+
+**Robustness did not.** It moved on 62 of 63 servers, and it moved down:
+
+| | robustness delta, run 2 − run 1 |
+|:--|--:|
+| mean | −7.78 |
+| median | −8.24 |
+| worst | −20.21 |
+| servers moving more than 5 points | 40 of 63 |
+
+Robustness is the only dimension with a **live-measured input**: it times how
+long a server takes to answer `initialize`, less the measured `npx` launcher
+floor. Everything else is computed from the tool surface, which is a fixed
+document. So robustness is the only dimension that can register machine
+conditions — load, disk cache, npm cache warmth — as if they were properties of
+the server.
+
+The second run followed a release build on a busy laptop. That is almost
+certainly the whole explanation, and it is exactly the kind of confounder the
+`rubric-v1.4` launcher-floor subtraction was built to remove; it removed the
+*shim's* constant cost, not the machine's variable one.
+
+Two consequences, stated plainly:
+
+1. **A single run is not a stable grade for a server whose boot is slow.** The
+   `rubric-v1.5` changelog's grade-impact table deliberately re-scores the *same*
+   cards under both rubrics rather than comparing two runs, because comparing
+   runs conflates the rubric change with this drift. A fresh `rubric-v1.5` run of
+   the same fleet lands at 34/15/10/3/1 rather than the table's 41/9/9/3/1 —
+   the difference is measurement, not scoring.
+2. **The ecosystem leaderboard should not publish per-vendor grades off one
+   run.** It needs a stated measurement method — repeated runs, a quiet machine,
+   and a published tolerance — or it will report our laptop's mood as a vendor's
+   quality.
+
+Neither the census v2 dataset nor `data/dimension-spread.json` is invalidated by
+this: both were collected in run 1, and the spread file's purpose is reporting
+context, not scoring. But the robustness spread in it should be read as *one
+machine on one afternoon*, and the same caveat applies to any robustness figure
+quoted from this dataset.
