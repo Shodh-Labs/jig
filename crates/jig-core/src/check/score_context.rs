@@ -88,8 +88,13 @@ pub(super) fn score_context(
                 } else {
                     Severity::Medium
                 },
+                // "as invoked" is not decoration: the surface is a property of
+                // the command line, not of the package. A server that offers a
+                // lighter mode behind a flag presents a different surface under
+                // a different invocation, and the report states which one was
+                // measured beside this number.
                 message: format!(
-                    "{} tokens on the tool surface ({band_label})",
+                    "{} tokens on the tool surface as invoked ({band_label})",
                     commas(total_tokens)
                 ),
                 fix: format!(
@@ -104,7 +109,9 @@ pub(super) fn score_context(
         }
     }
 
-    let summary = format!("{} tokens ({band_label})", commas(total_tokens));
+    // The dimension line qualifies the number the same way: this is the surface
+    // of the invocation the report names, not of the package.
+    let summary = format!("{} tokens as invoked ({band_label})", commas(total_tokens));
     let dim = DimensionScore {
         dimension: Dimension::ContextCost,
         score: Some(score),

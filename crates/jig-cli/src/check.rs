@@ -107,6 +107,7 @@ fn write_report(report: &CheckReport, target: &Target, dest: &Path, human: bool)
     let meta = crate::report::ReportMeta {
         transport: target.transport_label().to_string(),
         command_line: target.check_command_line(),
+        invocation: target.measured_invocation(),
         date: crate::report::today_utc(),
         jig_version: env!("CARGO_PKG_VERSION").to_string(),
     };
@@ -359,14 +360,23 @@ async fn run_inner(
         None
     };
 
+    // What was actually measured — the resolved command line or URL, secrets
+    // redacted. Stated on every output surface so the score is read as a
+    // property of this invocation rather than of the package.
+    let invocation = target.measured_invocation();
+
     if badge {
         // The badge is the composite and nothing else; a judged run emits the
         // identical badge, which is the point.
         emit_line(&render_badge(&report));
     } else if as_json {
-        emit(&render_json_with_judge(&report, judged.as_ref()));
+        emit(&render_json_with_judge(
+            &report,
+            judged.as_ref(),
+            &invocation,
+        ));
     } else {
-        emit(&render_human(&report));
+        emit(&render_human(&report, &invocation));
         if let Some(outcome) = &judged {
             emit(&format!(
                 "
@@ -436,9 +446,14 @@ fn grade(score: u32) -> char {
     }
 }
 
-/// Render the full human report — pure over the [`CheckReport`], so it is
-/// snapshot-lockable.
-pub(crate) fn render_human(report: &CheckReport) -> String {
+/// Render the full human report — pure over the [`CheckReport`] and the
+/// `invocation` string, so it is snapshot-lockable.
+///
+/// `invocation` is the resolved command line or URL that was measured (see
+/// `Target::measured_invocation`), already redacted. It sits in the header,
+/// with the server identity, because the whole report describes that one
+/// invocation.
+pub(crate) fn render_human(report: &CheckReport, invocation: &str) -> String {
     let mut s = String::new();
 
     // Header.
@@ -447,9 +462,10 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
         report.server_name, report.server_version
     ));
     s.push_str(&format!(
-        "protocol {} · {}\n\n",
+        "protocol {} · {}\n",
         report.protocol_version, report.rubric_version
     ));
+    s.push_str(&format!("measured: {invocation}\n\n"));
 
     // Big composite score.
     let composite = report.composite_rounded();
@@ -670,10 +686,11 @@ fn render_badge(report: &CheckReport) -> String {
 
 /// Render the full machine-readable report: per-dimension scores + weights,
 /// every finding, the composite, the rubric version, and percentile provenance.
-pub(crate) fn render_json(report: &CheckReport) -> String {
+pub(crate) fn render_json(report: &CheckReport, invocation: &str) -> String {
     format!(
         "{}\n",
-        serde_json::to_string_pretty(&check_doc(report)).unwrap_or_else(|_| "{}".to_string())
+        serde_json::to_string_pretty(&check_doc(report, invocation))
+            .unwrap_or_else(|_| "{}".to_string())
     )
 }
 
@@ -686,8 +703,9 @@ pub(crate) fn render_json(report: &CheckReport) -> String {
 pub(crate) fn render_json_with_judge(
     report: &CheckReport,
     judged: Option<&JudgeOutcome>,
+    invocation: &str,
 ) -> String {
-    let mut doc = check_doc(report);
+    let mut doc = check_doc(report, invocation);
     if let (Some(outcome), Some(map)) = (judged, doc.as_object_mut()) {
         map.insert(
             "judged".to_string(),
@@ -708,12 +726,18 @@ pub(crate) fn render_json_with_judge(
 /// judged path. Every byte here is a pure function of the [`CheckReport`], and
 /// the [`CheckReport`] is computed from observations the judge never touches —
 /// which is why `--judge` cannot move a single value in this object.
-fn check_doc(report: &CheckReport) -> Value {
+fn check_doc(report: &CheckReport, invocation: &str) -> Value {
     let dimensions: Vec<Value> = report.dimensions.iter().map(dimension_json).collect();
     let top_fixes: Vec<Value> = report.top_fixes(3).into_iter().map(finding_json).collect();
 
     json!({
         "server": { "name": report.server_name, "version": report.server_version },
+        // The exact target measured: the resolved stdio command line, or the
+        // HTTP endpoint URL — secrets redacted. Every number in this document
+        // describes *this* invocation; the same package under a lighter
+        // invocation (a `--preset`, an `--enabled-tools` filter, a discovery
+        // mode) is a different surface and would score differently.
+        "invocation": invocation,
         "protocolVersion": report.protocol_version,
         "rubricVersion": report.rubric_version,
         "composite": report.composite_rounded(),
@@ -844,6 +868,11 @@ mod tests {
     use jig_core::check::{Dimension, MetricSamples};
     use jig_core::Tool;
     use serde_json::json;
+
+    /// The invocation the fixtures stand for — what a `--stdio ./jig-mock-server`
+    /// run would have measured. Every renderer takes it, so the snapshots lock
+    /// the "state what was measured" line as well as the scores.
+    const MOCK_INVOCATION: &str = "./jig-mock-server";
 
     fn tool(name: &str, desc: Option<&str>, schema: Value) -> Tool {
         let mut m = serde_json::Map::new();
@@ -987,7 +1016,10 @@ mod tests {
             .advisor
             .iter()
             .any(|f| f.message.contains("tools exposed")));
-        insta::assert_snapshot!("check_human_advisor", render_human(&report));
+        insta::assert_snapshot!(
+            "check_human_advisor",
+            render_human(&report, MOCK_INVOCATION)
+        );
     }
 
     #[test]
@@ -1023,13 +1055,16 @@ mod tests {
     #[test]
     fn human_report_clean_snapshot() {
         let report = evaluate(&mock_input(), None);
-        insta::assert_snapshot!("check_human_clean", render_human(&report));
+        insta::assert_snapshot!("check_human_clean", render_human(&report, MOCK_INVOCATION));
     }
 
     #[test]
     fn human_report_degraded_snapshot() {
         let report = evaluate(&degraded_input(), None);
-        insta::assert_snapshot!("check_human_degraded", render_human(&report));
+        insta::assert_snapshot!(
+            "check_human_degraded",
+            render_human(&report, MOCK_INVOCATION)
+        );
     }
 
     #[test]
@@ -1044,13 +1079,16 @@ mod tests {
             bundled: false,
         };
         let report = evaluate(&mock_input(), Some(&p));
-        insta::assert_snapshot!("check_human_percentile", render_human(&report));
+        insta::assert_snapshot!(
+            "check_human_percentile",
+            render_human(&report, MOCK_INVOCATION)
+        );
     }
 
     #[test]
     fn json_report_snapshot() {
         let report = evaluate(&mock_input(), None);
-        insta::assert_snapshot!("check_json", render_json(&report));
+        insta::assert_snapshot!("check_json", render_json(&report, MOCK_INVOCATION));
     }
 
     /// `--json` carries the stable machine-readable class alongside the prose.
@@ -1060,7 +1098,8 @@ mod tests {
     #[test]
     fn the_json_report_carries_a_code_on_every_finding() {
         let report = evaluate(&degraded_input(), None);
-        let v: Value = serde_json::from_str(&render_json(&report)).expect("valid JSON");
+        let v: Value =
+            serde_json::from_str(&render_json(&report, MOCK_INVOCATION)).expect("valid JSON");
 
         let mut codes: Vec<String> = Vec::new();
         let mut collect = |arr: &Value| {
@@ -1121,7 +1160,7 @@ mod tests {
             .context_cap
             .as_ref()
             .expect("a p100 server must be capped");
-        let text = render_human(&report);
+        let text = render_human(&report, MOCK_INVOCATION);
         assert!(
             text.contains(&cap.explanation),
             "the human report must carry the cap explanation verbatim:\n{text}"
@@ -1141,8 +1180,11 @@ mod tests {
     #[test]
     fn json_report_carries_the_context_cap() {
         let p = capping_percentiles();
-        let capped: Value = serde_json::from_str(&render_json(&evaluate(&mock_input(), Some(&p))))
-            .expect("valid JSON");
+        let capped: Value = serde_json::from_str(&render_json(
+            &evaluate(&mock_input(), Some(&p)),
+            MOCK_INVOCATION,
+        ))
+        .expect("valid JSON");
         assert_eq!(capped["composite"], 60);
         assert_eq!(capped["grade"], "D");
         assert_eq!(capped["contextCap"]["cap"], 60.0);
@@ -1152,8 +1194,11 @@ mod tests {
             .unwrap()
             .contains("composite capped at 60"));
 
-        let clean: Value =
-            serde_json::from_str(&render_json(&evaluate(&mock_input(), None))).expect("valid JSON");
+        let clean: Value = serde_json::from_str(&render_json(
+            &evaluate(&mock_input(), None),
+            MOCK_INVOCATION,
+        ))
+        .expect("valid JSON");
         assert!(
             clean["contextCap"].is_null(),
             "an uncapped server reports contextCap: null"
@@ -1163,13 +1208,202 @@ mod tests {
     #[test]
     fn degraded_report_shows_the_right_findings() {
         let report = evaluate(&degraded_input(), None);
-        let json = render_json(&report);
+        let json = render_json(&report, MOCK_INVOCATION);
         assert!(json.contains("non-protocol line"));
         assert!(json.contains("tasks"));
         assert!(json.contains("missing a type"));
         // The pollution fix ranks first (highest weighted impact).
         let fixes = report.top_fixes(3);
         assert_eq!(fixes[0].dimension, Dimension::Protocol);
+    }
+
+    // ---- the measured invocation (issue #6, option 1) -----------------------
+
+    /// The machine-readable document names the exact target measured, and it is
+    /// the string the runner resolved — not the package, not the server's own
+    /// idea of its name.
+    #[test]
+    fn the_check_document_states_the_invocation_that_was_measured() {
+        let target = crate::Target::Stdio {
+            program: "npx".to_string(),
+            args: vec![
+                "-y".to_string(),
+                "@softeria/ms-365-mcp-server".to_string(),
+                "--preset".to_string(),
+                "mail".to_string(),
+            ],
+            env: Vec::new(),
+        };
+        let invocation = target.measured_invocation();
+        assert_eq!(
+            invocation,
+            "npx -y @softeria/ms-365-mcp-server --preset mail"
+        );
+
+        let doc = check_doc(&evaluate(&mock_input(), None), &invocation);
+        assert_eq!(doc["invocation"], invocation);
+        // Additive: the identity fields it sits beside are untouched.
+        assert_eq!(doc["server"]["name"], "jig-mock-server");
+    }
+
+    /// An HTTP target is identified by its URL, in every surface.
+    #[test]
+    fn an_http_target_reports_its_url_as_the_invocation() {
+        let target = crate::Target::Http {
+            url: "https://example.com/mcp".to_string(),
+            headers: vec![("Authorization".to_string(), "Bearer sk-abc".to_string())],
+        };
+        // Headers are never part of the invocation string.
+        assert_eq!(target.measured_invocation(), "https://example.com/mcp");
+        let doc = check_doc(
+            &evaluate(&mock_input(), None),
+            &target.measured_invocation(),
+        );
+        assert_eq!(doc["invocation"], "https://example.com/mcp");
+    }
+
+    /// The human report card states it in the header, beside the server it
+    /// identifies.
+    #[test]
+    fn the_human_report_states_the_invocation_that_was_measured() {
+        let text = render_human(
+            &evaluate(&mock_input(), None),
+            "npx -y some-server --discovery",
+        );
+        assert!(
+            text.contains("measured: npx -y some-server --discovery"),
+            "the header must name what was measured:\n{text}"
+        );
+    }
+
+    /// The context-cost line is where this matters most: the token count is the
+    /// cost of *this* invocation's surface, and both the dimension summary and
+    /// the heavy-surface finding say so.
+    #[test]
+    fn the_context_cost_dimension_qualifies_the_surface_as_the_one_invoked() {
+        let report = evaluate(&mock_input(), None);
+        let c = report
+            .dimension(jig_core::check::Dimension::ContextCost)
+            .expect("context cost is always scored");
+        assert!(
+            c.summary.contains("tokens as invoked"),
+            "the context-cost summary must qualify the number: {}",
+            c.summary
+        );
+
+        // And on a genuinely heavy surface, the finding text too.
+        let big = "lorem ipsum dolor sit amet ".repeat(4000);
+        let mut input = mock_input();
+        input.tools.push(tool(
+            "giant",
+            Some(big.trim()),
+            json!({ "type": "object", "properties": {} }),
+        ));
+        let heavy = evaluate(&input, None);
+        let finding = heavy
+            .dimension(jig_core::check::Dimension::ContextCost)
+            .and_then(|d| d.findings.first())
+            .expect("a >8k-token surface draws a finding");
+        assert_eq!(finding.code.as_str(), "context_cost.heavy_surface");
+        assert!(
+            finding
+                .message
+                .contains("tokens on the tool surface as invoked"),
+            "the heavy-surface finding must qualify the number: {}",
+            finding.message
+        );
+    }
+
+    /// Stating the invocation is presentation and nothing else: the composite,
+    /// every dimension score and every finding code are identical whatever the
+    /// invocation string says — including when it says nothing at all.
+    #[test]
+    fn stating_the_invocation_moves_no_score() {
+        let report = evaluate(&mock_input(), None);
+        let scores_of = |doc: &Value| {
+            let dims: Vec<(String, Value, Value)> = doc["dimensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| {
+                    (
+                        d["dimension"].as_str().unwrap().to_string(),
+                        d["score"].clone(),
+                        d["scoreExact"].clone(),
+                    )
+                })
+                .collect();
+            (
+                doc["composite"].clone(),
+                doc["compositeExact"].clone(),
+                dims,
+            )
+        };
+
+        let baseline = check_doc(&report, "");
+        for invocation in [
+            "npx -y pkg",
+            "npx -y pkg --discovery",
+            "https://example.com/mcp",
+        ] {
+            let doc = check_doc(&report, invocation);
+            assert_eq!(doc["invocation"], invocation);
+            assert_eq!(
+                scores_of(&doc),
+                scores_of(&baseline),
+                "the invocation string must not move a score ({invocation})"
+            );
+            // Byte-identical once the one additive field is removed.
+            let (mut a, mut b) = (doc, baseline.clone());
+            a.as_object_mut().unwrap().remove("invocation");
+            b.as_object_mut().unwrap().remove("invocation");
+            assert_eq!(a, b, "only `invocation` may differ ({invocation})");
+        }
+    }
+
+    /// Secrets discipline: a URL carrying userinfo or a query token is redacted
+    /// before it reaches *any* output surface — the JSON document, the human
+    /// report card, and the HTML report.
+    #[test]
+    fn a_credential_bearing_url_is_redacted_in_every_output_surface() {
+        let target = crate::Target::Http {
+            url: "https://alice:hunter2@example.com/mcp?access_token=sk-supersecret".to_string(),
+            headers: Vec::new(),
+        };
+        let invocation = target.measured_invocation();
+        assert_eq!(
+            invocation,
+            "https://<redacted>@example.com/mcp?access_token=<redacted>"
+        );
+
+        let report = evaluate(&mock_input(), None);
+        let json = render_json(&report, &invocation);
+        let human = render_human(&report, &invocation);
+        let html = crate::report::render(
+            &report,
+            &crate::report::ReportMeta {
+                transport: target.transport_label().to_string(),
+                command_line: target.check_command_line(),
+                invocation: invocation.clone(),
+                date: "2026-07-20".to_string(),
+                jig_version: "0.0.0".to_string(),
+            },
+        );
+
+        for (surface, text) in [("json", &json), ("human", &human), ("html", &html)] {
+            assert!(
+                !text.contains("hunter2"),
+                "userinfo leaked into the {surface} output"
+            );
+            assert!(
+                !text.contains("sk-supersecret"),
+                "a query token leaked into the {surface} output"
+            );
+            assert!(
+                text.contains("example.com/mcp"),
+                "the {surface} output must still identify the endpoint"
+            );
+        }
     }
 
     // ---- check_doc: the machine-readable document, tested directly ----------
@@ -1180,7 +1414,7 @@ mod tests {
     #[test]
     fn check_doc_emits_null_caps_when_neither_ceiling_binds() {
         let report = evaluate(&mock_input(), None);
-        let doc = check_doc(&report);
+        let doc = check_doc(&report, MOCK_INVOCATION);
         assert!(doc["contextCap"].is_null(), "clean server: no context cap");
         assert!(
             doc["protocolCap"].is_null(),
@@ -1199,7 +1433,7 @@ mod tests {
     /// document does not.
     #[test]
     fn check_doc_carries_the_fleet_spread_for_every_dimension() {
-        let doc = check_doc(&evaluate(&mock_input(), None));
+        let doc = check_doc(&evaluate(&mock_input(), None), MOCK_INVOCATION);
         let dimensions = doc["dimensions"].as_array().expect("dimensions array");
         assert_eq!(dimensions.len(), 5);
         for d in dimensions {
@@ -1241,7 +1475,7 @@ mod tests {
     #[test]
     fn the_human_report_explains_the_fleet_spread_and_the_json_weights_agree() {
         let report = evaluate(&mock_input(), None);
-        let text = render_human(&report);
+        let text = render_human(&report, MOCK_INVOCATION);
         assert!(text.contains("[100·100·100]"), "protocol spread:\n{text}");
         assert!(
             text.contains("[p25·median·p75] is where 63 measured servers scored"),
@@ -1249,7 +1483,7 @@ mod tests {
         );
         assert!(text.contains("Not scored."), "{text}");
 
-        let doc = check_doc(&report);
+        let doc = check_doc(&report, MOCK_INVOCATION);
         let weight = |key: &str| {
             doc["dimensions"]
                 .as_array()
@@ -1273,7 +1507,7 @@ mod tests {
     #[test]
     fn check_doc_populates_the_context_cap_only_when_it_binds() {
         let report = evaluate(&mock_input(), Some(&capping_percentiles()));
-        let doc = check_doc(&report);
+        let doc = check_doc(&report, MOCK_INVOCATION);
         let cap = &doc["contextCap"];
         assert!(!cap.is_null(), "a p100 server must be capped");
         assert_eq!(cap["cap"], 60.0);
@@ -1298,7 +1532,7 @@ mod tests {
             prewarm_skipped: false,
             launcher: Some(std::time::Duration::from_millis(600)),
         };
-        let doc = check_doc(&evaluate(&input, None));
+        let doc = check_doc(&evaluate(&input, None), MOCK_INVOCATION);
         let timing = &doc["timing"];
         assert_eq!(timing["installSeconds"], 7.4);
         assert_eq!(timing["bootSeconds"], 0.9);
@@ -1321,7 +1555,7 @@ mod tests {
             prewarm_skipped: false,
             launcher: None,
         };
-        let timing = check_doc(&evaluate(&input, None))["timing"].clone();
+        let timing = check_doc(&evaluate(&input, None), MOCK_INVOCATION)["timing"].clone();
         assert!(timing["installSeconds"].is_null());
         assert!(timing["launcherSeconds"].is_null());
         assert_eq!(timing["bootSeconds"], 1.3);

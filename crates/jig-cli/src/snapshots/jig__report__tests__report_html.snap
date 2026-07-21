@@ -101,7 +101,8 @@ expression: "render(&report, &meta())"
     <div class="eyebrow">jig · MCP server report card</div>
     <h1>jig-mock-server v0.1.0</h1>
     <div class="meta">stdio · protocol 2025-06-18 · 3 tools · graded 2026-07-20 · rubric-v1.5 · jig 0.4.0<br>
-    <span class="mono">jig check --stdio &quot;./jig-mock-server&quot;</span></div>
+    <span class="mono">jig check --stdio &quot;./jig-mock-server&quot;</span><br>
+    measured: <span class="mono">./jig-mock-server</span></div>
   </header>
   <div class="hero">
     <div class="score">

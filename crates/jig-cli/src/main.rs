@@ -45,7 +45,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use jig_cli::{parse_headers, split_command};
+use jig_cli::{parse_headers, redact_invocation, split_command};
 use jig_core::discovery::{self, DiscoveredTransport};
 use jig_core::{Client, ClientOptions, ProtocolTap, SourceSelector, ToolCallResult};
 use serde_json::{json, Value};
@@ -1246,20 +1246,40 @@ impl Target {
         }
     }
 
-    /// Reconstruct the `jig check …` command line for this target, for the report
-    /// header. Headers/env are omitted (they can carry secrets); the transport
-    /// and endpoint are what a reader needs to reproduce the run.
-    pub(crate) fn check_command_line(&self) -> String {
-        match self {
+    /// The exact thing that was measured: for stdio the resolved command line
+    /// (`npx -y @scope/pkg --preset mail`), for HTTP the endpoint URL.
+    ///
+    /// A score describes *this* invocation and not the package as a whole — a
+    /// server that offers a lighter mode behind a flag presents a different
+    /// surface under a different command line — so every output surface states
+    /// it. Environment variables and HTTP headers are excluded (they are
+    /// credentials far more often than they are configuration), and whatever
+    /// remains is passed through [`redact_invocation`] so a token embedded in
+    /// the command or the URL is never printed.
+    pub(crate) fn measured_invocation(&self) -> String {
+        let raw = match self {
             Target::Stdio { program, args, .. } => {
                 let mut cmd = program.clone();
                 for a in args {
                     cmd.push(' ');
                     cmd.push_str(a);
                 }
-                format!("jig check --stdio \"{cmd}\"")
+                cmd
             }
-            Target::Http { url, .. } => format!("jig check --http {url}"),
+            Target::Http { url, .. } => url.clone(),
+        };
+        redact_invocation(&raw)
+    }
+
+    /// Reconstruct the `jig check …` command line for this target, for the report
+    /// header. Headers/env are omitted (they can carry secrets); the transport
+    /// and endpoint are what a reader needs to reproduce the run. Secrets inside
+    /// the command or URL itself are redacted by [`Target::measured_invocation`].
+    pub(crate) fn check_command_line(&self) -> String {
+        let invocation = self.measured_invocation();
+        match self {
+            Target::Stdio { .. } => format!("jig check --stdio \"{invocation}\""),
+            Target::Http { .. } => format!("jig check --http {invocation}"),
         }
     }
 

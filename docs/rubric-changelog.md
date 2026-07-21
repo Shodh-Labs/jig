@@ -41,6 +41,31 @@ deterministic, heuristic, and labelled as such in every report.
 
 ---
 
+## Outside the rubric: a score describes an invocation, not a package
+
+Jig grades the tool surface a server advertises **under the command line it was
+given** — in practice the bare `npx -y <package>` default. Many servers ship a
+lighter mode behind a flag (`--preset`, `--enabled-tools`, a discovery mode);
+nothing in `initialize` or `tools/list` advertises that, so Jig cannot see it by
+connecting, which is the only thing it does.
+
+No rubric version has ever claimed otherwise, but the report used to leave it
+implicit. It no longer does. Every output surface states the exact invocation
+measured — an `invocation` field in `--json`, a `measured:` line in the human
+report card header and in the HTML report — and the context-cost dimension
+qualifies its token count **as invoked**. Any secret in the invocation (URL
+userinfo, a query token, a secret-named flag or `NAME=value` assignment) is
+redacted before it is printed.
+
+This is presentation only. **No score, weight, cap, threshold or finding code
+changed**, `rubricVersion` is unchanged, and reports produced before and after
+this change are directly comparable. See
+[issue #6](https://github.com/Shodh-Labs/jig/issues/6) for the structural
+problem this does *not* solve: a server that has fixed its surface behind a flag
+still grades identically to one that has not.
+
+---
+
 ## `rubric-v1.5`
 
 Three changes, none of them new ideas. Each one was named, argued for, and

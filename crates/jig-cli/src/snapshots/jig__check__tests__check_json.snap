@@ -1,6 +1,6 @@
 ---
 source: crates/jig-cli/src/check.rs
-expression: render_json(&report)
+expression: "render_json(&report, MOCK_INVOCATION)"
 ---
 {
   "advisor": [],
@@ -44,7 +44,7 @@ expression: render_json(&report)
       "label": "Context cost",
       "score": 99,
       "scoreExact": 99.09,
-      "summary": "183 tokens (no ecosystem data — absolute bands)",
+      "summary": "183 tokens as invoked (no ecosystem data — absolute bands)",
       "weight": 25
     },
     {
@@ -124,6 +124,7 @@ expression: render_json(&report)
   ],
   "grade": "A",
   "injection": [],
+  "invocation": "./jig-mock-server",
   "protocolCap": null,
   "protocolVersion": "2025-06-18",
   "rubricVersion": "rubric-v1.5",

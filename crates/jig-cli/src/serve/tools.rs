@@ -380,10 +380,12 @@ async fn check_server(args: &Value, defaults: Defaults) -> ToolOutcome {
     )
     .await?;
 
-    // The same renderers the CLI uses, so the tool and the verb agree.
-    let summary = crate::check::render_human(&report);
-    let structured: Value =
-        serde_json::from_str(&crate::check::render_json(&report)).map_err(|e| e.to_string())?;
+    // The same renderers the CLI uses, so the tool and the verb agree — down to
+    // stating the invocation the score describes.
+    let invocation = target.measured_invocation();
+    let summary = crate::check::render_human(&report, &invocation);
+    let structured: Value = serde_json::from_str(&crate::check::render_json(&report, &invocation))
+        .map_err(|e| e.to_string())?;
     Ok((summary, structured))
 }
 

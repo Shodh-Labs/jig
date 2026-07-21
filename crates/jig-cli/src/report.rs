@@ -33,6 +33,11 @@ pub(crate) struct ReportMeta {
     pub transport: String,
     /// The exact command line that produced this report (already reconstructed).
     pub command_line: String,
+    /// The exact target measured — the resolved stdio command line, or the HTTP
+    /// endpoint URL — with any secrets already redacted. Shown in the header
+    /// beside the server identity, because the report grades this invocation
+    /// and not the package.
+    pub invocation: String,
     /// The date the report was generated, `YYYY-MM-DD`.
     pub date: String,
     /// The `jig` binary version.
@@ -264,7 +269,8 @@ fn render_header(s: &mut String, report: &CheckReport, meta: &ReportMeta) {
     ));
     s.push_str(&format!(
         "    <div class=\"meta\">{transport} · protocol {proto} · {tools} tool{plural} · \
-         graded {date} · {rubric} · jig {jig}<br>\n    <span class=\"mono\">{cmd}</span></div>\n",
+         graded {date} · {rubric} · jig {jig}<br>\n    <span class=\"mono\">{cmd}</span><br>\n    \
+         measured: <span class=\"mono\">{invocation}</span></div>\n",
         transport = html_escape(&meta.transport),
         proto = html_escape(&report.protocol_version),
         tools = report.tool_count,
@@ -273,6 +279,7 @@ fn render_header(s: &mut String, report: &CheckReport, meta: &ReportMeta) {
         rubric = html_escape(report.rubric_version),
         jig = html_escape(&meta.jig_version),
         cmd = html_escape(&meta.command_line),
+        invocation = html_escape(&meta.invocation),
     ));
     s.push_str("  </header>\n");
 }
@@ -736,6 +743,7 @@ mod tests {
         ReportMeta {
             transport: "stdio".to_string(),
             command_line: "jig check --stdio \"./jig-mock-server\"".to_string(),
+            invocation: "./jig-mock-server".to_string(),
             date: "2026-07-20".to_string(),
             jig_version: "0.4.0".to_string(),
         }

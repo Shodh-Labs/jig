@@ -1,16 +1,17 @@
 ---
 source: crates/jig-cli/src/check.rs
-expression: render_human(&report)
+expression: "render_human(&report, MOCK_INVOCATION)"
 ---
 jig check · jig-mock-server v0.1.0
 protocol 2025-06-18 · rubric-v1.5
+measured: ./jig-mock-server
 
   ✓  85 / 100   grade B
 
   ⓘ  composite capped at 85 by protocol compliance (15 points of high-severity protocol defects): 1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing (would have scored 93)
 
   ⚠  Protocol compliance   75  [100·100·100]  1 non-protocol line(s) on stdout — this corrupts MCP's newline-delimited framing (+1 more)
-  ✓  Context cost          99  [43·87·97]     170 tokens (no ecosystem data — absolute bands)
+  ✓  Context cost          99  [43·87·97]     170 tokens as invoked (no ecosystem data — absolute bands)
   ✓  Schema hygiene        88  [96·99·100]    `echo`: parameter `text` missing a description (+3 more)
   ✓  Description quality   99  [96·98·99]     heuristic · 3 tool(s) have no human-facing title
   ✓  Robustness           100  [90·95·99]     list 12ms, clean shutdown

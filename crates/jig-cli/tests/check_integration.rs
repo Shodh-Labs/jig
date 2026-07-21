@@ -138,6 +138,19 @@ fn redact_latency(s: &str) -> String {
     out
 }
 
+/// Redact the machine-dependent path to the mock binary. The report states the
+/// invocation it measured, and for these tests that is an absolute path into
+/// the target directory — stable in meaning, not in bytes.
+fn redact_mock_path(s: &str) -> String {
+    s.replace(&mock_bin().display().to_string(), "<mock>")
+}
+
+/// Both redactions, in the order the snapshots need: the path first (it may
+/// contain digits that the latency pass would otherwise chew on).
+fn redact(s: &str) -> String {
+    redact_latency(&redact_mock_path(s))
+}
+
 // ---------------------------------------------------------------------------
 // Clean server: a high score, exit 0, human report snapshot.
 // ---------------------------------------------------------------------------
@@ -149,7 +162,61 @@ fn clean_server_scores_high_and_exits_zero() {
     let report = stdout(&out);
     assert!(report.contains("grade A"), "expected grade A: {report}");
     assert!(report.contains("Protocol compliance  100"));
-    insta::assert_snapshot!("check_e2e_clean", redact_latency(&report));
+    insta::assert_snapshot!("check_e2e_clean", redact(&report));
+}
+
+// ---------------------------------------------------------------------------
+// Issue #6, option 1: the report states the invocation it measured, so a reader
+// can tell the score describes that command line and not the package.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_human_report_states_the_invocation_that_was_actually_run() {
+    let out = run_check("--pollute-stdout", &["--no-report"]);
+    let report = stdout(&out);
+    let expected = format!("measured: {} --pollute-stdout", mock_bin().display());
+    assert!(
+        report.contains(&expected),
+        "the header must state the exact invocation ({expected}):\n{report}"
+    );
+}
+
+#[test]
+fn the_json_report_carries_the_invocation_that_was_actually_run() {
+    let out = run_check("--pollute-stdout", &["--json", "--no-report"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON report");
+    assert_eq!(
+        v["invocation"],
+        serde_json::Value::String(format!("{} --pollute-stdout", mock_bin().display()))
+    );
+}
+
+#[test]
+fn the_html_report_carries_the_invocation_that_was_actually_run() {
+    let dir = temp_cwd("invocation-html");
+    let out = run_check_in(&dir, &["--no-prewarm"]);
+    assert!(out.status.success());
+    let html = std::fs::read_to_string(dir.join("jig-report-jig-mock-server.html"))
+        .expect("the report file is written in human mode");
+    assert!(
+        html.contains("measured: <span class=\"mono\">"),
+        "the HTML header must name what was measured"
+    );
+    assert!(
+        html.contains(&jig_cli_html_escape(&mock_bin().display().to_string())),
+        "the HTML header must carry the invocation itself:\n{html}"
+    );
+}
+
+/// The five-character HTML escape the report applies, mirrored here so the
+/// assertion compares like with like (a Windows path contains no escapable
+/// characters, but a developer checkout path may).
+fn jig_cli_html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +237,7 @@ fn stdout_pollution_deducts_protocol_and_names_the_finding() {
         report.contains("non-protocol line(s) on stdout"),
         "the pollution finding must appear: {report}"
     );
-    insta::assert_snapshot!("check_e2e_pollution", redact_latency(&report));
+    insta::assert_snapshot!("check_e2e_pollution", redact(&report));
 }
 
 // ---------------------------------------------------------------------------
