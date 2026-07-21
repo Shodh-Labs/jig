@@ -82,6 +82,8 @@ fn severity_class(s: Severity) -> &'static str {
 #[serde(rename_all = "camelCase")]
 pub struct FindingDto {
     pub dimension: String,
+    /// The stable machine-readable finding class (`jig_core::FindingCode`).
+    pub code: String,
     pub severity: String,
     /// The pill class the stylesheet uses (`h`/`m`/`l`).
     pub severity_class: String,
@@ -93,6 +95,7 @@ pub struct FindingDto {
 pub fn finding_dto(f: &Finding) -> FindingDto {
     FindingDto {
         dimension: f.dimension.key().to_string(),
+        code: f.code.as_str().to_string(),
         severity: severity_tag(f.severity).to_string(),
         severity_class: severity_class(f.severity).to_string(),
         message: f.message.clone(),
@@ -561,7 +564,7 @@ pub fn error_message(e: &JigError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jig_core::check::Dimension;
+    use jig_core::check::{Dimension, FindingCode};
 
     #[test]
     fn grade_bands_match_the_documented_ladder() {
@@ -682,6 +685,7 @@ mod tests {
     fn finding_dto_carries_the_fix_because_the_fix_is_the_product() {
         let f = Finding {
             dimension: Dimension::Protocol,
+            code: FindingCode::ProtocolStdoutPollution,
             severity: Severity::High,
             message: "stdout pollution".to_string(),
             fix: "log to stderr".to_string(),
@@ -691,6 +695,7 @@ mod tests {
         };
         let dto = finding_dto(&f);
         assert_eq!(dto.dimension, "protocol");
+        assert_eq!(dto.code, "protocol.stdout_pollution");
         assert_eq!(dto.severity, "high");
         assert_eq!(dto.severity_class, "h");
         assert_eq!(dto.fix, "log to stderr");

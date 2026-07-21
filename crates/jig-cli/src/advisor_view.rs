@@ -35,11 +35,12 @@ pub(crate) fn render_titled_section(title: &str, findings: &[Finding]) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jig_core::check::{Dimension, Severity};
+    use jig_core::check::{Dimension, FindingCode, Severity};
 
     fn finding(sev: Severity, msg: &str, fix: &str) -> Finding {
         Finding {
             dimension: Dimension::ToolSet,
+            code: FindingCode::ToolSetNameCollision,
             severity: sev,
             message: msg.to_string(),
             fix: fix.to_string(),

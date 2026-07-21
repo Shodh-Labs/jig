@@ -42,7 +42,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::check::{Dimension, Finding, Severity};
+use crate::check::{Dimension, Finding, FindingCode, Severity};
 use crate::protocol::Tool;
 
 // ---------------------------------------------------------------------------
@@ -195,10 +195,11 @@ fn points_for(severity: Severity) -> f64 {
     }
 }
 
-/// Build a `tool_set`-category [`Finding`].
-fn finding(severity: Severity, message: String, fix: String) -> Finding {
+/// Build a `tool_set`-category [`Finding`] of class `code`.
+fn finding(code: FindingCode, severity: Severity, message: String, fix: String) -> Finding {
     Finding {
         dimension: Dimension::ToolSet,
+        code,
         severity,
         message,
         fix,
@@ -239,6 +240,7 @@ fn collision_findings(tools: &[Tool], out: &mut Vec<Finding>) {
             // (a) same canonical token multiset modulo synonyms → HIGH.
             if !a.canonical.is_empty() && a.canonical == b.canonical {
                 out.push(finding(
+                    FindingCode::ToolSetNameCollision,
                     Severity::High,
                     format!(
                         "`{}` vs `{}`: models cannot reliably distinguish these — same action, \
@@ -258,6 +260,7 @@ fn collision_findings(tools: &[Tool], out: &mut Vec<Finding>) {
             // (b) one name is a token-subset of the other, extras all generic → MEDIUM.
             if let Some((short, long)) = generic_subset_pair(i, j, &normalized, tools) {
                 out.push(finding(
+                    FindingCode::ToolSetNameGenericSubset,
                     Severity::Medium,
                     format!(
                         "`{short}` vs `{long}`: names differ only by generic word(s) — the model \
@@ -275,6 +278,7 @@ fn collision_findings(tools: &[Tool], out: &mut Vec<Finding>) {
                 if pct >= DESC_JACCARD_THRESHOLD {
                     let pct_round = (pct * 100.0).round() as u32;
                     out.push(finding(
+                        FindingCode::ToolSetDescriptionOverlap,
                         Severity::Medium,
                         format!(
                             "`{}` and `{}` descriptions overlap {pct_round}% — the model has no \
@@ -294,6 +298,7 @@ fn collision_findings(tools: &[Tool], out: &mut Vec<Finding>) {
 
     if capped {
         out.push(finding(
+            FindingCode::ToolSetCollisionScanCapped,
             Severity::Info,
             format!(
                 "{n} tools — collision scan capped at {COLLISION_PAIR_CAP} pairs; some pairs were \
@@ -468,6 +473,7 @@ fn accuracy_cliff_finding(tool_count: usize, out: &mut Vec<Finding>) {
         CLIFF_MEDIUM_TOOLS
     };
     out.push(finding(
+        FindingCode::ToolSetAccuracyCliff,
         severity,
         format!(
             "{tool_count} tools exposed — past ~{threshold} a model's tool-selection accuracy \
@@ -521,6 +527,7 @@ fn cost_dominance_findings(tools: &[Tool], costs: &[ToolTokenCost], out: &mut Ve
                     Severity::Low
                 };
                 out.push(finding(
+                    FindingCode::ToolSetCostDominantTool,
                     severity,
                     format!(
                         "`{name}` costs {tokens} tok — {ratio:.1}x your median tool; it dominates \
@@ -549,6 +556,7 @@ fn cost_dominance_findings(tools: &[Tool], costs: &[ToolTokenCost], out: &mut Ve
                 Severity::Low
             };
             out.push(finding(
+                FindingCode::ToolSetCostConcentration,
                 severity,
                 format!(
                     "3 of your {} tools carry {pct}% of the tool-surface token cost",

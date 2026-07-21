@@ -63,6 +63,7 @@ pub(super) fn score_schema(input: &CheckInput) -> DimensionScore {
                 1,
                 Finding {
                     dimension: Dimension::SchemaHygiene,
+                    code: FindingCode::SchemaHygieneToolMissingDescription,
                     severity: Severity::Medium,
                     message: format!("`{}` has no description", tool.name),
                     fix: format!("add a one-line description to `{}`", tool.name),
@@ -81,6 +82,7 @@ pub(super) fn score_schema(input: &CheckInput) -> DimensionScore {
                 no_desc.len(),
                 Finding {
                     dimension: Dimension::SchemaHygiene,
+                    code: FindingCode::SchemaHygieneParamMissingDescription,
                     severity: Severity::Medium,
                     message: format!(
                         "`{}`: parameter{} {} missing a description",
@@ -104,6 +106,7 @@ pub(super) fn score_schema(input: &CheckInput) -> DimensionScore {
                 no_type.len(),
                 Finding {
                     dimension: Dimension::SchemaHygiene,
+                    code: FindingCode::SchemaHygieneParamMissingType,
                     severity: Severity::High,
                     message: format!(
                         "`{}`: parameter{} {} missing a type",
@@ -131,6 +134,7 @@ pub(super) fn score_schema(input: &CheckInput) -> DimensionScore {
             missing_annotations,
             Finding {
                 dimension: Dimension::SchemaHygiene,
+                code: FindingCode::SchemaHygieneMissingAnnotations,
                 severity: Severity::Low,
                 message: format!(
                     "{missing_annotations} tool(s) declare no annotations \

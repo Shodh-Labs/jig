@@ -108,6 +108,7 @@ pub(super) fn score_robustness(input: &CheckInput) -> DimensionScore {
         if sub < 100.0 {
             findings.push(Finding {
                 dimension: Dimension::Robustness,
+                code: FindingCode::RobustnessSlowList,
                 severity: Severity::Medium,
                 message: format!("tools/list took {ms}ms"),
                 fix: "reduce list latency — avoid per-request cold starts or slow enumeration"
@@ -137,6 +138,7 @@ pub(super) fn score_robustness(input: &CheckInput) -> DimensionScore {
         if sub < 100.0 {
             findings.push(Finding {
                 dimension: Dimension::Robustness,
+                code: FindingCode::RobustnessSlowBoot,
                 severity: Severity::Medium,
                 message: match obs.timing.launcher {
                     Some(floor) => format!(
@@ -180,6 +182,7 @@ pub(super) fn score_robustness(input: &CheckInput) -> DimensionScore {
         parts.push("unclean shutdown".to_string());
         findings.push(Finding {
             dimension: Dimension::Robustness,
+            code: FindingCode::RobustnessUncleanShutdown,
             severity: Severity::Medium,
             message: "the server did not shut down cleanly".to_string(),
             fix: "handle transport close / EOF and exit promptly on shutdown".to_string(),
@@ -196,6 +199,7 @@ pub(super) fn score_robustness(input: &CheckInput) -> DimensionScore {
         if bytes > 0 {
             findings.push(Finding {
                 dimension: Dimension::Robustness,
+                code: FindingCode::RobustnessStderrNoise,
                 severity: Severity::Info,
                 message: format!(
                     "server wrote {} bytes to stderr (informational)",

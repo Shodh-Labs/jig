@@ -95,12 +95,21 @@ finding-class frequency table, and the failure taxonomy for the unreachable tail
 Non-applicable dimensions are excluded from the samples — a dimension that did
 not apply has no opinion about the server.
 
-**Known weakness:** `jig check --json` carries no stable finding class code, so
-class keys are *synthesised* by normalizing message text (backticked identifiers
-→ `<name>`, digit runs → `<n>`). Rewording a message splits a class; similar
-phrasing merges two. Treat `findingClasses` as an indicative frequency table and
-never compare those keys across jig versions. The per-dimension score statistics
-have no such problem — they read numeric fields.
+**Finding-class keys.** `jig check --json` emits a stable machine-readable
+`code` on every finding (`<dimension>.<class>`, e.g. `protocol.stdout_pollution`).
+When a raw file carries it, that code *is* the class key — an identity key that
+survives rewording and is comparable across jig versions. `_findingClassKeySource`
+in the calibration output records which source was used.
+
+**The committed datasets predate the field, so nothing about them changed.**
+`data/census2-raw.json` was collected before `code` existed; its findings carry
+none, and `data/census2-calibration.json`'s class keys remain *synthesised* by
+normalizing message text (backticked identifiers → `<name>`, digit runs → `<n>`).
+Re-aggregating cannot recover the codes — only a fresh stage-2 run can. Those
+keys are still not comparable across jig versions, and they are not comparable
+with code-derived keys either: rewording a message splits a class, similar
+phrasing merges two. Treat them as an indicative frequency table only. The
+per-dimension score statistics have no such problem — they read numeric fields.
 
 ## Output files
 

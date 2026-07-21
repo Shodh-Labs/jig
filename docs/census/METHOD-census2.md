@@ -99,13 +99,17 @@ Per-server reasons are retained in [`data/census2-raw.json`](../../data/census2-
 
 Non-applicable dimensions are excluded from the samples. A dimension that did not apply to a server has no opinion about it, and folding it in as a score would be inventing data.
 
-**One weakness deserves naming loudly.** `jig check --json` emits findings as `{dimension, message, fix, severity, points}` — there is **no stable finding class code**. So the aggregator *synthesises* a class key by normalizing the human-readable message: backticked identifiers become `<name>`, digit runs become `<n>`, lowercased, prefixed with dimension and severity. That works well enough to rank what the fleet trips over, and not at all as an identity key:
+**Finding-class keys: fixed going forward, not retroactively.** `jig check --json` now emits a stable machine-readable `code` on every finding — `<dimension>.<class>`, e.g. `protocol.stdout_pollution` — alongside the existing `{dimension, message, fix, severity, points}`. When the raw file carries it, the aggregator uses that code verbatim as the class key, and the resulting table *is* an identity key: it survives rewording and is comparable across jig versions. The output records which source was used in `_findingClassKeySource` (`code`, `message`, `mixed`, or `none`).
+
+**The committed census2 datasets predate the field.** [`data/census2-raw.json`](../../data/census2-raw.json) was collected before `code` existed, so it carries none, and [`data/census2-calibration.json`](../../data/census2-calibration.json)'s class keys are message-derived. Re-running the aggregator cannot recover the codes — only a fresh stage-2 fleet run can. **The published datasets are therefore no more comparable than they were**; nothing about this change makes their class keys valid to compare against a newer run.
+
+For those message-derived keys, the aggregator falls back to normalizing the human-readable message: backticked identifiers become `<name>`, digit runs become `<n>`, lowercased, prefixed with dimension and severity. That works well enough to rank what the fleet trips over, and not at all as an identity key:
 
 - rewording a message splits one class into two across jig versions;
 - two unrelated checks that happen to phrase similarly merge into one;
 - a message embedding an un-backticked, non-numeric variable fragments into one class per server.
 
-The finding-class table is an indicative frequency count and **is not comparable across jig versions**. The per-dimension score statistics carry no such caveat — they read numeric fields. The real fix is a stable class code in the check JSON; until jig emits one, this is the ceiling.
+A message-derived finding-class table is an indicative frequency count and **is not comparable across jig versions, nor with a code-derived table**. The per-dimension score statistics carry no such caveat — they read numeric fields.
 
 ---
 

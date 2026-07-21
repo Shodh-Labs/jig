@@ -52,6 +52,7 @@ expression: render_json(&report)
       "dimension": "schema_hygiene",
       "findings": [
         {
+          "code": "schema_hygiene.param_missing_description",
           "dimension": "schema_hygiene",
           "fix": "describe each parameter of `make_reservation` so the model can fill it correctly",
           "message": "`make_reservation`: parameter `party` missing a description",
@@ -59,6 +60,7 @@ expression: render_json(&report)
           "severity": "medium"
         },
         {
+          "code": "schema_hygiene.missing_annotations",
           "dimension": "schema_hygiene",
           "fix": "add tool annotations so clients can reason about side effects",
           "message": "3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)",
@@ -83,6 +85,7 @@ expression: render_json(&report)
       "dimension": "description_quality",
       "findings": [
         {
+          "code": "description_quality.missing_title",
           "dimension": "description_quality",
           "fix": "add a `title` to each tool for nicer client display",
           "message": "3 tool(s) have no human-facing title",
@@ -139,6 +142,7 @@ expression: render_json(&report)
   "toolCount": 3,
   "topFixes": [
     {
+      "code": "schema_hygiene.param_missing_description",
       "dimension": "schema_hygiene",
       "fix": "describe each parameter of `make_reservation` so the model can fill it correctly",
       "message": "`make_reservation`: parameter `party` missing a description",
@@ -146,6 +150,7 @@ expression: render_json(&report)
       "severity": "medium"
     },
     {
+      "code": "schema_hygiene.missing_annotations",
       "dimension": "schema_hygiene",
       "fix": "add tool annotations so clients can reason about side effects",
       "message": "3 tool(s) declare no annotations (readOnlyHint, destructiveHint, …)",
@@ -153,6 +158,7 @@ expression: render_json(&report)
       "severity": "low"
     },
     {
+      "code": "description_quality.missing_title",
       "dimension": "description_quality",
       "fix": "add a `title` to each tool for nicer client display",
       "message": "3 tool(s) have no human-facing title",

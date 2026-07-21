@@ -55,6 +55,7 @@ pub(super) fn score_protocol(input: &CheckInput) -> DimensionScore {
         let (message, fix) = pollution_finding_text(n, input.observations.first_pollution.as_ref());
         findings.push(Finding {
             dimension: Dimension::Protocol,
+            code: FindingCode::ProtocolStdoutPollution,
             severity: Severity::High,
             message,
             fix,
@@ -79,6 +80,7 @@ pub(super) fn score_protocol(input: &CheckInput) -> DimensionScore {
         let (message, fix) = offspec_finding_text(&offspec, revision, assumed_latest);
         findings.push(Finding {
             dimension: Dimension::Protocol,
+            code: FindingCode::ProtocolOffspecCapability,
             severity: Severity::Medium,
             message,
             fix,
@@ -99,6 +101,7 @@ pub(super) fn score_protocol(input: &CheckInput) -> DimensionScore {
         score -= points;
         findings.push(Finding {
             dimension: Dimension::Protocol,
+            code: FindingCode::ProtocolInitializeFieldInvalid,
             severity: Severity::High,
             message: format!(
                 "initialize result has {} (conformance: server-initialize)",
@@ -122,6 +125,7 @@ pub(super) fn score_protocol(input: &CheckInput) -> DimensionScore {
         score -= points;
         findings.push(Finding {
             dimension: Dimension::Protocol,
+            code: FindingCode::ProtocolToolNameFormat,
             severity: Severity::High,
             message: format!(
                 "tool name{} {} violate MCP name format (conformance: tools-name-format, SEP-986)",
@@ -144,6 +148,7 @@ pub(super) fn score_protocol(input: &CheckInput) -> DimensionScore {
             score -= PROTOCOL_UNKNOWN_METHOD_WRONG_CODE_PENALTY;
             findings.push(Finding {
                 dimension: Dimension::Protocol,
+                code: FindingCode::ProtocolUnknownMethodWrongCode,
                 severity: Severity::Medium,
                 message: format!(
                     "unknown method answered with JSON-RPC error {code}, not {JSONRPC_METHOD_NOT_FOUND} \
@@ -161,6 +166,7 @@ pub(super) fn score_protocol(input: &CheckInput) -> DimensionScore {
             score -= PROTOCOL_UNKNOWN_METHOD_ACCEPTED_PENALTY;
             findings.push(Finding {
                 dimension: Dimension::Protocol,
+                code: FindingCode::ProtocolUnknownMethodAccepted,
                 severity: Severity::High,
                 message: "server returned a success result for an unknown method instead of \
                           -32601 Method not found (conformance: negative)"
@@ -182,6 +188,7 @@ pub(super) fn score_protocol(input: &CheckInput) -> DimensionScore {
         score -= PROTOCOL_LIST_TIMEOUT_PENALTY;
         findings.push(Finding {
             dimension: Dimension::Protocol,
+            code: FindingCode::ProtocolListTimeout,
             severity: Severity::High,
             message: "a list operation timed out — the server accepted the request but never \
                       responded"

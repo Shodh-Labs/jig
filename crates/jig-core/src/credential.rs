@@ -39,7 +39,7 @@
 //! only ever *penalizes* the three shapes that are unambiguously worse for the
 //! user, and never rewards the good one with points it cannot justify.
 
-use crate::check::{Dimension, Finding, Severity};
+use crate::check::{Dimension, Finding, FindingCode, Severity};
 
 /// Words that look like environment variables but are log furniture. Matched
 /// case-sensitively against the whole candidate token, so `ERROR_CHANNEL` (a
@@ -237,9 +237,10 @@ impl Verdict {
     /// observed. Attached to [`Dimension::Robustness`], which is where the
     /// sub-score lands.
     pub fn finding(&self) -> Option<Finding> {
-        let (severity, message, fix) = match self {
+        let (code, severity, message, fix) = match self {
             Verdict::NotObserved => return None,
             Verdict::NamedVariable { variable, .. } => (
+                FindingCode::RobustnessCredentialFailureNamedVariable,
                 Severity::Info,
                 self.line(),
                 format!(
@@ -248,6 +249,7 @@ impl Verdict {
                 ),
             ),
             Verdict::UnnamedVariable { .. } => (
+                FindingCode::RobustnessCredentialFailureUnnamedVariable,
                 Severity::Medium,
                 self.line(),
                 "name the missing environment variable in the failure message, e.g. \
@@ -256,6 +258,7 @@ impl Verdict {
                     .to_string(),
             ),
             Verdict::Hung => (
+                FindingCode::RobustnessCredentialFailureHang,
                 Severity::High,
                 self.line(),
                 "never block on a missing credential — check for it before opening the \
@@ -265,6 +268,7 @@ impl Verdict {
                     .to_string(),
             ),
             Verdict::ExitedZero => (
+                FindingCode::RobustnessCredentialFailureExitedZero,
                 Severity::High,
                 self.line(),
                 "exit with a non-zero status when startup fails. A zero exit tells a \
@@ -275,6 +279,7 @@ impl Verdict {
         };
         Some(Finding {
             dimension: Dimension::Robustness,
+            code,
             severity,
             message,
             fix,

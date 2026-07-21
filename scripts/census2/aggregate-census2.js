@@ -11,22 +11,30 @@
  *   - cap counts and the failure taxonomy for the unreachable tail
  *
  * ---------------------------------------------------------------------------
- * KNOWN WEAKNESS — finding-class keys are derived from message text
+ * FINDING-CLASS KEYS — `code` when present, message text otherwise
  * ---------------------------------------------------------------------------
- * `jig check --json` emits findings as {dimension, message, fix, severity,
- * points}. There is NO stable finding class code in that document. So a class
- * key here is *synthesised* by normalizing the human-readable message:
- * backticked identifiers -> <name>, digit runs -> <n>, lowercased, prefixed
- * with the dimension and severity.
+ * `jig check --json` now emits a stable machine-readable `code` on every
+ * finding (`<dimension>.<class>`, e.g. `protocol.stdout_pollution`). When a raw
+ * file carries it, the class key here IS that code: an identity key that
+ * survives rewording and is comparable across jig versions.
  *
- * That means the finding-class table is only as stable as jig's wording:
+ * The fallback below exists for raw files collected BEFORE jig emitted `code`.
+ * For those, a class key is still *synthesised* by normalizing the
+ * human-readable message: backticked identifiers -> <name>, digit runs -> <n>,
+ * lowercased, prefixed with the dimension and severity. That heuristic has the
+ * defects it always had:
  *   - rewording a message splits one class into two across jig versions;
  *   - two genuinely different checks that happen to phrase similarly merge;
  *   - a message that embeds an un-backticked, un-numeric variable (a tool name
  *     in plain text, a path) fragments into one class per server.
- * Treat `findingClasses` as an indicative frequency table, not as an identity
- * key. Cross-version comparison of these keys is NOT valid. The fix is a stable
- * class code in the check JSON; until jig emits one, this is the ceiling.
+ * Message-derived keys are an indicative frequency table, never an identity
+ * key, and are NOT comparable across jig versions — nor with code-derived keys
+ * from a newer run. `_findingClassKeySource` in the output records which of the
+ * two produced this dataset's keys.
+ *
+ * **The committed census2 datasets predate the `code` field.** Re-aggregating
+ * them cannot recover it; only a fresh stage-2 run can. Their class keys stay
+ * message-derived and stay incomparable.
  *
  * The per-dimension score statistics do not have this problem — they read
  * numeric fields — and are the part of the dataset weight calibration uses.
@@ -155,7 +163,14 @@ for (const [name, scores] of Object.entries(dimScores)) {
 // Finding classes (see the KNOWN WEAKNESS note in the header)
 // ---------------------------------------------------------------------------
 
-function findingClassKey(dim, f) {
+/** The stable class code jig emits, when this raw file is new enough to have it. */
+function findingCode(f) {
+  const code = f && typeof f.code === 'string' ? f.code.trim() : '';
+  return code || null;
+}
+
+/** The pre-`code` fallback: a class key synthesised from the message text. */
+function messageDerivedKey(dim, f) {
   const norm = String(f.message || '')
     .replace(/`[^`]*`/g, '<name>')
     .replace(/\d[\d,.]*/g, '<n>')
@@ -164,12 +179,20 @@ function findingClassKey(dim, f) {
   return `${dim}: [${f.severity || '?'}] ${norm}`;
 }
 
+function findingClassKey(dim, f) {
+  return findingCode(f) || messageDerivedKey(dim, f);
+}
+
 const findingServers = {}; // key -> Set(package)
 const findingCounts = {}; // key -> total occurrences
 const findingPoints = {}; // key -> total points deducted
+let findingsWithCode = 0;
+let findingsTotal = 0;
 for (const r of checked) {
   for (const d of r.check.dimensions || []) {
     for (const f of d.findings || []) {
+      findingsTotal++;
+      if (findingCode(f)) findingsWithCode++;
       const key = findingClassKey(d.dimension, f);
       findingCounts[key] = (findingCounts[key] || 0) + 1;
       findingPoints[key] = (findingPoints[key] || 0) + (Number(f.points) || 0);
@@ -177,6 +200,18 @@ for (const r of checked) {
     }
   }
 }
+// Which of the two key sources produced this dataset. `mixed` means the raw
+// file spans a jig upgrade, and its class keys must not be compared with each
+// other, let alone across datasets.
+const findingClassKeySource =
+  findingsTotal === 0
+    ? 'none'
+    : findingsWithCode === findingsTotal
+      ? 'code'
+      : findingsWithCode === 0
+        ? 'message'
+        : 'mixed';
+
 const findingClasses = Object.fromEntries(
   Object.entries(findingServers)
     .map(([k, set]) => [
@@ -216,10 +251,15 @@ const out = {
     'jig census2 calibration v0. Per-dimension score spreads, finding-class frequencies, ' +
     'composite/grade distribution across the checked fleet, and the failure taxonomy for the ' +
     'unreachable tail.',
+  _findingClassKeySource: findingClassKeySource,
   _findingClassCaveat:
-    'Finding-class keys are synthesised by normalizing message text (backticked identifiers -> ' +
-    '<name>, digit runs -> <n>) because `jig check --json` carries no stable finding class code. ' +
-    'They are indicative frequencies only, and are NOT comparable across jig versions.',
+    findingClassKeySource === 'code'
+      ? 'Finding-class keys are jig\'s stable `code` field (`<dimension>.<class>`), so they are ' +
+        'identity keys and are comparable across jig versions.'
+      : 'Finding-class keys are synthesised by normalizing message text (backticked identifiers ' +
+        '-> <name>, digit runs -> <n>) because this raw file predates the `code` field in ' +
+        '`jig check --json`. They are indicative frequencies only, and are NOT comparable across ' +
+        'jig versions or with code-derived keys. Only a fresh stage-2 run recovers the codes.',
   collected: raw.collected,
   jigBinary: raw.jigBinary,
   rubricVersion: checked.length ? checked[0].check.rubricVersion || null : null,
@@ -238,7 +278,9 @@ console.error('\n================ CENSUS2 CALIBRATION ================');
 console.error(`checked servers:  ${checked.length} of ${raw.results.length} attempted`);
 console.error(`rubric:           ${out.rubricVersion || 'unknown'}`);
 console.error(`dimensions:       ${Object.keys(dimensions).length}`);
-console.error(`finding classes:  ${Object.keys(findingClasses).length} (message-derived — see header)`);
+console.error(
+  `finding classes:  ${Object.keys(findingClasses).length} (${findingClassKeySource}-derived keys — see header)`
+);
 console.error(`failure classes:  ${Object.keys(failures).length}`);
 console.error(`out -> ${OUT}`);
 console.error('====================================================');

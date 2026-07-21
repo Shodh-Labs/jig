@@ -59,7 +59,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::check::{Dimension, Finding, Severity};
+use crate::check::{Dimension, Finding, FindingCode, Severity};
 use crate::protocol::Tool;
 
 // ---------------------------------------------------------------------------
@@ -651,11 +651,12 @@ fn severity_rank(s: Severity) -> u8 {
     }
 }
 
-/// Build an `injection`-category [`Finding`]. Always pinned — see the
-/// [module docs](self#scoring-posture).
-fn finding(severity: Severity, message: String, fix: String) -> Finding {
+/// Build an `injection`-category [`Finding`] of class `code`. Always pinned —
+/// see the [module docs](self#scoring-posture).
+fn finding(code: FindingCode, severity: Severity, message: String, fix: String) -> Finding {
     Finding {
         dimension: Dimension::Injection,
+        code,
         severity,
         message,
         fix,
@@ -1095,6 +1096,7 @@ fn imperative_findings(tools: &[Tool], out: &mut Vec<Finding>) {
     }
     for (phrase, names) in hits {
         out.push(finding(
+            FindingCode::InjectionImperativeInstruction,
             Severity::High,
             format!(
                 "{} contains the model-directed instruction \"{phrase}\" — a tool-poisoning \
@@ -1139,6 +1141,7 @@ fn fake_turn_findings(tools: &[Tool], out: &mut Vec<Finding>) {
 
     if !token_hits.is_empty() {
         out.push(finding(
+            FindingCode::InjectionFakeTurnControlToken,
             Severity::High,
             format!(
                 "{} embeds chat-template control tokens (e.g. <|im_start|>) — a fake-turn \
@@ -1153,6 +1156,7 @@ fn fake_turn_findings(tools: &[Tool], out: &mut Vec<Finding>) {
     }
     if !tag_hits.is_empty() {
         out.push(finding(
+            FindingCode::InjectionFakeTurnRoleTag,
             Severity::High,
             format!(
                 "{} embeds role/instruction tags (e.g. <system>, </instructions>) — a fake-turn \
@@ -1167,6 +1171,7 @@ fn fake_turn_findings(tools: &[Tool], out: &mut Vec<Finding>) {
     }
     if !transcript_hits.is_empty() {
         out.push(finding(
+            FindingCode::InjectionFakeTurnTranscript,
             Severity::High,
             format!(
                 "{} contains a simulated conversation transcript (two or more of \
@@ -1238,6 +1243,7 @@ fn hidden_char_findings(tools: &[Tool], out: &mut Vec<Finding>) {
 
     if !zero_width.is_empty() {
         out.push(finding(
+            FindingCode::InjectionZeroWidthCharacters,
             Severity::High,
             format!(
                 "{} contains zero-width characters (U+200B–U+200D / U+FEFF) that render as \
@@ -1251,6 +1257,7 @@ fn hidden_char_findings(tools: &[Tool], out: &mut Vec<Finding>) {
     }
     if !bidi.is_empty() {
         out.push(finding(
+            FindingCode::InjectionBidiControls,
             Severity::High,
             format!(
                 "{} contains Unicode bidirectional controls (U+202A–U+202E / U+2066–U+2069) — \
@@ -1266,6 +1273,7 @@ fn hidden_char_findings(tools: &[Tool], out: &mut Vec<Finding>) {
     }
     for (name, codepoints) in homoglyph {
         out.push(finding(
+            FindingCode::InjectionHomoglyphName,
             Severity::High,
             format!(
                 "tool name `{name}` contains non-ASCII characters ({codepoints}) that can \
@@ -1305,6 +1313,7 @@ fn exfiltration_findings(tools: &[Tool], out: &mut Vec<Finding>) {
         return;
     }
     out.push(finding(
+        FindingCode::InjectionExfiltrationShape,
         Severity::Medium,
         format!(
             "{} pairs a hard-coded URL with an outbound-transfer verb (send/post/upload/report \
@@ -1433,6 +1442,7 @@ fn mismatch_findings(tools: &[Tool], out: &mut Vec<Finding>) {
 
     for (name, verb) in name_hits {
         out.push(finding(
+            FindingCode::InjectionReadNameWriteBehaviour,
             Severity::Medium,
             format!(
                 "tool `{name}` is named as a read but its description says it \"{verb}\" — a \
@@ -1448,6 +1458,7 @@ fn mismatch_findings(tools: &[Tool], out: &mut Vec<Finding>) {
     }
     for (name, verb) in hint_hits {
         out.push(finding(
+            FindingCode::InjectionReadOnlyHintContradicted,
             Severity::Medium,
             format!(
                 "tool `{name}` declares `readOnlyHint: true` but its description says it \

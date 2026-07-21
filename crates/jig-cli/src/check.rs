@@ -792,6 +792,9 @@ fn dimension_json(d: &DimensionScore) -> Value {
 fn finding_json(f: &Finding) -> Value {
     json!({
         "dimension": f.dimension.key(),
+        // The stable machine-readable class. Additive since `rubric-v1.5`;
+        // consumers should key off this rather than parsing `message`.
+        "code": f.code.as_str(),
         "severity": severity_tag(f.severity),
         "message": f.message,
         "fix": f.fix,
@@ -1048,6 +1051,50 @@ mod tests {
     fn json_report_snapshot() {
         let report = evaluate(&mock_input(), None);
         insta::assert_snapshot!("check_json", render_json(&report));
+    }
+
+    /// `--json` carries the stable machine-readable class alongside the prose.
+    /// This is the field consumers key off instead of normalizing `message`, so
+    /// its presence on *every* finding — dimension, advisor and injection — is
+    /// the contract, and a couple of exact strings are pinned here too.
+    #[test]
+    fn the_json_report_carries_a_code_on_every_finding() {
+        let report = evaluate(&degraded_input(), None);
+        let v: Value = serde_json::from_str(&render_json(&report)).expect("valid JSON");
+
+        let mut codes: Vec<String> = Vec::new();
+        let mut collect = |arr: &Value| {
+            for f in arr.as_array().into_iter().flatten() {
+                let code = f["code"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("finding has no `code`: {f}"));
+                assert!(!code.is_empty(), "finding has an empty `code`: {f}");
+                // Additive only: the prose fields are still there.
+                assert!(f["message"].is_string() && f["fix"].is_string());
+                codes.push(code.to_string());
+            }
+        };
+        for d in v["dimensions"].as_array().expect("dimensions") {
+            collect(&d["findings"]);
+        }
+        collect(&v["topFixes"]);
+        collect(&v["advisor"]);
+        collect(&v["injection"]);
+
+        assert!(!codes.is_empty(), "the degraded fixture emits findings");
+        assert!(
+            codes.iter().any(|c| c == "protocol.stdout_pollution"),
+            "expected the pollution class, got {codes:?}"
+        );
+        assert!(
+            codes.iter().any(|c| c == "protocol.offspec_capability"),
+            "expected the off-spec capability class, got {codes:?}"
+        );
+        // Every code names its dimension, so a consumer can group without a
+        // lookup table.
+        for c in &codes {
+            assert!(c.contains('.'), "`{c}` is not `<dimension>.<class>`");
+        }
     }
 
     /// A census in which the server under test is heavier than every sample, so

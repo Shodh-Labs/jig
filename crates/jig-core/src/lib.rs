@@ -66,9 +66,9 @@ pub use bench::{
 pub use boot::{is_npx, npx_package, prewarm_args, Timing as BootTiming};
 pub use check::{
     badge_color, bundled_percentiles, capability_offspec_note, evaluate, CheckInput, ContextCap,
-    ContextProvenance, Dimension, DimensionScore, Finding, Observations, Percentiles,
-    PollutionSite, ProtocolCap, Report as CheckReport, Severity, UnknownMethodProbe,
-    BUNDLED_PERCENTILES_JSON, RATE_SCORE_FLOOR, RUBRIC_VERSION,
+    ContextProvenance, Dimension, DimensionScore, Finding, FindingCode, Observations, Percentiles,
+    PollutionSite, ProtocolCap, Report as CheckReport, Severity, UnknownFindingCode,
+    UnknownMethodProbe, BUNDLED_PERCENTILES_JSON, RATE_SCORE_FLOOR, RUBRIC_VERSION,
 };
 pub use client::{Client, ClientOptions};
 pub use clients::{

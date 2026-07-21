@@ -73,6 +73,7 @@ pub(super) fn score_description(input: &CheckInput) -> DimensionScore {
                 1,
                 Finding {
                     dimension: Dimension::DescriptionQuality,
+                    code: FindingCode::DescriptionQualityNameHasWhitespace,
                     severity: Severity::High,
                     message: format!(
                         "`{}` contains whitespace — models cannot call it",
@@ -94,6 +95,7 @@ pub(super) fn score_description(input: &CheckInput) -> DimensionScore {
                     1,
                     Finding {
                         dimension: Dimension::DescriptionQuality,
+                        code: FindingCode::DescriptionQualityNameConventionInconsistent,
                         severity: Severity::Low,
                         message: format!(
                             "`{}` uses {} while the server is mostly {}",
@@ -124,6 +126,7 @@ pub(super) fn score_description(input: &CheckInput) -> DimensionScore {
                 1,
                 Finding {
                     dimension: Dimension::DescriptionQuality,
+                    code: FindingCode::DescriptionQualityDescriptionTerse,
                     severity: Severity::Medium,
                     message: format!(
                         "`{}` description is very terse ({toks} tokens) — models struggle to select it",
@@ -144,6 +147,7 @@ pub(super) fn score_description(input: &CheckInput) -> DimensionScore {
                 1,
                 Finding {
                     dimension: Dimension::DescriptionQuality,
+                    code: FindingCode::DescriptionQualityDescriptionVerbose,
                     severity: Severity::Low,
                     message: format!(
                         "`{}` description is very long ({toks} tokens) — context waste",
@@ -173,6 +177,7 @@ pub(super) fn score_description(input: &CheckInput) -> DimensionScore {
             missing_titles,
             Finding {
                 dimension: Dimension::DescriptionQuality,
+                code: FindingCode::DescriptionQualityMissingTitle,
                 severity: Severity::Low,
                 message: format!("{missing_titles} tool(s) have no human-facing title"),
                 fix: "add a `title` to each tool for nicer client display".to_string(),

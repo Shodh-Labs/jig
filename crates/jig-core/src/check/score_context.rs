@@ -82,6 +82,7 @@ pub(super) fn score_context(
             let points = clamp_score(100.0 - score);
             findings.push(Finding {
                 dimension: Dimension::ContextCost,
+                code: FindingCode::ContextCostHeavySurface,
                 severity: if total_tokens > 20_000 {
                     Severity::High
                 } else {
