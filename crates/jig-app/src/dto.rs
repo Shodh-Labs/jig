@@ -364,7 +364,7 @@ pub fn honesty_notes(report: &Report) -> Vec<String> {
         ),
     }
     notes.push(format!(
-        "Protocol compliance and robustness reflect only what was observed in one session. Rubric weights are editorial ({}).",
+        "Protocol compliance and robustness reflect only what was observed in one session. Rubric weights are fitted to a 63-server fleet census ({}).",
         report.rubric_version
     ));
     notes

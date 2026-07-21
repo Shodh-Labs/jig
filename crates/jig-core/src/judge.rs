@@ -24,7 +24,7 @@
 //!    [`evaluate`](crate::check::evaluate). It cannot reach the composite, a
 //!    dimension score, the badge, `--min-score`, or the report card's grade —
 //!    those are computed from a [`CheckInput`](crate::check::CheckInput) that
-//!    has no judge field at all. Judged output is **outside rubric-v1.3**.
+//!    has no judge field at all. Judged output is **outside rubric-v1.5**.
 //! 3. **Pinned and recorded.** [`JUDGE_PROMPT_VERSION`], the verbatim
 //!    [`JUDGE_SYSTEM_PROMPT`], the temperature, the endpoint, and the model id
 //!    *as the provider reported it* ([`JudgeReport::reported_model`], never the

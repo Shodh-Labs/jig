@@ -241,17 +241,26 @@ Every run also writes this — the self-contained HTML report card, by default:
 
 ![The HTML report card jig writes by default — score hero, dimension bars, token chart](docs/media/report-page.png)
 
-One session, one grade over five weighted dimensions (`rubric-v1.3`):
+One session, one grade over five weighted dimensions (`rubric-v1.5`):
 
 | Dimension | Weight | What it scores | How it's scored |
 |:----------|-------:|:---------------|:----------------|
-| Protocol compliance | 25 | handshake, stdout framing/pollution, spec-valid capabilities, timeouts | absolute penalties from 100; **caps the composite** when a HIGH-severity defect fires |
+| Protocol compliance | 15 | handshake, stdout framing/pollution, spec-valid capabilities, timeouts | absolute penalties from 100; **caps the composite** when a HIGH-severity defect fires |
 | Context cost | 25 | gpt-4o exact total tokens (percentile vs the ecosystem, or absolute bands) | interpolated bands; **caps the composite** when catastrophic |
 | Schema hygiene | 20 | per tool: descriptions, param types & descriptions, annotations | **rate-based**, floor 15 |
 | Description quality | 15 | *heuristic* — description length, name consistency, titles (no LLM) | **rate-based**, floor 15 |
-| Robustness | 15 | *observed only* — list latency, server boot, clean shutdown, credential-failure UX | mean of observed sub-scores |
+| Robustness | 25 | *observed only* — list latency, server boot, clean shutdown, credential-failure UX | mean of observed sub-scores |
 
 Grades: **A** ≥ 90 · **B** 80–89 · **C** 70–79 · **D** 60–69 · **F** < 60.
+
+**The weights are fitted, not asserted** (`rubric-v1.5`). A 63-server fleet census
+showed protocol compliance has essentially no spread among servers that answer at
+all (p25 = median = p75 = 100), while robustness is the one craft dimension with
+real spread once `rubric-v1.4` fixed boot measurement — so weight moved from the
+first to the second. Every dimension score is now printed beside that dimension's
+**fleet spread** `[p25·median·p75]`, so you can see for yourself which dimensions
+separate servers. Details, including the candidate weight sets that were tried and
+rejected, are in [`docs/rubric-changelog.md`](docs/rubric-changelog.md).
 
 Two sections are **reported and never scored**, because neither is a defect the
 composite can price honestly:
@@ -285,35 +294,46 @@ genuinely absent structure. A 90-tool server and a 5-tool server with the same
 
 **The context-cost cap.** Context cost is a cost, not a quality — schema polish
 cannot redeem a server that spends 42k tokens of every conversation. When the
-context sub-score is catastrophic it bounds the composite outright: below 20
-(beyond ~p95 of the census) caps at **65 (D)**, below 10 caps at **55 (F)**. The
-cap is never silent — it emits a finding and a visible line naming the token
-count and its multiple of the census median:
+context sub-score is catastrophic it bounds the composite outright, on a
+continuous ramp whose anchors are census percentiles: the cap is inert at or above
+p90 and tightens smoothly from there.
+
+Since `rubric-v1.5` the cap bottoms out at **60 (D)**, not F. A large-but-correct
+server is not a broken one, and a card reading protocol 100 / schema 100 /
+description 100 above an **F** told the reader the instrument was broken rather
+than the server. F stays reserved for servers that genuinely are broken — polluted
+stdout, an unanswered `*/list`, a failed handshake — which is why the *protocol*
+ceiling is deliberately **not** floored the same way. A server still reaches F on
+context cost, but only by combining it with real defects elsewhere.
+
+The cap is never silent — it emits a finding and a visible line naming the token
+count, its multiple of the census median, and the floor when the floor is what
+bound:
 
 ```
-composite capped at 55 by context cost: 42,288 tokens is 25× the census median
+composite capped at 60 by context cost (context sub-score 5): 42,288 tokens is 24× the census median (D floor: a single dimension bounds the composite but cannot reach F alone)
 ```
 
 > Scores from different rubric versions are **not comparable**. See
 > [`docs/rubric-changelog.md`](docs/rubric-changelog.md) for what changed in
-> `rubric-v1.3` and why.
+> `rubric-v1.5` and why.
 
 Every deduction is a typed finding carrying the fix, and the three highest-impact
 fixes are surfaced up top:
 
 ```
 jig check · jig-mock-server v0.1.0
-protocol 2025-06-18 · rubric-v1.3
+protocol 2025-06-18 · rubric-v1.5
 
   ✓  99 / 100   grade A
 
   install n/a · boot 0.8s
 
-  ✓  Protocol compliance  100   clean handshake, no stdout pollution, spec-valid capabilities
-  ✓  Context cost          99   183 tokens (no ecosystem data — absolute bands)
-  ✓  Schema hygiene        96   `make_reservation`: parameter `party` missing a description (+1 more)
-  ✓  Description quality   99   heuristic · 3 tool(s) have no human-facing title
-  ✓  Robustness           100   list 2ms, boot 751ms, clean shutdown
+  ✓  Protocol compliance  100  [100·100·100]  clean handshake, no stdout pollution, spec-valid capabilities
+  ✓  Context cost          99  [43·87·97]     183 tokens (no ecosystem data — absolute bands)
+  ✓  Schema hygiene        96  [96·99·100]    `make_reservation`: parameter `party` missing a description (+1 more)
+  ✓  Description quality   99  [96·98·99]     heuristic · 3 tool(s) have no human-facing title
+  ✓  Robustness           100  [90·95·99]     list 2ms, boot 751ms, clean shutdown
 
 Top fixes
   1. [schema_hygiene] `make_reservation`: parameter `party` missing a description
@@ -325,6 +345,7 @@ Top fixes
 
 Description quality is heuristic (deterministic, no LLM).
 Context cost scored with absolute bands (no ecosystem dataset available).
+[p25·median·p75] is where 63 measured servers scored on that dimension — a dimension whose three numbers sit together separates servers little. Not scored.
 ```
 
 **A shareable report card.** Human runs also write a self-contained HTML report —
@@ -385,7 +406,7 @@ Description judge (opt-in · never scored)
     ✗ distinguishes siblings  no       Never says when to use this rather than `search_code`.
     ? parameters sufficient   unclear  `scope` is named but its accepted values are undocumented.
 
-  Judged output is outside rubric-v1.3: it is reported, never scored, and changed nothing above.
+  Judged output is outside rubric-v1.5: it is reported, never scored, and changed nothing above.
 ```
 
 **The honesty rules are the feature.** They are not conventions, they are how
@@ -413,7 +434,7 @@ the code is built:
   `unparseable` verdict; an omitted tool becomes `not_judged`. Nothing is ever
   guessed, coerced, or backfilled.
 
-Judged output is **outside `rubric-v1.3`** — see the
+Judged output is **outside `rubric-v1.5`** — see the
 [rubric changelog](docs/rubric-changelog.md).
 
 Model access is `jig bench`'s, unchanged: a vendor key from the environment, or
@@ -512,7 +533,7 @@ Authorization Server Metadata
 stdio target gets a clear error). Every HTTP exchange is captured to the tap
 (`--tap`) and to `--json`, with any token redacted. `jig check --http` also
 surfaces a compact, informational auth line — the auth dimension is **not** scored
-into `rubric-v1.3` in this milestone.
+into `rubric-v1.5` in this milestone.
 
 #### `jig auth --login` — the real authorization-code flow
 

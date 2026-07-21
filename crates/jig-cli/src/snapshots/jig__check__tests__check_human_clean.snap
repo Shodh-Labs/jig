@@ -3,15 +3,15 @@ source: crates/jig-cli/src/check.rs
 expression: render_human(&report)
 ---
 jig check · jig-mock-server v0.1.0
-protocol 2025-06-18 · rubric-v1.3
+protocol 2025-06-18 · rubric-v1.5
 
   ✓  99 / 100   grade A
 
-  ✓  Protocol compliance  100   clean handshake, no stdout pollution, spec-valid capabilities
-  ✓  Context cost          99   183 tokens (no ecosystem data — absolute bands)
-  ✓  Schema hygiene        96   `make_reservation`: parameter `party` missing a description (+1 more)
-  ✓  Description quality   99   heuristic · 3 tool(s) have no human-facing title
-  ✓  Robustness           100   list 12ms, clean shutdown
+  ✓  Protocol compliance  100  [100·100·100]  clean handshake, no stdout pollution, spec-valid capabilities
+  ✓  Context cost          99  [43·87·97]     183 tokens (no ecosystem data — absolute bands)
+  ✓  Schema hygiene        96  [96·99·100]    `make_reservation`: parameter `party` missing a description (+1 more)
+  ✓  Description quality   99  [96·98·99]     heuristic · 3 tool(s) have no human-facing title
+  ✓  Robustness           100  [90·95·99]     list 12ms, clean shutdown
 
 Top fixes
   1. [schema_hygiene] `make_reservation`: parameter `party` missing a description
@@ -23,3 +23,4 @@ Top fixes
 
 Description quality is heuristic (deterministic, no LLM).
 Context cost scored with absolute bands (no ecosystem dataset available).
+[p25·median·p75] is where 63 measured servers scored on that dimension — a dimension whose three numbers sit together separates servers little. Not scored.

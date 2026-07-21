@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-use jig_core::check::{ContextProvenance, DimensionScore, Finding, Severity};
+use jig_core::check::{
+    fleet_spread, ContextProvenance, DimensionScore, DimensionSpread, Finding, Severity,
+};
 use jig_core::{
     self, badge_color, evaluate, grade_startup, BootTiming, CheckInput, CheckReport, JigError,
     Observations, Percentiles, PollutionSite, ProtocolTap, StartupVerdict,
@@ -195,11 +197,14 @@ pub(crate) async fn observe_and_evaluate(
     // SOP 25: populate the npx cache *before* timing the launch, so the boot
     // number is the server's and not the registry's. Non-npx commands and
     // `--no-prewarm` skip straight through. See [`jig_core::boot`].
-    let install = match target {
+    // `rubric-v1.4`: the pass also returns the measured launcher floor — a null
+    // program timed through the same `npx` path on a warm cache — which is
+    // subtracted from boot so the graded number is the server's.
+    let (install, launcher) = match target {
         Target::Stdio { program, args, .. } if !no_prewarm => {
             crate::startup::prewarm(program, args).await
         }
-        _ => None,
+        _ => (None, None),
     };
 
     // Boot is launch -> `initialize` response, with the cache already warm.
@@ -248,6 +253,7 @@ pub(crate) async fn observe_and_evaluate(
         install,
         boot,
         prewarm_skipped: no_prewarm && matches!(target, Target::Stdio { .. }),
+        launcher,
     };
 
     // The one session: time the list operation, then read the surface. A list
@@ -493,8 +499,14 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
         .map(|d| d.dimension.label().chars().count())
         .max()
         .unwrap_or(0);
+    let spread_width = report
+        .dimensions
+        .iter()
+        .map(|d| spread_cell(fleet_spread(d.dimension)).chars().count())
+        .max()
+        .unwrap_or(0);
     for d in &report.dimensions {
-        s.push_str(&dimension_line(d, label_width));
+        s.push_str(&dimension_line(d, label_width, spread_width));
     }
 
     // Tool-set advisor: emergent, cross-tool problems the per-tool dimensions
@@ -534,14 +546,42 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
     s
 }
 
-/// One aligned dimension line: `⚠  Schema hygiene       94   <summary>`.
-fn dimension_line(d: &DimensionScore, label_width: usize) -> String {
+/// The fleet-spread cell for a dimension line: `[43·87·97]`, the census-v2
+/// p25 · median · p75 (`rubric-v1.5`).
+///
+/// Rounded to whole numbers, because this is orientation and not arithmetic —
+/// the exact decimals are in `--json` and in `data/dimension-spread.json`. Empty
+/// when no spread is bundled for the dimension, so the line degrades to its
+/// pre-`v1.5` shape rather than showing a hole.
+fn spread_cell(spread: Option<DimensionSpread>) -> String {
+    match spread {
+        Some(s) => format!(
+            "[{}·{}·{}]",
+            s.p25.round() as i64,
+            s.median.round() as i64,
+            s.p75.round() as i64
+        ),
+        None => String::new(),
+    }
+}
+
+/// One aligned dimension line:
+/// `⚠  Schema hygiene       94  [96·99·100]  <summary>`.
+///
+/// The fleet spread sits between the score and the summary rather than at the
+/// end of the line: the summary is variable-length, so anything after it would
+/// be ragged, and the whole value of the spread is being able to read it *down*
+/// the column against the scores beside it.
+fn dimension_line(d: &DimensionScore, label_width: usize, spread_width: usize) -> String {
     let score = match d.score {
         Some(v) => format!("{:>3}", v.round() as i64),
         None => "  –".to_string(),
     };
+    let spread = spread_cell(fleet_spread(d.dimension));
+    // Padded by character count, not byte length — `·` is two bytes.
+    let padding = " ".repeat(spread_width.saturating_sub(spread.chars().count()));
     format!(
-        "  {}  {:<label_width$}  {}   {}\n",
+        "  {}  {:<label_width$}  {}  {spread}{padding}  {}\n",
         glyph(d.score),
         d.dimension.label(),
         score,
@@ -588,6 +628,22 @@ fn footer(report: &CheckReport) -> String {
                     .to_string(),
             );
         }
+    }
+    // The fleet-spread legend (`rubric-v1.5`). Without it the bracket is three
+    // unexplained numbers; with it, the reader can see which dimensions actually
+    // separate servers — which is the entire point of showing it.
+    if let Some(n) = report
+        .dimensions
+        .iter()
+        .filter_map(|d| fleet_spread(d.dimension))
+        .map(|s| s.n)
+        .max()
+    {
+        notes.push(format!(
+            "[p25·median·p75] is where {n} measured servers scored on that dimension — \
+             a dimension whose three numbers sit together separates servers little. \
+             Not scored."
+        ));
     }
     notes.join("\n") + "\n"
 }
@@ -687,12 +743,20 @@ fn check_doc(report: &CheckReport) -> Value {
             "explanation": c.explanation,
         })),
         // The install/boot split (`rubric-v1.3`, SOP 25). `install` is null
-        // when there was nothing to pre-warm; only `boot` is scored.
+        // when there was nothing to pre-warm.
+        //
+        // `rubric-v1.4` adds the two numbers that make the graded figure
+        // checkable: `launcherSeconds`, the measured cost of a null program
+        // through the same `npx` path, and `serverBootSeconds`, the difference —
+        // which is what is actually scored. `bootSeconds` is retained unchanged
+        // so a consumer can still see the raw launch.
         "timing": {
             "installSeconds": report.timing.install.map(|d| round2(d.as_secs_f64())),
             "bootSeconds": report.timing.boot.map(|d| round2(d.as_secs_f64())),
+            "launcherSeconds": report.timing.launcher.map(|d| round2(d.as_secs_f64())),
+            "serverBootSeconds": report.timing.server_boot().map(|d| round2(d.as_secs_f64())),
             "prewarmSkipped": report.timing.prewarm_skipped,
-            "scored": "boot",
+            "scored": "serverBoot",
         },
         "dimensions": dimensions,
         "advisor": report.advisor.iter().map(finding_json).collect::<Vec<_>>(),
@@ -712,6 +776,15 @@ fn dimension_json(d: &DimensionScore) -> Value {
         "heuristic": d.heuristic,
         "applicable": d.score.is_some(),
         "summary": d.summary,
+        // Where the measured fleet sat on this dimension (`rubric-v1.5`), so a
+        // consumer can tell a score of 100 that beat the field from one that
+        // merely matched it. Purely additive: it is bundled reference data, not
+        // a property of *this* server, and it enters no score.
+        "fleetSpread": fleet_spread(d.dimension).map(|s| json!({
+            "p25": s.p25,
+            "median": s.median,
+            "p75": s.p75,
+        })),
         "findings": d.findings.iter().map(finding_json).collect::<Vec<_>>(),
     })
 }
@@ -1006,10 +1079,15 @@ mod tests {
             text.contains(&cap.explanation),
             "the human report must carry the cap explanation verbatim:\n{text}"
         );
-        assert!(text.contains("composite capped at 55 by context cost"));
+        assert!(text.contains("composite capped at 60 by context cost"));
         assert!(text.contains("would have scored"));
-        // The rendered score is the capped one.
-        assert!(text.contains("55 / 100   grade F"));
+        // The rendered score is the capped one — and since `rubric-v1.5` the
+        // ceiling a heavy surface can impose alone stops at the D band.
+        assert!(text.contains("60 / 100   grade D"));
+        assert!(
+            text.contains("D floor"),
+            "the floor must be stated where it bound:\n{text}"
+        );
     }
 
     /// The cap is machine-readable too, and absent (null) when it did not fire.
@@ -1018,14 +1096,14 @@ mod tests {
         let p = capping_percentiles();
         let capped: Value = serde_json::from_str(&render_json(&evaluate(&mock_input(), Some(&p))))
             .expect("valid JSON");
-        assert_eq!(capped["composite"], 55);
-        assert_eq!(capped["grade"], "F");
-        assert_eq!(capped["contextCap"]["cap"], 55.0);
-        assert!(capped["contextCap"]["uncapped"].as_f64().unwrap() > 55.0);
+        assert_eq!(capped["composite"], 60);
+        assert_eq!(capped["grade"], "D");
+        assert_eq!(capped["contextCap"]["cap"], 60.0);
+        assert!(capped["contextCap"]["uncapped"].as_f64().unwrap() > 60.0);
         assert!(capped["contextCap"]["explanation"]
             .as_str()
             .unwrap()
-            .contains("composite capped at 55"));
+            .contains("composite capped at 60"));
 
         let clean: Value =
             serde_json::from_str(&render_json(&evaluate(&mock_input(), None))).expect("valid JSON");
@@ -1045,5 +1123,185 @@ mod tests {
         // The pollution fix ranks first (highest weighted impact).
         let fixes = report.top_fixes(3);
         assert_eq!(fixes[0].dimension, Dimension::Protocol);
+    }
+
+    // ---- check_doc: the machine-readable document, tested directly ----------
+
+    /// The optional ceilings are emitted as JSON `null` — not omitted, and not
+    /// fabricated — whenever they did not bind, so a consumer can rely on the key
+    /// always being present. A clean server trips neither cap.
+    #[test]
+    fn check_doc_emits_null_caps_when_neither_ceiling_binds() {
+        let report = evaluate(&mock_input(), None);
+        let doc = check_doc(&report);
+        assert!(doc["contextCap"].is_null(), "clean server: no context cap");
+        assert!(
+            doc["protocolCap"].is_null(),
+            "clean server: no protocol cap"
+        );
+        // The composite in the doc is the rounded figure, and the grade agrees.
+        assert_eq!(doc["composite"], report.composite_rounded());
+        assert_eq!(doc["grade"], "A");
+        assert_eq!(doc["rubricVersion"], "rubric-v1.5");
+        assert_eq!(doc["contextCost"]["model"], "gpt-4o");
+    }
+
+    /// The fleet spread reaches `--json` as an additive per-dimension object
+    /// (`rubric-v1.5`), carrying the exact decimals from
+    /// `data/dimension-spread.json` — the human line rounds, the machine
+    /// document does not.
+    #[test]
+    fn check_doc_carries_the_fleet_spread_for_every_dimension() {
+        let doc = check_doc(&evaluate(&mock_input(), None));
+        let dimensions = doc["dimensions"].as_array().expect("dimensions array");
+        assert_eq!(dimensions.len(), 5);
+        for d in dimensions {
+            let spread = &d["fleetSpread"];
+            assert!(
+                !spread.is_null(),
+                "{} carries no fleet spread",
+                d["dimension"]
+            );
+            let (p25, median, p75) = (
+                spread["p25"].as_f64().unwrap(),
+                spread["median"].as_f64().unwrap(),
+                spread["p75"].as_f64().unwrap(),
+            );
+            assert!(p25 <= median && median <= p75, "{spread} is out of order");
+        }
+        // Pinned against the dataset: protocol separates nobody, context cost
+        // separates everybody. These are the two numbers the `rubric-v1.5`
+        // weight change rests on, so they are asserted by value.
+        let by_key = |key: &str| {
+            dimensions
+                .iter()
+                .find(|d| d["dimension"] == key)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(by_key("protocol")["fleetSpread"]["p25"], 100.0);
+        assert_eq!(by_key("protocol")["fleetSpread"]["p75"], 100.0);
+        assert_eq!(by_key("context_cost")["fleetSpread"]["p25"], 43.1);
+        assert_eq!(by_key("context_cost")["fleetSpread"]["median"], 87.1);
+        assert_eq!(by_key("context_cost")["fleetSpread"]["p75"], 96.6);
+        assert_eq!(by_key("robustness")["fleetSpread"]["median"], 95.3);
+    }
+
+    /// The spread is context, not verdict: it appears beside every dimension in
+    /// the human report under a legend that says what it is, and never alters a
+    /// score. The dimension weights are the `rubric-v1.5` set in the machine
+    /// document too, so a consumer can re-derive the composite.
+    #[test]
+    fn the_human_report_explains_the_fleet_spread_and_the_json_weights_agree() {
+        let report = evaluate(&mock_input(), None);
+        let text = render_human(&report);
+        assert!(text.contains("[100·100·100]"), "protocol spread:\n{text}");
+        assert!(
+            text.contains("[p25·median·p75] is where 63 measured servers scored"),
+            "the legend must explain the bracket:\n{text}"
+        );
+        assert!(text.contains("Not scored."), "{text}");
+
+        let doc = check_doc(&report);
+        let weight = |key: &str| {
+            doc["dimensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| d["dimension"] == key)
+                .unwrap()["weight"]
+                .as_u64()
+                .unwrap()
+        };
+        assert_eq!(weight("protocol"), 15);
+        assert_eq!(weight("context_cost"), 25);
+        assert_eq!(weight("schema_hygiene"), 20);
+        assert_eq!(weight("description_quality"), 15);
+        assert_eq!(weight("robustness"), 25);
+    }
+
+    /// When the context cap actually binds, `check_doc` fills the `contextCap`
+    /// object (cap, uncapped, explanation) — while `protocolCap` stays null,
+    /// because a heavy surface is not a protocol defect.
+    #[test]
+    fn check_doc_populates_the_context_cap_only_when_it_binds() {
+        let report = evaluate(&mock_input(), Some(&capping_percentiles()));
+        let doc = check_doc(&report);
+        let cap = &doc["contextCap"];
+        assert!(!cap.is_null(), "a p100 server must be capped");
+        assert_eq!(cap["cap"], 60.0);
+        assert!(cap["uncapped"].as_f64().unwrap() > 60.0);
+        assert!(cap["explanation"]
+            .as_str()
+            .unwrap()
+            .contains("composite capped at 60"));
+        // The context cap is not a protocol defect: that ceiling stays absent.
+        assert!(doc["protocolCap"].is_null());
+    }
+
+    /// The `rubric-v1.4` timing split is serialized in full: the raw launch, the
+    /// measured launcher floor, and the *scored* figure — boot minus floor. This
+    /// pins the subtraction that makes the graded number checkable.
+    #[test]
+    fn check_doc_serializes_the_timing_split_including_the_launcher_floor() {
+        let mut input = mock_input();
+        input.observations.timing = BootTiming {
+            install: Some(std::time::Duration::from_millis(7_400)),
+            boot: Some(std::time::Duration::from_millis(900)),
+            prewarm_skipped: false,
+            launcher: Some(std::time::Duration::from_millis(600)),
+        };
+        let doc = check_doc(&evaluate(&input, None));
+        let timing = &doc["timing"];
+        assert_eq!(timing["installSeconds"], 7.4);
+        assert_eq!(timing["bootSeconds"], 0.9);
+        assert_eq!(timing["launcherSeconds"], 0.6);
+        // The scored figure is the difference: 0.9s launch − 0.6s shim = 0.3s.
+        assert_eq!(timing["serverBootSeconds"], 0.3);
+        assert_eq!(timing["scored"], "serverBoot");
+        assert_eq!(timing["prewarmSkipped"], false);
+    }
+
+    /// A non-npx server measures no launcher floor, so nothing is subtracted and
+    /// the scored boot equals the raw boot — the `rubric-v1.3` behaviour, which
+    /// `check_doc` must preserve when `launcher` is `None`.
+    #[test]
+    fn check_doc_scores_the_whole_boot_when_no_launcher_floor_was_measured() {
+        let mut input = mock_input();
+        input.observations.timing = BootTiming {
+            install: None,
+            boot: Some(std::time::Duration::from_millis(1_300)),
+            prewarm_skipped: false,
+            launcher: None,
+        };
+        let timing = check_doc(&evaluate(&input, None))["timing"].clone();
+        assert!(timing["installSeconds"].is_null());
+        assert!(timing["launcherSeconds"].is_null());
+        assert_eq!(timing["bootSeconds"], 1.3);
+        assert_eq!(timing["serverBootSeconds"], timing["bootSeconds"]);
+    }
+
+    // ---- observe_and_evaluate: the startup-failure path, tested directly ----
+
+    /// A stdio target whose program cannot be spawned yields a *bare* startup
+    /// failure: the connect error, with no credential-UX verdict appended.
+    /// `probe_credential_failure` returns `None` for a process that never ran, so
+    /// the message must not be dressed up with a verdict the rule cannot reach.
+    #[tokio::test]
+    async fn observe_and_evaluate_reports_a_bare_failure_when_the_program_cannot_spawn() {
+        let target = crate::Target::Stdio {
+            program: "jig-nonexistent-program-zzz".to_string(),
+            args: Vec::new(),
+            env: Vec::new(),
+        };
+        let tap = ProtocolTap::new();
+        let err = observe_and_evaluate(&target, &tap, None, 1, 1 << 20, true)
+            .await
+            .expect_err("a missing program cannot be checked");
+        assert!(err.contains("failed to connect"), "unexpected error: {err}");
+        assert!(
+            !err.contains("credential UX"),
+            "a program that never spawned must draw no credential verdict: {err}"
+        );
     }
 }

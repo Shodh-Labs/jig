@@ -43,15 +43,25 @@
 //! not the server author's to fix. For a non-`npx` command there is nothing to
 //! pre-warm, so install is reported as `n/a` and boot is the whole launch.
 //!
-//! # Honesty about what boot still contains
+//! # The launcher floor (`rubric-v1.4`)
 //!
-//! Even after the split, "boot" for an `npx` command includes npm's own
-//! process-launch overhead (resolving the cached bin shim, spawning node) — tens
-//! to low hundreds of milliseconds that belong to the toolchain rather than to
-//! the server. jig does not subtract it, because doing so would require timing a
-//! null server through the same path and asserting the difference is constant.
-//! The number is therefore a slight *over*-estimate of server boot, which is the
-//! safe direction for a grade.
+//! `rubric-v1.3` stopped one step short. Even after the install/boot split,
+//! "boot" for an `npx` command still contained npm's own shim resolution and
+//! process launch — measured at **~2.6s of a ~2.9s reported boot**, against
+//! ~0.3s of actual server. It declined to subtract that, and said why: *"doing so
+//! would require timing a null server through the same path."*
+//!
+//! A 50-server fleet run turned the caveat into a defect — every `npx` server
+//! tripped the same boot penalty, and robustness came out **exactly 80 for all
+//! 26 graded servers**. So the pre-warm pass now runs **twice**: once cold, timed
+//! as *install*, and once warm, which *is* a null program timed through the
+//! identical path and is recorded as the **launcher floor**.
+//!
+//! [`Timing::server_boot`] subtracts it. The correction is measured per run
+//! rather than asserted as a constant, which was the whole of the objection, and
+//! the subtraction is stated in [`Timing::line`] rather than applied silently.
+//! Where no floor could be measured nothing is subtracted, so the number remains
+//! an *over*-estimate — the safe direction for a grade.
 
 use std::time::Duration;
 
@@ -69,18 +79,77 @@ pub struct Timing {
     /// "there was nothing to install" from "we did not look", so a reader is
     /// never misled by an `n/a`.
     pub prewarm_skipped: bool,
+    /// The **measured launcher floor** (`rubric-v1.4`): how long the same `npx`
+    /// path takes to launch a *null* program once the cache is warm. `None` for
+    /// a non-`npx` command, or when the calibration pass could not run.
+    ///
+    /// This is the number `rubric-v1.3` said it could not defensibly produce —
+    /// see [`Timing::server_boot`].
+    pub launcher: Option<Duration>,
 }
 
 impl Timing {
+    /// The part of [`boot`](Self::boot) that is actually **the server's**:
+    /// measured boot less the measured launcher floor, saturating at zero.
+    ///
+    /// # Why this exists (`rubric-v1.4`)
+    ///
+    /// `rubric-v1.3` scored `boot` whole, and its own changelog admitted the
+    /// problem: of the ~2.9s it reported for `server-everything`, roughly 2.6s
+    /// was npm shim overhead and 0.3s was the server. It declined to subtract
+    /// the 2.6s because *"the correction is not a constant, and measuring it
+    /// would require timing a null server through the same path on every run"*.
+    ///
+    /// A 50-server fleet run turned that caveat into a defect. Every `npx`
+    /// server tripped the same boot penalty, so robustness scored **exactly 80
+    /// for all 26 graded servers** — zero spread, a constant wearing a
+    /// dimension's clothes. A dimension that returns the same number for every
+    /// subject is not measuring the subject.
+    ///
+    /// So jig now does the thing the caveat described: the pre-warm pass runs
+    /// **twice**, and the second run — cache already warm, `node -e ""` in place
+    /// of the server — *is* a null server timed through the same path. The
+    /// correction is measured per-run rather than asserted as a constant, which
+    /// is exactly the objection `rubric-v1.3` raised against subtracting it.
+    ///
+    /// Saturating at zero is deliberate: launcher cost is noisy, and a server
+    /// that boots faster than the null program did on that machine has a
+    /// *measurement* below the floor, not a negative boot time.
+    pub fn server_boot(&self) -> Option<Duration> {
+        let boot = self.boot?;
+        Some(match self.launcher {
+            Some(floor) => boot.saturating_sub(floor),
+            None => boot,
+        })
+    }
+
     /// The one-line rendering every surface uses: `install 7.4s · boot 0.6s`,
     /// or `install n/a · boot 0.6s` when there was nothing to pre-warm.
+    ///
+    /// When a launcher floor was measured the line states all three numbers, so
+    /// the subtraction is checkable rather than silent — the same discipline
+    /// `rubric-v1.2` applied to the context cap, which states the sub-score that
+    /// produced it:
+    ///
+    /// ```text
+    /// install 12.5s · boot 0.5s (3.1s launch − 2.6s npx shim)
+    /// ```
     pub fn line(&self) -> String {
         let install = match (self.install, self.prewarm_skipped) {
             (Some(d), _) => format_secs(d),
             (None, true) => "skipped".to_string(),
             (None, false) => "n/a".to_string(),
         };
-        let boot = self.boot.map_or("n/a".to_string(), format_secs);
+        let boot = match (self.server_boot(), self.boot, self.launcher) {
+            (Some(server), Some(raw), Some(floor)) => format!(
+                "{} ({} launch − {} npx shim)",
+                format_secs(server),
+                format_secs(raw),
+                format_secs(floor)
+            ),
+            (Some(server), _, _) => format_secs(server),
+            _ => "n/a".to_string(),
+        };
         format!("install {install} · boot {boot}")
     }
 }
@@ -308,6 +377,7 @@ mod tests {
             install: Some(Duration::from_millis(7_400)),
             boot: Some(Duration::from_millis(600)),
             prewarm_skipped: false,
+            launcher: None,
         };
         assert_eq!(t.line(), "install 7.4s · boot 0.6s");
     }
@@ -320,6 +390,7 @@ mod tests {
             install: None,
             boot: Some(Duration::from_millis(1_300)),
             prewarm_skipped: false,
+            launcher: None,
         };
         assert_eq!(t.line(), "install n/a · boot 1.3s");
     }
@@ -333,6 +404,7 @@ mod tests {
             install: None,
             boot: Some(Duration::from_millis(500)),
             prewarm_skipped: true,
+            launcher: None,
         };
         assert_eq!(t.line(), "install skipped · boot 0.5s");
     }
@@ -340,5 +412,77 @@ mod tests {
     #[test]
     fn renders_when_nothing_was_measured() {
         assert_eq!(Timing::default().line(), "install n/a · boot n/a");
+    }
+
+    // ---- rubric-v1.4: the launcher floor -----------------------------------
+
+    fn timing(boot_ms: u64, launcher_ms: Option<u64>) -> Timing {
+        Timing {
+            install: Some(Duration::from_millis(12_500)),
+            boot: Some(Duration::from_millis(boot_ms)),
+            prewarm_skipped: false,
+            launcher: launcher_ms.map(Duration::from_millis),
+        }
+    }
+
+    /// The headline `rubric-v1.4` number, using the figures the `rubric-v1.3`
+    /// changelog itself recorded: ~2.9s of reported boot for
+    /// `server-everything`, of which ~2.6s was the npx shim and ~0.3s was the
+    /// server. The scored figure is now the 0.3s.
+    #[test]
+    fn the_launcher_floor_is_subtracted_from_boot() {
+        let t = timing(2_900, Some(2_600));
+        assert_eq!(t.server_boot(), Some(Duration::from_millis(300)));
+    }
+
+    /// With no floor measured nothing is subtracted — the `rubric-v1.3`
+    /// behaviour, and the safe direction for a grade.
+    #[test]
+    fn without_a_measured_floor_boot_is_unchanged() {
+        let t = timing(2_900, None);
+        assert_eq!(t.server_boot(), t.boot);
+    }
+
+    /// Launcher cost is noisy. A server that beat the null program is at the
+    /// floor of measurement, not below zero.
+    #[test]
+    fn a_boot_under_the_floor_saturates_at_zero() {
+        assert_eq!(
+            timing(1_000, Some(2_600)).server_boot(),
+            Some(Duration::ZERO)
+        );
+    }
+
+    /// Subtraction is never silent: the line states the raw launch and the floor
+    /// alongside the graded figure, so a reader can check the arithmetic — the
+    /// same discipline `rubric-v1.2` applied to the context cap.
+    #[test]
+    fn the_subtraction_is_stated_not_silent() {
+        let line = timing(2_900, Some(2_600)).line();
+        assert_eq!(
+            line,
+            "install 12.5s · boot 0.3s (2.9s launch − 2.6s npx shim)"
+        );
+        // …and is absent when there was nothing to subtract.
+        assert_eq!(timing(2_900, None).line(), "install 12.5s · boot 2.9s");
+    }
+
+    /// Subtracting a floor can only ever *lower* the reported boot, so
+    /// `rubric-v1.4` cannot punish a server the previous release let through.
+    #[test]
+    fn subtraction_is_monotone_and_never_increases_boot() {
+        for boot_ms in [0u64, 100, 300, 1_000, 2_900, 8_800, 60_000] {
+            for floor_ms in [0u64, 50, 500, 2_600, 5_000] {
+                let t = timing(boot_ms, Some(floor_ms));
+                assert!(
+                    t.server_boot().unwrap() <= t.boot.unwrap(),
+                    "boot rose: {boot_ms}ms with a {floor_ms}ms floor"
+                );
+            }
+            // A larger floor never yields a larger scored boot.
+            let a = timing(boot_ms, Some(500)).server_boot().unwrap();
+            let b = timing(boot_ms, Some(2_600)).server_boot().unwrap();
+            assert!(b <= a, "a larger floor raised boot at {boot_ms}ms");
+        }
     }
 }

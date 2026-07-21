@@ -220,7 +220,7 @@ fn json_output_has_dimensions_weights_and_rubric_version() {
     let out = run_check("", &["--json"]);
     assert!(out.status.success());
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON report");
-    assert_eq!(v["rubricVersion"], "rubric-v1.3");
+    assert_eq!(v["rubricVersion"], "rubric-v1.5");
     // The bundled census now engages by default (M7 #4), so context cost is
     // scored against the ecosystem and labelled bundled.
     assert_eq!(v["contextCost"]["provenance"]["type"], "percentile");
@@ -337,7 +337,7 @@ fn json_mode_with_report_flag_writes_file_and_keeps_json_clean() {
     // The announcement goes to stderr, so stdout is still parseable JSON.
     let v: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("stdout stays valid JSON");
-    assert_eq!(v["rubricVersion"], "rubric-v1.3");
+    assert_eq!(v["rubricVersion"], "rubric-v1.5");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -488,11 +488,15 @@ fn a_non_npx_command_reports_install_as_not_applicable() {
     let out = run_check("", &["--json"]);
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
     assert_eq!(v["timing"]["installSeconds"], serde_json::Value::Null);
-    assert_eq!(v["timing"]["scored"], "boot");
+    assert_eq!(v["timing"]["scored"], "serverBoot");
     assert!(
         v["timing"]["bootSeconds"].as_f64().expect("boot measured") >= 0.0,
         "boot must be measured for a server that started"
     );
+    // `rubric-v1.4`: no `npx` shim to time, so no floor is measured and nothing
+    // is subtracted — the scored figure is the raw launch.
+    assert_eq!(v["timing"]["launcherSeconds"], serde_json::Value::Null);
+    assert_eq!(v["timing"]["serverBootSeconds"], v["timing"]["bootSeconds"]);
     assert_eq!(v["timing"]["prewarmSkipped"], false);
 }
 
@@ -711,7 +715,7 @@ fn a_well_formed_judgement_renders_and_records_its_provenance() {
     // The model id as the provider reported it, not the one we asked for.
     assert!(text.contains("model mock-judge-1"), "{text}");
     assert!(text.contains("(keyless)"), "{text}");
-    assert!(text.contains("outside rubric-v1.3"), "{text}");
+    assert!(text.contains("outside rubric-v1.5"), "{text}");
 
     let json = stdout(&run_judged(port, "judge_ok", &["--json"]));
     let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");

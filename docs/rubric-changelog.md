@@ -4,7 +4,8 @@ Jig's report card is versioned. Every score Jig emits — human report, `--json`
 `--badge`, the HTML report card — carries the `rubricVersion` that produced it.
 
 > **Scores from different rubric versions are not comparable.** A `rubric-v1`
-> 73, a `rubric-v1.1` 73, a `rubric-v1.2` 73 and a `rubric-v1.3` 73 were
+> 73, a `rubric-v1.1` 73, a `rubric-v1.2` 73, a `rubric-v1.3` 73, a
+> `rubric-v1.4` 73 and a `rubric-v1.5` 73 were
 > produced by different arithmetic and mean different things. This is a standing property of the
 > rubric, not a caveat attached to any one release. When comparing servers, or comparing one server over time,
 > check that the rubric versions match before reading anything into the delta.
@@ -17,13 +18,13 @@ Jig's report card is versioned. Every score Jig emits — human report, `--json`
 
 `jig check --judge` asks a model whether each tool description states its
 purpose, distinguishes its siblings, and documents its parameters. **That output
-is explicitly OUTSIDE `rubric-v1.3`** and outside every rubric version — present
+is explicitly OUTSIDE `rubric-v1.5`** and outside every rubric version — present
 and future — until a changelog entry says otherwise.
 
 It is not a dimension, it has no weight, and it is not an input to the
 composite, any dimension score, the grade, the badge, or `--min-score`. It does
 not affect `rubricVersion`, which continues to describe the deterministic score
-only. Two `rubric-v1.3` reports on the same server are comparable whether one of
+only. Two `rubric-v1.5` reports on the same server are comparable whether one of
 them was judged and the other was not — an integration test asserts the
 deterministic document is byte-identical either way.
 
@@ -37,6 +38,614 @@ the number.
 
 The scored `description_quality` dimension is unchanged and remains
 deterministic, heuristic, and labelled as such in every report.
+
+---
+
+## `rubric-v1.5`
+
+Three changes, none of them new ideas. Each one was named, argued for, and
+**deliberately deferred** by an earlier release for the same stated reason: the
+data to do it honestly did not exist. `rubric-v1.2` named the missing dataset
+twice. `rubric-v1.4` named it again and declined to rebalance weights without it,
+writing that doing so *"would repeat exactly the error `rubric-v1.2` corrected in
+`rubric-v1.1`: asserting anchors rather than calibrating them."*
+
+The dataset now exists. **Census v2** ran `jig check` across 127 public MCP
+servers, of which **63 were reachable and graded**, and recorded every
+per-dimension score — `data/census2-calibration.json`. This release spends it,
+and nothing here is asserted that could have been fitted.
+
+### 1. The weights were editorial. They are now fitted.
+
+**The defect** is `rubric-v1.4`'s own recommendation (a), which it analysed and
+declined to act on. Its 26-server sample showed three of five dimensions
+near-constant, so a 25%-weighted context-cost dimension set essentially the whole
+order: Spearman(composite, −tokens) = 0.959. The composite was a token ranking in
+a five-dimension costume.
+
+Census v2 confirms the shape at 63 servers, and locates it precisely:
+
+| Dimension | `v1.4` weight | p25 | median | p75 | sd |
+|:----------|-------------:|----:|-------:|----:|---:|
+| Protocol compliance | 25 | 100 | 100 | 100 | 7.85 |
+| Context cost | 25 | 43.1 | 87.1 | 96.6 | 32.40 |
+| Schema hygiene | 20 | 95.9 | 98.7 | 100 | 3.60 |
+| Description quality | 15 | 95.9 | 98.3 | 99.1 | 2.73 |
+| Robustness | 15 | 89.9 | 95.3 | 99.3 | 5.38 |
+
+**Protocol compliance is a constant among servers that answer at all.** Its p25,
+median and p75 are all exactly 100; its mean is 98.49. Its non-zero sd is four
+servers, three of which are also capped. A quarter of the composite was being
+spent on a dimension that cannot distinguish the middle half of the fleet from
+itself.
+
+That is *not* an argument that protocol compliance is unimportant — it is the
+most important thing the tool measures. It is an argument that its weight was the
+wrong instrument for saying so, and the right one was already in place: the
+`rubric-v1.3` **protocol ceiling**, which bounds the composite outright when
+framing breaks. A broken server is disciplined by the ceiling, not by the mean.
+The ceiling is untouched by this release.
+
+**Robustness is the only craft dimension with real spread**, and only because
+`rubric-v1.4` fixed its measurement. Its own changelog worried that subtracting
+the npm shim had *"replaced one constant with a better-justified one"*. The fleet
+says otherwise: p25 89.9 → p75 99.3, sd 5.38, against schema hygiene's 3.60 and
+description quality's 2.73. It earned weight; it now has it.
+
+**The fit.** Candidate sets were evaluated offline against all 63 fleet cards on
+two measures — the composite's standard deviation (does it still separate
+servers?) and Spearman(composite, −context tokens) (is it still just a token
+ranking?) — plus the mean absolute grade movement, because churn is a cost paid
+by every published score.
+
+| Weights | sd | ρ(composite, −tokens) | mean \|Δ\| | Verdict |
+|:--------|---:|----------------------:|-----------:|:--------|
+| `{25,25,20,15,15}` — `v1.4` | 11.92 | 0.854 | — | baseline |
+| **`{15,25,20,15,25}`** | **11.22** | **0.840** | **0.74** | **chosen** |
+| `{15,35,10,10,30}` — variance-proportional | 12.56 | 0.855 | 2.95 | rejected |
+| `{17,34,11,10,28}` — sqrt-variance | 12.36 | 0.857 | 2.61 | rejected |
+
+**The two "principled" candidates are the ones that fail.** Weighting each
+dimension by its variance is the obvious statistical move, and on this data it is
+exactly wrong: context cost has by far the largest variance, so variance-
+proportional weighting hands it *more* of the composite (25 → 34–35) and pushes ρ
+**up**, from 0.854 to ~0.856. They optimise for spread and buy it by making the
+composite more of a token ranking — the precise defect the exercise existed to
+reduce. They also churn grades four times as hard.
+
+The chosen set is the only candidate that **reduces** ρ (0.854 → 0.840), and it
+does so at the smallest movement of the four (mean |Δ| 0.74). It moves weight
+between two dimensions and leaves the other three alone.
+
+**What this does not fix, stated plainly.** ρ = 0.840 is still high. Context cost
+still explains most of the ordering, because on this fleet it is still the only
+dimension with wide spread — the craft dimensions cluster in the 90s because most
+published servers really are clean on them. Rebalancing weights cannot manufacture
+variance that the ecosystem does not have. The honest reading is that **the
+composite remains substantially a cost ranking**, and the remedy for that is
+`rubric-v1.4`'s recommendation (a)(3) — splitting cost from craft — not a further
+turn of the weight screw. This release does change 3 above, which makes the
+situation visible rather than arguable.
+
+### 2. A single dimension may bound the composite. It may no longer fail it.
+
+**The defect** is `rubric-v1.4`'s recommendation (b), quoted here because it made
+the case better than a restatement would: `dataforseo-mcp-server` scores protocol
+**100**, schema hygiene **100**, description quality **100** — a perfect card on
+every craft dimension — and graded **F 55**, solely because 89 tools cost 42,288
+tokens and pinned it to the context-cap floor.
+
+Both halves of that report are individually defensible and together they are
+incoherent. A reader who sees three 100s printed above an F does not conclude the
+server is bad; they conclude the instrument is broken, which costs Jig exactly the
+credibility the context finding needs in order to land.
+
+**The fix.** The applied context cap is floored at **60** — the D/F boundary:
+
+```text
+cap = max(context_cap_ceiling(sub), 60)
+```
+
+The **ramp is untouched**. Every anchor, its slope and its census calibration are
+byte-identical to `rubric-v1.2`; `context_cap_ceiling(5)` still returns 55. Only
+the ramp's *output* is floored. Re-sloping the ramp from a base of 60 was the
+obvious alternative and was rejected: it would have silently moved every
+intermediate ceiling (the p93 server's from 86.0 to 87.6, and so on down the
+table) and invalidated a calibration this release has no evidence to revise. The
+distinction is between "the cap cannot say worse than D" and "the cap means
+something different at every percentile".
+
+Only the harshest stretch of the ramp is affected — sub-scores below ~6.9, where
+the raw ramp reads under 60. Everything above is unchanged.
+
+**The cap's original purpose is intact, and it is checked rather than asserted.**
+The cap exists to stop a heavy server *outranking* a light one on schema polish
+(`rubric-v1.1`, defect 2). In census v2 **no uncapped server scores below 63**, so
+a heavyweight held at 60 still ranks below every well-proportioned server in the
+fleet. That is the property the floor had to preserve, and it is now a regression
+test rather than a paragraph.
+
+**The protocol ceiling is deliberately not floored**, and this is the substantive
+judgement in the change. The two ceilings shared a constant (55) and now do not,
+because they never meant the same thing. Every trigger of the protocol ceiling —
+polluted stdout, an unanswered `*/list`, an accepted unknown method — is a server
+that **breaks its own contract**. That is what F is for. A large-but-correct
+server is not in that class, and putting it there devalues the letter for the
+servers that earn it. Flooring both would have deleted the very distinction the
+floor was introduced to protect.
+
+A server can still reach F on context cost. It now has to get there by
+*combining* catastrophic context cost with genuine defects elsewhere — a
+statement the rest of the card supports.
+
+**The cap line says so when the floor binds**, on the same discipline
+`rubric-v1.2` applied when it made the ramp state its own input:
+
+```
+composite capped at 60 by context cost (context sub-score 5): 42,288 tokens is 24× the census median (D floor: a single dimension bounds the composite but cannot reach F alone)
+```
+
+The clause is conditional. It appears only where the floor actually set the
+ceiling, never as boilerplate on every cap.
+
+### 3. The fleet spread is now printed beside every score
+
+This is `rubric-v1.4`'s recommendation (a) **option 2** — *"report the spread…
+cheap, purely additive, and it makes the defect visible instead of arguable"*,
+marked there as *"Recommended as the next step"* — implemented as written.
+
+Each dimension line and each `--json` dimension object now carries the census-v2
+**p25 · median · p75** for that dimension:
+
+```
+  ✓  Protocol compliance  100  [100·100·100]  clean handshake, no stdout pollution, spec-valid capabilities
+  ✓  Context cost          99  [43·87·97]     183 tokens (no ecosystem data — absolute bands)
+  ✓  Schema hygiene        96  [96·99·100]    `make_reservation`: parameter `party` missing a description (+1 more)
+  ✓  Description quality   99  [96·98·99]     heuristic · 3 tool(s) have no human-facing title
+  ✓  Robustness           100  [90·95·99]     list 12ms, clean shutdown
+```
+
+A reader can now see, without taking the weights on trust, that a protocol 100 is
+the fleet's *median* and separates the server from nobody, while a context 99 is
+genuinely distinguishing. The argument in change 1 is legible from the output of
+any single run.
+
+`--json` gains an additive `fleetSpread` object per dimension, carrying the exact
+decimals; the human line rounds to whole numbers because it is orientation, not
+arithmetic. A legend in the footer says what the bracket is and that it is **not
+scored**.
+
+**It is a new file, not an extension of `data/percentiles.json`.** The new dataset
+is `data/dimension-spread.json`, bundled with `include_str!` alongside the census.
+`data/percentiles.json` is deliberately untouched: it is a *scoring* input, its
+anchors are the curated `v1` cohort, and folding an unvetted 63-server fleet into
+it would move published grades under cover of a reporting change. This file enters
+no score, no finding and no ranking.
+
+### Grade impact on the fleet
+
+Re-scoring all 63 census-v2 cards under the new weights and the floor together:
+
+| | A | B | C | D | F |
+|:--|--:|--:|--:|--:|--:|
+| `rubric-v1.4` | 42 | 9 | 8 | **0** | **4** |
+| `rubric-v1.5` | 41 | 9 | 9 | **3** | **1** |
+
+The D band was empty and is now populated, which is the floor doing exactly what
+it was built to do: three servers that read F on size alone now read D on size
+alone. Mean |Δ| across the fleet is **0.74** points.
+
+**The one remaining F is `@agentdeskai/browser-tools-mcp`, and it is
+protocol-capped** — it pollutes stdout. It is broken, not big. That is the
+sentence the change was for: after this release, an F in a Jig report means the
+server does not work, and there are no exceptions on this fleet.
+
+### Monotonicity
+
+Both changes preserve the standing guarantee — **no server can score worse by
+improving any dimension** — and both arguments are short enough to check.
+
+**Weights.** They are positive constants (15, 25, 20, 15, 25) and the composite is
+`Σ(score·weight) / Σ(weight)` over applicable dimensions. A weighted mean with
+positive constant weights is strictly increasing in every input. Changing which
+positive constants they are cannot introduce non-monotonicity; it changes the
+gradient, not its sign. Asserted by a test that pins each weight and the exact
+composite arithmetic.
+
+**The floor.** `max(ramp(sub), 60)` is the pointwise maximum of a monotone
+non-decreasing function and a constant, which is monotone non-decreasing. So
+worsening context cost still can never *raise* the ceiling, and the existing
+dense-sweep property test over the reported composite (`min(uncapped, ceiling)`)
+continues to pass unchanged.
+
+The floor also cannot inflate a score. It raises a **ceiling**, and a ceiling is
+applied with `min`. A server whose uncapped composite is already below 60 has no
+cap reported at all and keeps the number its dimensions produced — the floor never
+rescues a server that its own dimensions failed.
+
+### Comparability
+
+**`rubric-v1.5` composites are not comparable to `rubric-v1.4` composites** for:
+
+- any server whose protocol and robustness scores differ from each other (the
+  reweighting moves it — upward if robustness leads, downward if protocol does);
+- any context-capped server (the floor moves it, by up to 5 points).
+
+A server scoring 100 on both protocol and robustness is unmoved by the
+reweighting, because shifting weight between two equal values changes nothing —
+which is why mean |Δ| is under a point despite a 10-point weight transfer.
+
+**Per-dimension scores are unchanged.** Every dimension is scored by exactly the
+arithmetic `rubric-v1.4` used; no finding was added, removed or reworded except
+the context-cap line, which gained its conditional floor clause. A `v1.4`
+robustness 95.3 and a `v1.5` robustness 95.3 mean the same thing. Only the
+composite that combines them changed.
+
+### The dataset, and what is wrong with it
+
+The fit is only as good as census v2, so its limits are stated rather than
+buried — the same disclosure `rubric-v1.2` made about its own missing data.
+
+- **n = 63**, from 127 attempted. The other 64 never became reachable.
+- **One machine, one run.** No repetition, no second host, no error bars.
+  Robustness in particular is timing-derived and therefore the dimension most
+  exposed to this — and it is the dimension that gained weight.
+- **Selection skew.** The fleet extends the curated `v1` cohort with unvetted
+  additions pulled from the npm pool, but the *reachable* subset skews back toward
+  the curated cohort, because curated servers are likelier to start. So the fleet
+  is plausibly **cleaner than the ecosystem**, which would compress the very
+  spreads these weights are fitted to.
+- **The spreads describe a sample, not a population.** They are labelled that way
+  in `data/dimension-spread.json` and should be read that way.
+
+None of this makes the fit worse than the editorial weights it replaces, which
+rested on no dataset at all. It does mean the weights should be **re-fitted, not
+defended**, when a second fleet run exists.
+
+### What did *not* change
+
+- **Grade bands and badge colors.** Still `A >= 90 · B 80–89 · C 70–79 · D 60–69 · F < 60`.
+- **The context-cap ramp.** Every anchor and its census calibration are untouched;
+  only the output is floored. `context_cap_ceiling(5)` still returns 55.
+- **The protocol ceiling.** The `rubric-v1.3` ramp, its slope of 1.0 and its floor
+  of 55 are all untouched — including, deliberately, the fact that it can reach F.
+- **Every per-dimension scoring rule.** Rate-based scoring, shrinkage, class
+  weights, the floor of 15, the robustness anchor table and the launcher-floor
+  subtraction are all exactly as `rubric-v1.4` left them.
+- **`data/percentiles.json`.** Untouched, still the curated `v1` cohort, still the
+  only dataset that reaches a score.
+- **Injection and advisor posture.** Still reported, never scored, always pinned.
+- **Findings.** Same set, same fix text, one line changed (the context cap).
+- **No LLM.** Nothing added here is non-deterministic.
+
+---
+
+## `rubric-v1.4`
+
+Motivated by a **50-server fleet run under `rubric-v1.3`**, which exposed three
+defects. All three are defects in Jig's *own* measurement, not in the servers:
+the first fires on documentation quality, the second grades a cold npm cache as a
+server defect, and the third presents a one-dimensional ranking as a
+five-dimensional grade. None of the three could have been found without running
+the rubric at fleet scale, which is the argument for doing so before every
+release.
+
+Two of the three are precision fixes and one is a resolution fix. Where
+`rubric-v1.3` added measurements, this release makes the existing ones mean what
+they claim.
+
+### 1. The injection lint's precision was 0/6
+
+**The defect.** The `rubric-v1.3` name/behaviour-mismatch detector matched a
+mutation verb **anywhere** in a tool's description. Across 50 servers it produced
+six findings, and **every one of the six was a false positive**:
+
+| Tool | Text that fired | What the text actually is |
+|:-----|:----------------|:--------------------------|
+| `read_file` | "Prefer this over `execute_command`" | a **comparative clause naming another tool** |
+| `get_config` | `fileWriteLineLimit` | a verb inside a **config field name** |
+| `get_prompts` | "Create organized knowledge base" | a **menu label** in a bulleted list |
+| drawio `get_shape_catalog` | "…to create new vertex cells" | **caller guidance** in a purpose clause |
+| drawio `get_graph` | "The response removes circular dependencies" | **response-sanitization prose** |
+| firecrawl (exfiltration shape) | `https://example.com` in a JSON usage example | a **documentation placeholder** beside a documented `webhookUrl` feature |
+
+The `read_file` case is the one that settles it. That description is steering the
+model *away* from shelling out and *toward* a narrower, safer tool — the exact
+practice a security lint exists to encourage — and `rubric-v1.3` penalized it for
+saying so. A lint that fires on documentation quality is worse than no lint,
+because it teaches authors that the way to a clean report is to document less.
+
+**The fix.** The detector is scoped to the tool's **action clause** — the
+sentence whose head predicate is *this tool* — by four filters, each of which
+kills at least one of the six:
+
+1. **Non-prose is masked.** Fenced code blocks, inline code spans, JSON object
+   literals, and identifier tokens (`camelCase`, `snake_case`, `dotted.path`) are
+   blanked before anything is read. Masking replaces characters with spaces
+   rather than deleting them, so line and sentence structure survive exactly.
+2. **List items are dropped.** A bulleted or numbered line is an enumeration, not
+   a predication. `get_prompts` naming a prompt is not a claim that it creates
+   one.
+3. **Comparative clauses are dropped.** A sentence containing `prefer`, `unlike`,
+   `rather than`, `instead of`, `as opposed to` (and their siblings) is about a
+   *different* tool.
+4. **The verb must be the clause's head predicate.** Only a **tool-referring
+   subject** may precede it — `this`, `it`, `the tool`, a conjunction, or a
+   read-shaped verb it is conjoined to. So `Deletes stale rows`, `This tool
+   deletes rows` and `Reads and deletes rows` all match, while `Use this format
+   to create cells` (a purpose clause addressed to the caller) and `The response
+   removes cycles` (subject: the *response*) do not.
+
+The exfiltration detector gets the masking plus a fifth rule: **reserved
+documentation hosts are not destinations.** `example.com` and friends are
+RFC 2606 placeholders; `localhost`, `your-domain`, and the rest are the same
+thing by convention. A description that uses one is showing the caller a shape.
+
+The `rubric-v1.3` negation window is replaced by a clause-level negation check,
+which is both simpler and strictly more accurate now that clauses are delimited:
+a fixed 32-character window can stop mid-clause and miss a negation a reader
+plainly sees.
+
+**The result, measured against the six real strings.**
+
+| | `rubric-v1.3` | `rubric-v1.4` |
+|:--|:--|:--|
+| Findings on the six fleet cases | 6 | **0** |
+| Precision on the fleet | **0/6** | no findings to be wrong about |
+| True-positive cases still caught | 6/6 | **6/6** |
+
+The six descriptions are pinned verbatim as `FLEET_FALSE_POSITIVES` in
+`injection.rs` and are the regression suite: any future widening of the detector
+has to keep them clean. A companion test asserts each of the four filters is
+load-bearing in isolation, so none can be quietly deleted, and a third asserts
+the real mismatch signal — `get_report` saying "Deletes stale rows",
+`sync_state` with a false `readOnlyHint` — still fires through every filter.
+
+**Why this stayed a scored… and did not.** The brief allowed making the lint
+advisory-only if precision could not be raised without losing signal. It could,
+so it was not needed — and in any case injection findings were **already
+reported and never scored** under `rubric-v1.3`, and remain so. Nothing here
+touches the composite. What changed is whether a user is told something false.
+
+**Monotonicity.** Unaffected: no injection finding has ever carried `points`, so
+the scoring shape is unchanged and there is nothing to argue. The change is
+strictly *subtractive* in findings — every description flagged under
+`rubric-v1.4` was also flagged under `rubric-v1.3`.
+
+### 2. The credential probe timed the npm shim, not the server
+
+**The defect.** The credential-UX probe (`rubric-v1.3`, SOP 26) gave a server
+4 seconds from **spawn** to exit or answer, and called anything slower `Hung` —
+the harshest verdict the rubric can reach: High severity, robustness **0**,
+rendered as *"never exited and never answered"*.
+
+But `rubric-v1.3`'s own SOP 25 work measured the `npx` shim at **~2.6s before
+the server's code runs**. So the window the server actually got was under 1.4s.
+
+| Server | Behaviour | Time from spawn | `v1.3` verdict | Correct verdict |
+|:-------|:----------|----------------:|:---------------|:----------------|
+| `server-slack` | exit 1, named `SLACK_BOT_TOKEN` | 3.83s / 3.86s | **Hung** | PASS |
+| `server-gitlab` | exit 1, named the variable | 5.19s / 7.84s | **Hung** | PASS |
+
+Both are the rubric's **own PASS shape** — fail fast, name the variable — and
+both were recorded as the worst thing it can say about a server. **13 of the 24
+fleet failures were affected.**
+
+It was also non-deterministic. `server-gitlab` flipped to PASS on a warm npm
+cache, so the same server graded differently on the same machine depending on
+whether someone had run it that week. A grade that moves with the state of a
+package cache is not a grade.
+
+**The fix.** The probe window is measured from the **child's first byte of
+output**, not from spawn. Whatever the launcher spent resolving and spawning is,
+by construction, over by the time the server's own process writes anything, so
+the launcher cost is subtracted without having to be modelled. A second bound —
+`PROBE_HARD_CAP`, 30s from spawn — catches a child that never writes at all,
+which is the only case where "never answered" is literally true. It is set well
+above the worst launcher cost the fleet measured (7.84s) plus a full window, so a
+cold cache alone can never consume it.
+
+The implementation is a sliding deadline in `tokio::select!`: before first output
+the bound is the hard cap; after it, `PROBE_TIMEOUT` from that instant. The exit
+branch is `biased` so a process that exits in the same tick as the deadline is
+read as an exit — **a server that exited is never a hang.**
+
+**Monotonicity.** The verdict lattice is unchanged (`NamedVariable` →
+`UnnamedVariable` → `Hung`/`ExitedZero`) and so are its sub-scores. The change is
+strictly *lenient*: widening the window can only move a server from `Hung`
+toward a better verdict, never the reverse, because `Hung` is what the timeout
+produces and the timeout now fires later or not at all. No server can score worse
+under `rubric-v1.4` than it did under `rubric-v1.3` on this rule.
+
+### 3. Robustness was a constant wearing a dimension's clothes
+
+**The defect.** Across the 26 graded servers the fleet run measured:
+
+| Dimension | Weight | Spread across 26 servers |
+|:----------|-------:|:-------------------------|
+| Robustness | 15 | **exactly 80 for all 26** — zero |
+| Protocol compliance | 25 | 100 for 25 of 26 |
+| Schema hygiene | 20 | rank correlation with composite **0.148** |
+| Description quality | 15 | some |
+| **Context cost** | **25** | **Spearman(composite, −tokens) = 0.959** |
+
+Three of five dimensions are near-constant, so the 25%-weighted context-cost
+dimension sets essentially the whole order. The composite was a token-count
+ranking in a five-dimension costume — which is the `rubric-v1.2` complaint
+("cap thresholds were asserted, not calibrated") wearing new clothes.
+
+Robustness's exact-80 is arithmetic, not coincidence. Its three sub-scores were
+`latency 100`, `boot 40`, `shutdown 100`, and their mean is 80. Every `npx`
+server tripped the same boot penalty, for two compounding reasons:
+
+**(a) The boot number was mostly npm.** `rubric-v1.3`'s changelog says so
+outright: of ~2.9s reported boot for `server-everything`, roughly **2.6s was the
+npx shim and 0.3s was the server**. It declined to subtract the 2.6s, and its
+stated reason was specific and testable — *"measuring it would require timing a
+null server through the same path on every run."*
+
+**(b) The ramp was a three-step bucket.** `<= 1s` → 100, `<= 3s` → 70, else 40.
+Two servers differing by 6 seconds scored identically; 2.999s and 3.001s differed
+by 30 points. That is precisely the discontinuity `rubric-v1.2` spent a release
+deleting from the context cap.
+
+**The fix, part one: measure the launcher floor.** Jig now does exactly the thing
+`rubric-v1.3` described as the prerequisite. The pre-warm pass runs **twice**.
+The first populates the `_npx` cache and is timed as *install*, unchanged. The
+second runs the identical command against the now-warm cache — `npx --yes
+--package <pkg> -- node -e ""`, a **null program through the identical path** —
+and is timed as the **launcher floor**.
+
+```text
+server_boot = max(boot − launcher_floor, 0)
+```
+
+The correction is measured per run rather than asserted as a constant, which was
+the whole of `rubric-v1.3`'s objection to subtracting it. Only `server_boot` is
+scored. It costs one extra warm-cache spawn, on `npx` targets only.
+
+The subtraction is **never silent** — the same discipline `rubric-v1.2` applied
+to the context cap, which states the sub-score that produced it:
+
+```text
+install 12.5s · boot 0.3s (2.9s launch − 2.6s npx shim)
+```
+
+`--json` gains `launcherSeconds` and `serverBootSeconds`; `bootSeconds` is
+retained unchanged so a consumer can still see the raw launch, and `scored` moves
+from `"boot"` to `"serverBoot"`. Saturating at zero is deliberate: launcher cost
+is noisy, and a server that beat the null program is at the floor of measurement,
+not below zero. Where no floor could be measured — a non-`npx` command, or a
+failed pass — nothing is subtracted, which is the `rubric-v1.3` behaviour and the
+safe direction.
+
+**The fix, part two: a continuous ramp.** The boot and latency sub-scores now
+interpolate a shared anchor table instead of bucketing:
+
+| Milliseconds | Sub-score | Provenance |
+|-------------:|----------:|:-----------|
+| 0 | 100 | instant |
+| 1,000 | 100 | the `rubric-v1.3` "fast" edge, **preserved exactly** |
+| 3,000 | 70 | the `rubric-v1.3` "sluggish" edge, **preserved exactly** |
+| 10,000 | 40 | new — beyond the old cliff |
+| 30,000 | 15 | new — the dimension floor `rubric-v1.1` established |
+
+Passing through the old bucket edges is the point: this changes the
+**resolution** of the dimension without moving the judgement it encoded, so no
+server's score jumps because the shape changed. What is new is the tail —
+`rubric-v1.3` floored at 40 the moment a server crossed 3s, so a 3.1s boot and a
+60s boot were indistinguishable.
+
+**Monotonicity argument.** The anchor table is ascending in time and
+non-increasing in score, and linear interpolation between adjacent anchors
+preserves both properties. `timing_subscore` is therefore monotone non-increasing
+in milliseconds across its whole domain, and clamped to `[15, 100]`: **a server
+can never raise its robustness score by getting slower.** Asserted by a dense
+sweep from 0 to 60,000ms. The subtraction in part one is separately monotone —
+a larger floor never yields a larger scored boot, and the scored boot never
+exceeds the raw boot — so no server can score *worse* under `rubric-v1.4` than
+`rubric-v1.3` on this dimension.
+
+**Does robustness now have spread?** Yes, and for both reasons. Raw launches of
+3.1s / 5s / 8.8s / 20s / 45s all scored 40 under `rubric-v1.3` and now produce
+five distinct sub-scores in the correct order; and the shim subtraction moves a
+typical `npx` server's boot from ~2.9s (sub-score 70, dragging the dimension to
+80) to ~0.3s (sub-score 100). A test pins both properties.
+
+**What this does *not* fully fix, stated plainly.** Subtracting the shim moves
+most `npx` servers to a boot sub-score of **100**, which replaces one constant
+with a better-justified one. The honest reading is that *server boot, correctly
+measured, genuinely does not vary much* — nearly every MCP server answers
+`initialize` in a fraction of a second, and the variance the fleet saw was the
+toolchain's, not the servers'.
+
+That is the same discovery `rubric-v1.2` made about the missing-annotations class
+and drew the right conclusion from: **a class that is near-universally satisfied
+carries little information and should not command a fixed share of the score.**
+The dual of that principle applies here, and it points at a weight change rather
+than a measurement change. This release does not make one — see the
+recommendations below — because rebalancing weights on the strength of a single
+fleet run, without a per-dimension spread census to fit against, would repeat
+exactly the error `rubric-v1.2` corrected in `rubric-v1.1`: asserting anchors
+rather than calibrating them.
+
+### Open recommendations (analysed, deliberately not implemented)
+
+Two questions the fleet run raised that a scoring release should not answer
+unilaterally.
+
+**(a) Should the composite still be presented as multi-dimensional?**
+Spearman(composite, −context tokens) = 0.959 says it is, today, close to a
+token-count ranking. Three options, in ascending order of honesty and of cost:
+
+1. **Rebalance.** Move weight from robustness and protocol toward the dimensions
+   that discriminate. Cheap, but it is anchor-asserting without a spread census,
+   and it would make `rubric-v1.4` scores incomparable with everything before.
+2. **Report the spread.** Publish each dimension's fleet spread beside its score,
+   so a reader can see that robustness separated nobody. Cheap, purely additive,
+   and it makes the defect visible instead of arguable. **Recommended as the next
+   step.**
+3. **Stop calling it a quality grade.** Rename the composite to what it measures,
+   or split it into a *cost* number and a *craft* number that are never averaged.
+   Most honest, largest breaking change.
+
+The prerequisite for (1) is the same missing dataset `rubric-v1.2` named twice:
+`data/census-raw.json` records no per-dimension defect counts, so no weight can
+be *fitted*. Extending the census to record per-dimension scores across a fleet
+is the prerequisite for calibrating weights the way the cap anchors are
+calibrated — and this fleet run is the first dataset that could seed it.
+
+**(b) May a single dimension set the letter grade?** `dataforseo-mcp-server`
+scores protocol **100**, schema hygiene **100**, description quality **100** — a
+perfect card on every craft dimension — and grades **F 55**, solely because 89
+tools cost 42,288 tokens and pin it to the context-cap floor.
+
+Both halves of that report are individually defensible and together they are
+incoherent. *"89 tools will wreck model selection accuracy"* is true, important,
+and worth saying loudly. *"F"* contradicts the card printed directly beneath it,
+and a reader who sees three 100s above an F concludes the instrument is broken —
+which costs Jig the credibility it needs for the context finding to land at all.
+
+The recommendation is **no: a single dimension should bound the composite but
+should not be able to reach F alone.** Three supporting arguments:
+
+- The cap exists to stop a heavy server *outranking* a light one on schema
+  polish (`rubric-v1.1`, defect 2). Holding `dataforseo` to a **D 60–65** ceiling
+  achieves that completely — it still ranks below every well-proportioned server
+  — without the false statement.
+- F is qualitatively different from D. Every other route to F in this rubric
+  requires the server to be **broken**: stdout pollution, a `*/list` that never
+  answers, a handshake that fails. A large-but-correct server is not in that
+  class, and putting it there devalues the letter for the servers that earn it.
+- The `rubric-v1.1` changelog already made this exact argument in the other
+  direction, and was right then: *"Calling that server an F is not a defensible
+  reading of the evidence; it is an artifact of the denominator."* It removed a
+  manufactured F caused by tool count in the schema dimension, and then
+  reintroduced one caused by tool count in the context dimension.
+
+The concrete proposal is to raise the context-cap floor from **55 to 60** — the
+D/F boundary — leaving the whole ramp and its census anchors untouched, and to
+keep the cap line verbatim so the token count still leads the report. A server
+would then reach F only by *combining* catastrophic context cost with genuine
+defects elsewhere, which is a statement the card can support. This is a
+single-constant change with a real effect on published grades, and it belongs in
+its own release with its own monotonicity argument rather than bundled with three
+measurement fixes.
+
+### What did *not* change
+
+- **Dimension weights.** Still 25 / 25 / 20 / 15 / 15. See recommendation (a).
+- **Grade bands and badge colors.** Still `A >= 90 · B 80–89 · C 70–79 · D 60–69 · F < 60`.
+- **The context-cost cap.** The `rubric-v1.2` ramp, its census anchors, and its
+  floor of 55 are all untouched. See recommendation (b).
+- **The protocol ceiling.** The `rubric-v1.3` ramp is untouched.
+- **Injection scoring posture.** Still reported, never scored, always pinned.
+- **The credential-UX verdict lattice.** Same four verdicts, same sub-scores.
+- **Install timing.** Still reported, still never graded.
+- **Measurement.** Context cost is still gpt-4o exact tokens over the canonical
+  rendering. Rate-based scoring, shrinkage, class weights and the floor of 15 are
+  untouched.
+- **No LLM.** Every detector changed here is deterministic.
 
 ---
 

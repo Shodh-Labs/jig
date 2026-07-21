@@ -608,7 +608,7 @@ fn render_footer(s: &mut String, report: &CheckReport, meta: &ReportMeta) {
     }
     notes.push(format!(
         "Protocol compliance and robustness reflect only what was observed in one session. Rubric \
-         weights are editorial ({}).",
+         weights are fitted to a 63-server fleet census ({}).",
         html_escape(report.rubric_version)
     ));
 

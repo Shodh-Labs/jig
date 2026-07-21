@@ -1,0 +1,13 @@
+{
+  "_schema": "jig dimension spread v0 (rubric-v1.5). Per-dimension fleet score spread — p25, median, p75 — surfaced beside each `jig check` dimension score so a reader can see which dimensions separate servers and which do not. Derived from data/census2-calibration.json; values rounded to 1 decimal. This is NOT data/percentiles.json: that file holds context-token samples on the curated v1 cohort and drives scoring, while this file is reporting context only and never enters the composite.",
+  "collected": "2026-07-21T11:41:15.332Z",
+  "n": 63,
+  "_caveat": "One machine, one run: the fleet includes unvetted npm-pool additions, and the reachable subset skews toward the curated v1 cohort, so these spreads describe the sampled fleet rather than the ecosystem.",
+  "dimensions": {
+    "protocol": { "p25": 100.0, "median": 100.0, "p75": 100.0, "n": 63 },
+    "context_cost": { "p25": 43.1, "median": 87.1, "p75": 96.6, "n": 63 },
+    "schema_hygiene": { "p25": 95.9, "median": 98.7, "p75": 100.0, "n": 62 },
+    "description_quality": { "p25": 95.9, "median": 98.3, "p75": 99.1, "n": 62 },
+    "robustness": { "p25": 89.9, "median": 95.3, "p75": 99.3, "n": 63 }
+  }
+}

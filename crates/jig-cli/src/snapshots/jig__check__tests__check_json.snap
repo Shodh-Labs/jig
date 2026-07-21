@@ -19,17 +19,27 @@ expression: render_json(&report)
       "applicable": true,
       "dimension": "protocol",
       "findings": [],
+      "fleetSpread": {
+        "median": 100.0,
+        "p25": 100.0,
+        "p75": 100.0
+      },
       "heuristic": false,
       "label": "Protocol compliance",
       "score": 100,
       "scoreExact": 100.0,
       "summary": "clean handshake, no stdout pollution, spec-valid capabilities",
-      "weight": 25
+      "weight": 15
     },
     {
       "applicable": true,
       "dimension": "context_cost",
       "findings": [],
+      "fleetSpread": {
+        "median": 87.1,
+        "p25": 43.1,
+        "p75": 96.6
+      },
       "heuristic": false,
       "label": "Context cost",
       "score": 99,
@@ -56,6 +66,11 @@ expression: render_json(&report)
           "severity": "low"
         }
       ],
+      "fleetSpread": {
+        "median": 98.7,
+        "p25": 95.9,
+        "p75": 100.0
+      },
       "heuristic": false,
       "label": "Schema hygiene",
       "score": 96,
@@ -75,6 +90,11 @@ expression: render_json(&report)
           "severity": "low"
         }
       ],
+      "fleetSpread": {
+        "median": 98.3,
+        "p25": 95.9,
+        "p75": 99.1
+      },
       "heuristic": true,
       "label": "Description quality",
       "score": 99,
@@ -86,19 +106,24 @@ expression: render_json(&report)
       "applicable": true,
       "dimension": "robustness",
       "findings": [],
+      "fleetSpread": {
+        "median": 95.3,
+        "p25": 89.9,
+        "p75": 99.3
+      },
       "heuristic": false,
       "label": "Robustness",
       "score": 100,
       "scoreExact": 100.0,
       "summary": "list 12ms, clean shutdown",
-      "weight": 15
+      "weight": 25
     }
   ],
   "grade": "A",
   "injection": [],
   "protocolCap": null,
   "protocolVersion": "2025-06-18",
-  "rubricVersion": "rubric-v1.3",
+  "rubricVersion": "rubric-v1.5",
   "server": {
     "name": "jig-mock-server",
     "version": "0.1.0"
@@ -106,8 +131,10 @@ expression: render_json(&report)
   "timing": {
     "bootSeconds": null,
     "installSeconds": null,
+    "launcherSeconds": null,
     "prewarmSkipped": false,
-    "scored": "boot"
+    "scored": "serverBoot",
+    "serverBootSeconds": null
   },
   "toolCount": 3,
   "topFixes": [

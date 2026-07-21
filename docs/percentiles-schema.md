@@ -67,6 +67,61 @@ The month is taken from the top-level `collected` date. The field is **optional*
 — when absent, `jig check` silently omits the cohort line. The census script
 emits it as `failed / attempted` from the raw run.
 
+## Sibling dataset: `data/dimension-spread.json`
+
+A **different file, on purpose.** `data/dimension-spread.json` (added in
+`rubric-v1.5`) holds each rubric dimension's *score* spread across the measured
+fleet, and `jig check` prints it beside that dimension's score:
+
+```
+  ✓  Protocol compliance  100  [100·100·100]  clean handshake, no stdout pollution…
+  ✓  Context cost          99  [43·87·97]     183 tokens…
+```
+
+so a reader can see which dimensions separate servers and which do not. It is
+documented here because this is where Jig's bundled data-file contracts live —
+but it is **not a percentiles metric and must not be merged into this file**:
+
+| | `percentiles.json` | `dimension-spread.json` |
+|:--|:--|:--|
+| Purpose | **scoring** input | **reporting** context |
+| Holds | per-server context-cost *token counts* | per-dimension *score* quartiles |
+| Cohort | the curated `v1` census | the census-v2 fleet (unvetted additions) |
+| Reaches the composite? | yes — context cost is scored from it | **never** |
+| Overridable | `--percentiles <file>` | no |
+
+Folding the fleet into `percentiles.json` would move published grades under cover
+of a reporting change, which is why the cohorts are kept apart.
+
+### Shape
+
+```json
+{
+  "_schema": "…",
+  "collected": "2026-07-21T11:41:15.332Z",
+  "n": 63,
+  "_caveat": "One machine, one run…",
+  "dimensions": {
+    "protocol": { "p25": 100.0, "median": 100.0, "p75": 100.0, "n": 63 },
+    "context_cost": { "p25": 43.1, "median": 87.1, "p75": 96.6, "n": 63 }
+  }
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `collected` | string | ISO-8601 timestamp of the fleet run the spreads derive from. |
+| `n` | number | Servers graded in the run (63). Per-dimension `n` may be lower. |
+| `_caveat` | string | One sentence on sample skew. Required — the numbers are a sample, not a population, and the file says so. |
+| `dimensions.<key>` | object | Keyed by [`Dimension::key`] (`protocol`, `context_cost`, `schema_hygiene`, `description_quality`, `robustness`). |
+| `dimensions.<key>.p25` / `.median` / `.p75` | number | Fleet quartiles for that dimension's score, rounded to 1 decimal. |
+| `dimensions.<key>.n` | number | How many servers the dimension was *applicable* to. Lower than the top-level `n` for dimensions a server can be excluded from — schema hygiene and description quality are not scored on a server exposing no tools, so both read 62. |
+
+Derived from `data/census2-calibration.json`; small and hand-auditable by design.
+It is bundled into the binary with `include_str!`, so there is no on-disk lookup
+and no flag to point it elsewhere. A missing or malformed entry degrades to
+printing nothing, never to printing a wrong number.
+
 ## Notes for the data-collection job
 
 * Emit **exactly** this shape. Extra top-level metrics are allowed and ignored

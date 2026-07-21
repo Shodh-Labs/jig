@@ -89,7 +89,7 @@ pub(crate) async fn run(
 /// at once — so a `yes` means "distinct here", never "safe from collision".
 /// Without that sentence the verdict is the feature's largest overclaim.
 pub(crate) const OUTSIDE_RUBRIC_NOTE: &str =
-    "Judged output is outside rubric-v1.3: it is reported, never scored, and \
+    "Judged output is outside rubric-v1.5: it is reported, never scored, and \
      changed nothing above. `distinguishes siblings` compares this server's \
      tools only — a client loading several servers can still see collisions \
      this judge cannot observe.";

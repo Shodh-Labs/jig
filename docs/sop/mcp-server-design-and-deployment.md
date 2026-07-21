@@ -29,11 +29,17 @@ not a vibe. The [honesty appendix](#appendix-b--what-this-guides-evidence-actual
 draws the line between measured fact, editorial judgment, and claims that will age.
 
 > **On jig's numbers being opinions.** Many thresholds below (30/50 tools, a 3× median
-> cost ratio, a 4-token "terse" floor, a 160-token "verbose" ceiling, the 25/25/20/15/15
-> rubric weights) are jig's *tuned defaults*, documented in
-> [`crates/jig-core/src/check.rs`](../../crates/jig-core/src/check.rs) and
+> cost ratio, a 4-token "terse" floor, a 160-token "verbose" ceiling) are jig's *tuned
+> defaults*, documented in
+> [`crates/jig-core/src/check/`](../../crates/jig-core/src/check/mod.rs) and
 > [`advisor.rs`](../../crates/jig-core/src/advisor.rs). They are defensible, evidence-anchored
 > editorial calls — not laws of nature. This guide labels them as such.
+>
+> The **rubric weights are the exception**: since `rubric-v1.5` they are
+> 15/25/20/15/25 (protocol / context cost / schema hygiene / description quality /
+> robustness), *fitted* against a 63-server fleet census rather than asserted. See
+> [`docs/rubric-changelog.md`](../rubric-changelog.md) for the candidate table and
+> the rejected alternatives.
 
 A note on the tooling names used below: there is **no `jig advisor` subcommand**. The
 tool-set advisor runs automatically inside `jig check` and is also available after the

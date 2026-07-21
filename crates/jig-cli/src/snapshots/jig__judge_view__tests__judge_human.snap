@@ -16,4 +16,4 @@ Description judge (opt-in · never scored)
   always_fails
     ! unparseable — the entry did not carry all three questions as {verdict, rationale}: {"states_purpose":{"rationale":"Says it fails, not what it would do.","verdict":"unclear"},"tool":"always_fails"}
 
-  Judged output is outside rubric-v1.3: it is reported, never scored, and changed nothing above. `distinguishes siblings` compares this server's tools only — a client loading several servers can still see collisions this judge cannot observe.
+  Judged output is outside rubric-v1.5: it is reported, never scored, and changed nothing above. `distinguishes siblings` compares this server's tools only — a client loading several servers can still see collisions this judge cannot observe.

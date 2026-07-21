@@ -1,6 +1,5 @@
 ---
 source: crates/jig-cli/tests/auth_login_integration.rs
-assertion_line: 406
 expression: redact_ids(&redact_port(&run.stdout))
 ---
 jig auth --login · http://127.0.0.1:PORT/mcp

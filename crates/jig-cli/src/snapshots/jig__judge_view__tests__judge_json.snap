@@ -17,7 +17,7 @@ expression: doc
   "reportedModel": "mock-judge-1",
   "requestedModel": "gpt-4o",
   "responseText": "{…}",
-  "rubricNote": "Judged output is outside rubric-v1.3: it is reported, never scored, and changed nothing above. `distinguishes siblings` compares this server's tools only — a client loading several servers can still see collisions this judge cannot observe.",
+  "rubricNote": "Judged output is outside rubric-v1.5: it is reported, never scored, and changed nothing above. `distinguishes siblings` compares this server's tools only — a client loading several servers can still see collisions this judge cannot observe.",
   "scored": false,
   "summary": {
     "questions": [
