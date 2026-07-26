@@ -49,7 +49,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ring = "0.17"
 # base64url-without-padding: the encoding RFC 7636 §4.1/§4.2 mandates for the
 # code verifier and its challenge. Already in the tree via reqwest/hyper-util.
-base64 = "0.22"
+base64 = "0.23"
 # Dev-scoped: used only by `jig-mock-server` (a test fixture) to implement the
 # server side of the Streamable HTTP transport. Deliberately kept out of
 # `jig-core` and `jig-cli`.
