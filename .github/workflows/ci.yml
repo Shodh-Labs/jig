@@ -36,7 +36,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo test
         run: cargo test --workspace --all-targets
       - name: cargo doctests
@@ -57,7 +57,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo fmt --check
         run: cargo fmt --all --check
       - name: cargo clippy -D warnings
@@ -79,7 +79,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo doc
         run: cargo doc --workspace --no-deps
 
@@ -110,7 +110,7 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
             patchelf
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build the workbench
         run: cargo build -p jig-app
       - name: Test the workbench command layer
@@ -134,7 +134,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
       - name: Collect coverage (lcov + summary)
@@ -169,7 +169,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y             libwebkit2gtk-4.1-dev             libappindicator3-dev             librsvg2-dev             libsoup-3.0-dev             libjavascriptcoregtk-4.1-dev             patchelf
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build jig + mock server
         run: cargo build --workspace
       - name: jig inspect (mock server)
@@ -192,7 +192,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Select stable toolchain
         run: rustup default stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build release binaries (jig + mock server)
         run: cargo build --release -p jig-cli -p jig-mock-server
       - name: End-to-end npm install smoke
